@@ -55,11 +55,8 @@ define match_next_word with source and start_pos and next_word:
     return 0
 
 define tokenize_source with source:
-    display "tokenize_source called"
     set tokens to create_list()
     set source_len to string_length(source)
-    display "source_len is:"
-    display source_len
     
     set pos to 0
     set current_line to 1
@@ -292,6 +289,8 @@ define tokenize_source with source:
                                         set tok_type to 8
                                     if "while" equals id_str:
                                         set tok_type to 9
+                                    if "import" equals id_str:
+                                        set tok_type to 32
                                     if "with" equals id_str:
                                         set tok_type to 10
                                     if "and" equals id_str:
@@ -307,40 +306,63 @@ define tokenize_source with source:
                                 set ok to append_list(tokens and tok)
                             else:
                                 if c == 34: # String Literal '"'
+                                    set start_col to current_col
                                     set pos to pos + 1
                                     set current_col to current_col + 1
-                                    set str_start to pos
+                                    set str_chars to create_list()
                                     set str_loop to 1
+                                    set closed to 0
                                     repeat while pos < source_len && str_loop == 1:
                                         set ch to get_character(source and pos)
-                                        if ch == 34:
-                                            # Count backslashes before this quote
-                                            set bs_count to 0
-                                            set bs_pos to pos - 1
-                                            set bs_loop to 1
-                                            repeat while bs_pos > str_start - 1 && bs_loop == 1:
-                                                if get_character(source and bs_pos) == 92: # \
-                                                    set bs_count to bs_count + 1
-                                                    set bs_pos to bs_pos - 1
-                                                else:
-                                                    set bs_loop to 0
-                                            
-                                            # If even number of backslashes, this quote terminates the string
-                                            if bs_count - (bs_count / 2 * 2) == 0:
-                                                set str_loop to 0
-                                                set pos to pos + 1
-                                                set current_col to current_col + 1
-                                            else:
-                                                # Escaped quote, keep scanning
-                                                set pos to pos + 1
-                                                set current_col to current_col + 1
-                                        else:
+                                        if ch == 34: # '"'
+                                            set closed to 1
+                                            set str_loop to 0
                                             set pos to pos + 1
                                             set current_col to current_col + 1
-                                    
-                                    set str_len to pos - str_start - 1
-                                    set str_val to substring(source and str_start and str_len) + 0
-                                    set tok to create_token(26 and str_val and current_line and current_col - str_len - 2) + 0 # TOK_STRING_LITERAL = 26
+                                        else:
+                                            if ch == 92: # '\'
+                                                set pos to pos + 1
+                                                set current_col to current_col + 1
+                                                if pos < source_len:
+                                                    set esc_ch to get_character(source and pos)
+                                                    if esc_ch == 110: # 'n'
+                                                        set ok to append_list(str_chars and 10)
+                                                    else:
+                                                        if esc_ch == 116: # 't'
+                                                            set ok to append_list(str_chars and 9)
+                                                        else:
+                                                            if esc_ch == 114: # 'r'
+                                                                set ok to append_list(str_chars and 13)
+                                                            else:
+                                                                if esc_ch == 34: # '"'
+                                                                    set ok to append_list(str_chars and 34)
+                                                                else:
+                                                                    if esc_ch == 92: # '\'
+                                                                        set ok to append_list(str_chars and 92)
+                                                                    else:
+                                                                        # Push raw backslash and the other character
+                                                                        set ok to append_list(str_chars and 92)
+                                                                        set ok to append_list(str_chars and esc_ch)
+                                                    set pos to pos + 1
+                                                    set current_col to current_col + 1
+                                                else:
+                                                    display "Lexer Error: Unterminated string literal at escape sequence"
+                                                    set str_loop to 0
+                                            else:
+                                                if ch == 10 || ch == 13:
+                                                    display "Lexer Error: Unterminated string literal"
+                                                    set str_loop to 0
+                                                else:
+                                                    set ok to append_list(str_chars and ch)
+                                                    set pos to pos + 1
+                                                    set current_col to current_col + 1
+                                                    
+                                    if closed == 0:
+                                        display "Lexer Error: Unterminated string literal"
+                                        return 0
+                                        
+                                    set str_val to string_from_list(str_chars)
+                                    set tok to create_token(26 and str_val and current_line and start_col) + 0 # TOK_STRING_LITERAL = 26
                                     set ok to append_list(tokens and tok)
                                 else:
                                     # Parse Multi-character or single-character symbols

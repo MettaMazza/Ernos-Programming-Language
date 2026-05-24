@@ -1,0 +1,28 @@
+# ErnosPlain Math Standard Library
+
+define absolute with x:
+    if x is less than 0:
+        return 0 - x
+    return x
+
+define min with a and b:
+    if a is less than b:
+        return a
+    return b
+
+define max with a and b:
+    if a is greater than b:
+        return a
+    return b
+
+define power with base and exp:
+    if exp is less than 0:
+        return 0
+    if exp == 0:
+        return 1
+    set res to 1
+    set i to 0
+    repeat while i is less than exp:
+        set res to res multiplied by base
+        set i to i plus 1
+    return res

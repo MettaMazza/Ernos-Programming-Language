@@ -1,0 +1,277 @@
+import "string"
+
+# ErnosPlain JSON Standard Library
+
+# JSON Node representation:
+# Integer: list [1, value]
+# String: list [2, value]
+# List: list [3, list_of_nodes]
+# Object: list [4, keys_list, values_list]
+
+define create_json_int with val:
+    set node to create_list() + 0
+    set ok to append_list(node and 1)
+    set ok to append_list(node and val)
+    return node
+
+define create_json_string with val:
+    set node to create_list() + 0
+    set ok to append_list(node and 2)
+    set ok to append_list(node and val)
+    return node
+
+define create_json_list with val:
+    set node to create_list() + 0
+    set ok to append_list(node and 3)
+    set ok to append_list(node and val)
+    return node
+
+define create_json_object with keys and values:
+    set node to create_list() + 0
+    set ok to append_list(node and 4)
+    set ok to append_list(node and keys)
+    set ok to append_list(node and values)
+    return node
+
+define get_json_type with node:
+    return get_list(node and 0)
+
+define get_json_value with node:
+    return get_list(node and 1)
+
+define get_json_object_value with node and key:
+    set keys to get_list(node and 1)
+    set values to get_list(node and 2)
+    set len to length_list(keys)
+    set idx to 0
+    repeat while idx < len:
+        set k to get_list(keys and idx)
+        if string_concat(key and "") equals k:
+            return get_list(values and idx)
+        set idx to idx + 1
+    return 0
+
+define json_stringify with node:
+    set type to get_json_type(node)
+    if type == 1:
+        # Integer
+        set val to get_json_value(node)
+        return int_to_string(val)
+    if type == 2:
+        # String
+        set val to get_json_value(node)
+        set s1 to string_concat("\"" and val)
+        return string_concat(s1 and "\"")
+    if type == 3:
+        # List
+        set items to get_json_value(node)
+        set len to length_list(items)
+        set res to "["
+        set idx to 0
+        repeat while idx < len:
+            set item to get_list(items and idx)
+            set item_str to json_stringify(item)
+            set res to string_concat(res and item_str)
+            if idx is less than (len - 1):
+                set res to string_concat(res and ",")
+            set idx to idx + 1
+        return string_concat(res and "]")
+    if type == 4:
+        # Object
+        set keys to get_list(node and 1)
+        set values to get_list(node and 2)
+        set len to length_list(keys)
+        set res to "{"
+        set idx to 0
+        repeat while idx < len:
+            set k to get_list(keys and idx)
+            set v to get_list(values and idx)
+            set v_str to json_stringify(v)
+            set k_quoted to string_concat("\"" and k)
+            set k_quoted to string_concat(k_quoted and "\":")
+            set res to string_concat(res and k_quoted)
+            set res to string_concat(res and v_str)
+            if idx is less than (len - 1):
+                set res to string_concat(res and ",")
+            set idx to idx + 1
+        return string_concat(res and "}")
+    return "null"
+
+define json_skip_whitespace with state:
+    set s to get_list(state and 0)
+    set len to get_list(state and 1)
+    set pos to get_list(state and 2)
+    set loop to 1
+    repeat while pos is less than len && loop == 1:
+        set ch to get_character(s and pos)
+        if ch == 32 || ch == 9 || ch == 10 || ch == 13:
+            set pos to pos + 1
+        else:
+            set loop to 0
+    set ok to set_list(state and 2 and pos)
+    return 0
+
+define json_parse_string with state:
+    set s to get_list(state and 0)
+    set len to get_list(state and 1)
+    set pos to get_list(state and 2)
+    set pos to pos + 1
+    set lst to create_list()
+    set loop to 1
+    repeat while pos is less than len && loop == 1:
+        set ch to get_character(s and pos)
+        if ch == 34:
+            set pos to pos + 1
+            set loop to 0
+        else:
+            if ch == 92:
+                set pos to pos + 1
+                if pos is less than len:
+                    set esc to get_character(s and pos)
+                    if esc == 110:
+                        set ok to append_list(lst and 10)
+                    else:
+                        if esc == 116:
+                            set ok to append_list(lst and 9)
+                        else:
+                            set ok to append_list(lst and esc)
+                    set pos to pos + 1
+            else:
+                set ok to append_list(lst and ch)
+                set pos to pos + 1
+    set ok to set_list(state and 2 and pos)
+    set val to string_from_list(lst)
+    return create_json_string(val)
+
+define json_parse_number with state:
+    set s to get_list(state and 0)
+    set len to get_list(state and 1)
+    set pos to get_list(state and 2)
+    set is_neg to 0
+    set ch to get_character(s and pos)
+    if ch == 45:
+        set is_neg to 1
+        set pos to pos + 1
+    set val to 0
+    set loop to 1
+    repeat while pos is less than len && loop == 1:
+        set ch to get_character(s and pos)
+        if ch > 47 && ch < 58:
+            set val to val * 10
+            set val to val + (ch - 48)
+            set pos to pos + 1
+        else:
+            set loop to 0
+    if is_neg == 1:
+        set val to 0 - val
+    set ok to set_list(state and 2 and pos)
+    return create_json_int(val)
+
+define json_parse_value with state:
+    set ok to json_skip_whitespace(state)
+    set s to get_list(state and 0)
+    set len to get_list(state and 1)
+    set pos to get_list(state and 2)
+    if pos > len - 1:
+        return 0
+    set ch to get_character(s and pos)
+    if ch == 123:
+        return json_parse_object(state)
+    if ch == 91:
+        return json_parse_list(state)
+    if ch == 34:
+        return json_parse_string(state)
+    if (ch > 47 && ch < 58) || ch == 45:
+        return json_parse_number(state)
+    return 0
+
+define json_parse_object with state:
+    set s to get_list(state and 0)
+    set len to get_list(state and 1)
+    set pos to get_list(state and 2)
+    set pos to pos + 1
+    set ok to set_list(state and 2 and pos)
+    set keys to create_list() + 0
+    set values to create_list() + 0
+    set loop to 1
+    repeat while loop == 1:
+        set ok to json_skip_whitespace(state)
+        set pos to get_list(state and 2)
+        if pos > len - 1:
+            set loop to 0
+        else:
+            set ch to get_character(s and pos)
+            if ch == 125:
+                set pos to pos + 1
+                set ok to set_list(state and 2 and pos)
+                set loop to 0
+            else:
+                set key_node to json_parse_string(state)
+                set key_val to get_json_value(key_node)
+                set ok to json_skip_whitespace(state)
+                set pos to get_list(state and 2)
+                set ch to get_character(s and pos)
+                if ch == 58:
+                    set pos to pos + 1
+                    set ok to set_list(state and 2 and pos)
+                set val_node to json_parse_value(state)
+                set ok to append_list(keys and key_val)
+                set ok to append_list(values and val_node)
+                set ok to json_skip_whitespace(state)
+                set pos to get_list(state and 2)
+                set ch to get_character(s and pos)
+                if ch == 44:
+                    set pos to pos + 1
+                    set ok to set_list(state and 2 and pos)
+                else:
+                    if ch == 125:
+                        set pos to pos + 1
+                        set ok to set_list(state and 2 and pos)
+                        set loop to 0
+                    else:
+                        set loop to 0
+    return create_json_object(keys and values)
+
+define json_parse_list with state:
+    set s to get_list(state and 0)
+    set len to get_list(state and 1)
+    set pos to get_list(state and 2)
+    set pos to pos + 1
+    set ok to set_list(state and 2 and pos)
+    set items to create_list() + 0
+    set loop to 1
+    repeat while loop == 1:
+        set ok to json_skip_whitespace(state)
+        set pos to get_list(state and 2)
+        if pos > len - 1:
+            set loop to 0
+        else:
+            set ch to get_character(s and pos)
+            if ch == 93:
+                set pos to pos + 1
+                set ok to set_list(state and 2 and pos)
+                set loop to 0
+            else:
+                set item_node to json_parse_value(state)
+                set ok to append_list(items and item_node)
+                set ok to json_skip_whitespace(state)
+                set pos to get_list(state and 2)
+                set ch to get_character(s and pos)
+                if ch == 44:
+                    set pos to pos + 1
+                    set ok to set_list(state and 2 and pos)
+                else:
+                    if ch == 93:
+                        set pos to pos + 1
+                        set ok to set_list(state and 2 and pos)
+                        set loop to 0
+                    else:
+                        set loop to 0
+    return create_json_list(items)
+
+define json_parse with json_str:
+    set state to create_list()
+    set ok to append_list(state and json_str)
+    set ok to append_list(state and string_length(json_str))
+    set ok to append_list(state and 0)
+    return json_parse_value(state)

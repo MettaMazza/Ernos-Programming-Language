@@ -24,6 +24,7 @@ pub enum Token {
     Display,
     Repeat,
     While,
+    Import,
 
     // Operators
     Plus,

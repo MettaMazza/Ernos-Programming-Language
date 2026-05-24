@@ -91,6 +91,7 @@ impl Parser {
     }
 
     pub fn parse_program(&mut self) -> Result<Program, ParseError> {
+        let mut imports = Vec::new();
         let mut functions = Vec::new();
 
         while self.peek() != &Token::EOF {
@@ -100,7 +101,21 @@ impl Parser {
                 continue;
             }
 
-            if self.peek() == &Token::Define {
+            if self.peek() == &Token::Import {
+                self.advance(); // consume "import"
+                if let (Token::StringLiteral(path), _) = self.advance() {
+                    imports.push(path);
+                    // Optional newline
+                    if self.peek() == &Token::Newline {
+                        self.advance();
+                    }
+                } else {
+                    return Err(ParseError {
+                        message: "Expected string literal after 'import'".to_string(),
+                        span: self.peek_span(),
+                    });
+                }
+            } else if self.peek() == &Token::Define {
                 let func = self.parse_function()?;
                 functions.push(func);
             } else {
@@ -111,7 +126,7 @@ impl Parser {
             }
         }
 
-        Ok(Program { functions })
+        Ok(Program { imports, functions })
     }
 
     fn parse_function(&mut self) -> Result<Function, ParseError> {

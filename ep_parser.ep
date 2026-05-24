@@ -112,9 +112,10 @@ define make_node_func with name and params and body:
     set ok to append_list(node and body)
     return node
 
-define make_node_program with funcs:
+define make_node_program with imports and funcs:
     set node to create_list()
     set ok to append_list(node and 13)
+    set ok to append_list(node and imports)
     set ok to append_list(node and funcs)
     return node
 
@@ -195,6 +196,7 @@ define get_token_precedence with tok:
 
 # Parsing Functions
 define parse_program with state:
+    set imports to create_list() + 0
     set funcs to create_list() + 0
     set loop to 1
     repeat while loop == 1:
@@ -206,15 +208,27 @@ define parse_program with state:
             if t == 28: # Newline
                 set dummy to advance_token(state)
             else:
-                if t == 1: # define
-                    set func to parse_function(state) + 0
-                    set ok to append_list(funcs and func)
+                if t == 32: # import
+                    set dummy to advance_token(state)
+                    set tok_path to advance_token(state)
+                    set path_type to get_token_type(tok_path)
+                    if path_type == 26: # string
+                        set path_val to get_token_value(tok_path)
+                        set ok to append_list(imports and path_val)
+                    else:
+                        display "Parser Error: Expected string literal after import at line:"
+                        display get_token_line(tok_path)
+                        set loop to 0
                 else:
-                    display "Parser Error: Unexpected token at top level:"
-                    display t
-                    set loop to 0
+                    if t == 1: # define
+                        set func to parse_function(state) + 0
+                        set ok to append_list(funcs and func)
+                    else:
+                        display "Parser Error: Unexpected token at top level:"
+                        display t
+                        set loop to 0
                     
-    set prog to make_node_program(funcs) + 0
+    set prog to make_node_program(imports and funcs) + 0
     return prog
 
 define parse_function with state:

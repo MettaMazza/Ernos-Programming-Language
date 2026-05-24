@@ -1,0 +1,42 @@
+# ErnosPlain String Standard Library
+
+define string_concat with s1 and s2:
+    set lst to create_list()
+    set len1 to string_length(s1)
+    set idx to 0
+    repeat while idx < len1:
+        set ok to append_list(lst and get_character(s1 and idx))
+        set idx to idx + 1
+        
+    set len2 to string_length(s2)
+    set idx to 0
+    repeat while idx < len2:
+        set ok to append_list(lst and get_character(s2 and idx))
+        set idx to idx + 1
+        
+    set res to string_from_list(lst)
+    return res
+
+define int_to_string with n:
+    if n == 0:
+        return "0"
+    set is_neg to 0
+    set temp to n
+    if n is less than 0:
+        set is_neg to 1
+        set temp to 0 - n
+    set lst to create_list()
+    set digits to create_list()
+    repeat while temp > 0:
+        set digit to temp - (temp / 10 * 10)
+        set ok to append_list(digits and digit + 48)
+        set temp to temp / 10
+    if is_neg == 1:
+        set ok to append_list(lst and 45) # '-'
+    set len to length_list(digits)
+    repeat while len > 0:
+        set d to pop_list(digits)
+        set ok to append_list(lst and d)
+        set len to len - 1
+    set res to string_from_list(lst)
+    return res

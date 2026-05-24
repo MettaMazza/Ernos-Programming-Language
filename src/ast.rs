@@ -49,5 +49,6 @@ pub struct Function {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
+    pub imports: Vec<String>,
     pub functions: Vec<Function>,
 }

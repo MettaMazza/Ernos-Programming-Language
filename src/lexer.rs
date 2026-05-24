@@ -433,6 +433,7 @@ impl<'a> Lexer<'a> {
                         "display" => Token::Display,
                         "repeat" => Token::Repeat,
                         "while" => Token::While,
+                        "import" => Token::Import,
                         "plus" => Token::Plus,
                         "minus" => Token::Minus,
                         "equals" => Token::Equals,

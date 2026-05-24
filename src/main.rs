@@ -7,7 +7,80 @@ pub mod codegen;
 use std::env;
 use std::fs;
 use std::process::Command;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::collections::HashSet;
+
+fn resolve_import_path(current_file: &Path, import_path: &str) -> PathBuf {
+    if import_path == "math" || import_path == "hash" || import_path == "net" || import_path == "json" || import_path == "string" {
+        let stdlib_path = Path::new("stdlib").join(format!("{}.ep", import_path));
+        if stdlib_path.exists() {
+            return stdlib_path;
+        }
+        if let Ok(exe_path) = env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                let exe_stdlib = exe_dir.join("stdlib").join(format!("{}.ep", import_path));
+                if exe_stdlib.exists() {
+                    return exe_stdlib;
+                }
+            }
+        }
+        let fallback_path = Path::new("/Users/mettamazza/Desktop/ErnosPlain Programing Language/stdlib").join(format!("{}.ep", import_path));
+        if fallback_path.exists() {
+            return fallback_path;
+        }
+    }
+
+    let mut resolved = current_file.parent().unwrap_or(Path::new("")).join(import_path);
+    if !resolved.exists() && !import_path.ends_with(".ep") {
+        resolved.set_extension("ep");
+    }
+    resolved
+}
+
+fn parse_all_modules(
+    entry_path: &Path,
+    parsed_files: &mut HashSet<PathBuf>,
+    all_functions: &mut Vec<ast::Function>,
+) -> Result<(), String> {
+    let canonical_path = entry_path.canonicalize().map_err(|e| format!("Could not canonicalize path '{}': {}", entry_path.display(), e))?;
+    
+    if parsed_files.contains(&canonical_path) {
+        return Ok(());
+    }
+    parsed_files.insert(canonical_path.clone());
+
+    let source = fs::read_to_string(&canonical_path).map_err(|e| format!("Error reading file '{}': {}", canonical_path.display(), e))?;
+    
+    let mut lexer = lexer::Lexer::new(&source);
+    let tokens = match lexer.tokenize() {
+        Ok(toks) => toks,
+        Err(e) => {
+            print_diagnostic(canonical_path.to_str().unwrap_or(""), &source, &e.message, e.span.line, e.span.col);
+            return Err("Lexer error".to_string());
+        }
+    };
+
+    let mut parser = parser::Parser::new(tokens);
+    let program = match parser.parse_program() {
+        Ok(prog) => prog,
+        Err(e) => {
+            print_diagnostic(canonical_path.to_str().unwrap_or(""), &source, &e.message, e.span.line, e.span.col);
+            return Err("Parser error".to_string());
+        }
+    };
+
+    all_functions.extend(program.functions);
+
+    for imp in program.imports {
+        let resolved_path = resolve_import_path(&canonical_path, &imp);
+        if !resolved_path.exists() {
+            return Err(format!("Import error in '{}': module '{}' not found at '{}'", canonical_path.display(), imp, resolved_path.display()));
+        }
+        parse_all_modules(&resolved_path, parsed_files, all_functions)?;
+    }
+
+    Ok(())
+}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -26,35 +99,26 @@ fn main() {
 
     let stem = input_path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
     
-    // Read source code
-    let source = match fs::read_to_string(input_path) {
-        Ok(content) => content,
-        Err(e) => {
-            eprintln!("Error reading file: {}", e);
-            std::process::exit(1);
-        }
-    };
-
     println!("[1/3] Tokenizing and Parsing '{}'...", input_path_str);
 
-    // Lexing
-    let mut lexer = lexer::Lexer::new(&source);
-    let tokens = match lexer.tokenize() {
-        Ok(toks) => toks,
-        Err(e) => {
-            print_diagnostic(input_path_str, &source, &e.message, e.span.line, e.span.col);
-            std::process::exit(1);
-        }
-    };
+    let mut all_functions = Vec::new();
+    let mut parsed_files = HashSet::new();
+    if let Err(err_msg) = parse_all_modules(input_path, &mut parsed_files, &mut all_functions) {
+        eprintln!("Compiler Error: {}", err_msg);
+        std::process::exit(1);
+    }
 
-    // Parsing
-    let mut parser = parser::Parser::new(tokens);
-    let program = match parser.parse_program() {
-        Ok(prog) => prog,
-        Err(e) => {
-            print_diagnostic(input_path_str, &source, &e.message, e.span.line, e.span.col);
+    let mut function_names = HashSet::new();
+    for func in &all_functions {
+        if !function_names.insert(&func.name) {
+            eprintln!("Compiler Error: Function '{}' is defined multiple times across modules.", func.name);
             std::process::exit(1);
         }
+    }
+
+    let program = ast::Program {
+        imports: Vec::new(),
+        functions: all_functions,
     };
 
     // Validate that main function exists
@@ -76,37 +140,26 @@ fn main() {
         }
     };
 
-    // Write temporary assembly file
-    let asm_path_str = format!("{}.s", stem);
-    let asm_path = Path::new(&asm_path_str);
-    if let Err(e) = fs::write(asm_path, &assembly) {
-        eprintln!("Error writing assembly file: {}", e);
+    // Write temporary C source file
+    let c_path_str = format!("{}_compiled.c", stem);
+    let c_path = Path::new(&c_path_str);
+    if let Err(e) = fs::write(c_path, &assembly) {
+        eprintln!("Error writing compiled C file: {}", e);
         std::process::exit(1);
     }
 
-    // Write temporary C runtime file
-    let runtime_path_str = format!("{}_runtime.c", stem);
-    let runtime_path = Path::new(&runtime_path_str);
-    if let Err(e) = fs::write(runtime_path, RUNTIME_C) {
-        eprintln!("Error writing runtime C file: {}", e);
-        let _ = fs::remove_file(asm_path);
-        std::process::exit(1);
-    }
+    println!("[3/3] Compiling and Linking via Clang...");
 
-    println!("[3/3] Assembling and Linking via Clang...");
-
-    // Run clang to assemble and link both assembly and runtime C file
+    // Run clang to compile and link the transpiled C file
     let output_executable = format!("./{}", stem);
     let clang_status = Command::new("clang")
-        .arg(&asm_path_str)
-        .arg(&runtime_path_str)
+        .arg(&c_path_str)
         .arg("-o")
         .arg(&stem)
         .status();
 
     // Clean up temporary files
-    let _ = fs::remove_file(asm_path);
-    let _ = fs::remove_file(runtime_path);
+    // let _ = fs::remove_file(c_path);
 
     match clang_status {
         Ok(status) if status.success() => {
@@ -122,193 +175,6 @@ fn main() {
         }
     }
 }
-
-const RUNTIME_C: &str = r#"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-char* read_file_content(const char* filepath) {
-    FILE* f = fopen(filepath, "rb");
-    if (!f) {
-        char* empty = malloc(1);
-        if (empty) empty[0] = '\0';
-        return empty ? empty : "";
-    }
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    
-    char* buf = malloc(size + 1);
-    if (!buf) {
-        fclose(f);
-        char* empty = malloc(1);
-        if (empty) empty[0] = '\0';
-        return empty ? empty : "";
-    }
-    
-    size_t read_bytes = fread(buf, 1, size, f);
-    buf[read_bytes] = '\0';
-    fclose(f);
-    return buf;
-}
-
-long long string_length(const char* s) {
-    if (!s) return 0;
-    return strlen(s);
-}
-
-long long get_character(const char* s, long long index) {
-    if (!s) return 0;
-    long long len = strlen(s);
-    if (index < 0 || index >= len) return 0;
-    return (unsigned char)s[index];
-}
-
-typedef struct {
-    long long* data;
-    long long capacity;
-    long long length;
-} EpList;
-
-long long create_list(void) {
-    EpList* list = malloc(sizeof(EpList));
-    if (!list) return 0;
-    list->capacity = 4;
-    list->length = 0;
-    list->data = malloc(list->capacity * sizeof(long long));
-    return (long long)list;
-}
-
-long long append_list(long long list_ptr, long long value) {
-    EpList* list = (EpList*)list_ptr;
-    if (!list) return 0;
-    if (list->length >= list->capacity) {
-        list->capacity *= 2;
-        list->data = realloc(list->data, list->capacity * sizeof(long long));
-    }
-    list->data[list->length] = value;
-    list->length += 1;
-    return value;
-}
-
-long long get_list(long long list_ptr, long long index) {
-    EpList* list = (EpList*)list_ptr;
-    if (!list || index < 0 || index >= list->length) return 0;
-    return list->data[index];
-}
-
-long long set_list(long long list_ptr, long long index, long long value) {
-    EpList* list = (EpList*)list_ptr;
-    if (!list || index < 0 || index >= list->length) return 0;
-    list->data[index] = value;
-    return value;
-}
-
-long long length_list(long long list_ptr) {
-    EpList* list = (EpList*)list_ptr;
-    if (!list) return 0;
-    return list->length;
-}
-
-void free_list(long long list_ptr) {
-    EpList* list = (EpList*)list_ptr;
-    if (!list) return;
-    free(list->data);
-    free(list);
-}
-
-int ep_argc = 0;
-char** ep_argv = NULL;
-
-void init_ep_args(int argc, char** argv) {
-    ep_argc = argc;
-    ep_argv = argv;
-}
-
-long long get_argument_count(void) {
-    return ep_argc;
-}
-
-const char* get_argument(long long index) {
-    if (index < 0 || index >= ep_argc) {
-        return "";
-    }
-    return ep_argv[index];
-}
-
-long long write_file_content(const char* filepath, const char* content) {
-    FILE* f = fopen(filepath, "wb");
-    if (!f) return 0;
-    size_t len = strlen(content);
-    size_t written = fwrite(content, 1, len, f);
-    fclose(f);
-    return written == len ? 1 : 0;
-}
-
-long long run_command(const char* command) {
-    if (!command) return -1;
-    return system(command);
-}
-
-char* substring(const char* s, long long start, long long len) {
-    if (!s) {
-        char* empty = malloc(1);
-        if (empty) empty[0] = '\0';
-        return empty ? empty : "";
-    }
-    long long total_len = strlen(s);
-    if (start < 0 || start >= total_len || len <= 0) {
-        char* empty = malloc(1);
-        if (empty) empty[0] = '\0';
-        return empty ? empty : "";
-    }
-    if (start + len > total_len) {
-        len = total_len - start;
-    }
-    char* sub = malloc(len + 1);
-    if (!sub) {
-        char* empty = malloc(1);
-        if (empty) empty[0] = '\0';
-        return empty ? empty : "";
-    }
-    strncpy(sub, s + start, len);
-    sub[len] = '\0';
-    return sub;
-}
-
-char* string_from_list(long long list_ptr) {
-    EpList* list = (EpList*)list_ptr;
-    if (!list) {
-        char* empty = malloc(1);
-        if (empty) empty[0] = '\0';
-        return empty ? empty : "";
-    }
-    char* s = malloc(list->length + 1);
-    if (!s) {
-        char* empty = malloc(1);
-        if (empty) empty[0] = '\0';
-        return empty ? empty : "";
-    }
-    for (long long i = 0; i < list->length; i++) {
-        s[i] = (char)list->data[i];
-    }
-    s[list->length] = '\0';
-    return s;
-}
-
-long long pop_list(long long list_ptr) {
-    EpList* list = (EpList*)list_ptr;
-    if (!list || list->length <= 0) return 0;
-    list->length -= 1;
-    return list->data[list->length];
-}
-
-void display_string(const char* s) {
-    if (!s) return;
-    printf("%s\n", s);
-}
-"#;
 
 fn print_diagnostic(file_path: &str, source: &str, message: &str, line: usize, col: usize) {
     let lines: Vec<&str> = source.lines().collect();
