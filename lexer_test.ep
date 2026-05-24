@@ -1,0 +1,18 @@
+define main:
+    set source to "define main:\n    set x to 10 + 20"
+    set tokens to tokenize_source(source)
+    
+    set idx to 0
+    set len to length_list(tokens)
+    repeat while idx < len:
+        set tok to get_list(tokens and idx)
+        set type to get_token_type(tok)
+        set val to get_token_value(tok)
+        
+        display "Token type:"
+        display type
+        display "Token value:"
+        set ok to display_string(val)
+        
+        set idx to idx + 1
+    return 0

@@ -1,0 +1,35 @@
+{
+  "name": "ernosplain-syntax",
+  "displayName": "ErnosPlain Language Support",
+  "description": "Syntax highlighting and language configuration for the ErnosPlain programming language.",
+  "version": "0.1.0",
+  "publisher": "ernos",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "ep",
+        "aliases": [
+          "ErnosPlain",
+          "ep"
+        ],
+        "extensions": [
+          ".ep"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "ep",
+        "scopeName": "source.ep",
+        "path": "./ernosplain.tmLanguage.json"
+      }
+    ]
+  }
+}

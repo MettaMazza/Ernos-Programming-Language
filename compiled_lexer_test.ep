@@ -1,0 +1,302 @@
+# ErnosPlain Self-Hosted Lexer Module
+
+# Helper constructor for Token list: [type, value, line, col]
+define create_token with type and value and line and col:
+    set tok to create_list()
+    set ok to append_list(tok and type)
+    set ok to append_list(tok and value)
+    set ok to append_list(tok and line)
+    set ok to append_list(tok and col)
+    return tok
+
+define get_token_type with tok:
+    return get_list(tok and 0)
+
+define get_token_value with tok:
+    return get_list(tok and 1)
+
+define get_token_line with tok:
+    return get_list(tok and 2)
+
+define get_token_col with tok:
+    return get_list(tok and 3)
+
+define tokenize_source with source:
+    display "tokenize_source called"
+    set tokens to create_list()
+    set source_len to string_length(source)
+    display "source_len is:"
+    display source_len
+    
+    set pos to 0
+    set current_line to 1
+    set current_col to 1
+    
+    # Indentation stack (initialized to [0])
+    set indent_stack to create_list()
+    set ok to append_list(indent_stack and 0)
+    
+    set at_line_start to 1
+    
+    repeat while pos is less than source_len:
+        # 1. Process line indentation at start of lines
+        if at_line_start == 1:
+            set spaces to 0
+            set space_loop to 1
+            repeat while pos < source_len && space_loop == 1:
+                set ch to get_character(source and pos)
+                if ch == 32: # space
+                    set spaces to spaces + 1
+                    set pos to pos + 1
+                    set current_col to current_col + 1
+                else:
+                    if ch == 9: # tab (treated as 4 spaces)
+                        set spaces to spaces + 4
+                        set pos to pos + 1
+                        set current_col to current_col + 4
+                    else:
+                        set space_loop to 0
+            
+            # Check if this line is just comments or empty
+            set next_ch to get_character(source and pos)
+            if next_ch != 10 && next_ch != 13 && next_ch != 35 && pos < source_len:
+                # Actual code line, determine indentation
+                set stack_len to length_list(indent_stack)
+                set last_indent to get_list(indent_stack and stack_len - 1)
+                
+                if spaces > last_indent:
+                    set ok to append_list(indent_stack and spaces)
+                    set tok to create_token(29 and "INDENT" and current_line and current_col) + 0 # TOK_INDENT = 29
+                    set ok to append_list(tokens and tok)
+                else:
+                    if spaces < last_indent:
+                        set loop_dedent to 1
+                        repeat while loop_dedent == 1:
+                            set s_len to length_list(indent_stack)
+                            set top_indent to get_list(indent_stack and s_len - 1)
+                            if spaces < top_indent:
+                                set popped to pop_list(indent_stack)
+                                set tok to create_token(30 and "DEDENT" and current_line and current_col) + 0 # TOK_DEDENT = 30
+                                set ok to append_list(tokens and tok)
+                            else:
+                                set loop_dedent to 0
+            set at_line_start to 0
+            
+        # Re-check pos after indentation processing
+        if pos > source_len - 1:
+            # We reached EOF
+            set dummy to 0
+        else:
+            set c to get_character(source and pos)
+            
+            # Whitespace handling
+            if c == 32 || c == 9:
+                set pos to pos + 1
+                set current_col to current_col + 1
+            else:
+                if c == 10 || c == 13:
+                    # Newline character
+                    set pos to pos + 1
+                    if c == 13 && get_character(source and pos) == 10:
+                        set pos to pos + 1
+                    
+                    # Emit TOK_NEWLINE (28) if the last token wasn't already a newline
+                    set tokens_len to length_list(tokens)
+                    set should_emit_nl to 1
+                    if tokens_len > 0:
+                        set last_tok to get_list(tokens and tokens_len - 1)
+                        if get_token_type(last_tok) == 28:
+                            set should_emit_nl to 0
+                    
+                    if should_emit_nl == 1 && tokens_len > 0:
+                        set tok to create_token(28 and "\n" and current_line and current_col) + 0
+                        set ok to append_list(tokens and tok)
+                        
+                    set current_line to current_line + 1
+                    set current_col to 1
+                    set at_line_start to 1
+                else:
+                    if c == 35: # comment character '#'
+                        set pos to pos + 1
+                        repeat while pos < source_len && get_character(source and pos) != 10 && get_character(source and pos) != 13:
+                            set pos to pos + 1
+                    else:
+                        # Parse Number
+                        if c > 47 && c < 58:
+                            set num_start to pos
+                            repeat while pos < source_len && get_character(source and pos) > 47 && get_character(source and pos) < 58:
+                                set pos to pos + 1
+                                set current_col to current_col + 1
+                            
+                            set num_len to pos - num_start
+                            set num_str to substring(source and num_start and num_len) + 0
+                            set tok to create_token(25 and num_str and current_line and current_col - num_len) + 0 # TOK_INTEGER = 25
+                            set ok to append_list(tokens and tok)
+                        else:
+                            # Parse Identifier or Keyword
+                            set is_id_start to (c > 96 && c < 123) || (c > 64 && c < 91) || c == 95
+                            if is_id_start:
+                                set id_start to pos
+                                set id_loop to 1
+                                repeat while pos < source_len && id_loop == 1:
+                                    set ch to get_character(source and pos)
+                                    set is_id_part to (ch > 96 && ch < 123) || (ch > 64 && ch < 91) || (ch > 47 && ch < 58) || ch == 95
+                                    if is_id_part:
+                                        set pos to pos + 1
+                                        set current_col to current_col + 1
+                                    else:
+                                        set id_loop to 0
+                                
+                                set id_len to pos - id_start
+                                set id_str to substring(source and id_start and id_len) + 0
+                                
+                                # Match keywords
+                                set tok_type to 27 # Default to TOK_IDENTIFIER = 27
+                                if "define" equals id_str:
+                                    set tok_type to 1
+                                if "set" equals id_str:
+                                    set tok_type to 2
+                                if "to" equals id_str:
+                                    set tok_type to 3
+                                if "if" equals id_str:
+                                    set tok_type to 4
+                                if "else" equals id_str:
+                                    set tok_type to 5
+                                if "return" equals id_str:
+                                    set tok_type to 6
+                                if "display" equals id_str:
+                                    set tok_type to 7
+                                if "repeat" equals id_str:
+                                    set tok_type to 8
+                                if "while" equals id_str:
+                                    set tok_type to 9
+                                if "with" equals id_str:
+                                    set tok_type to 10
+                                if "and" equals id_str:
+                                    set tok_type to 11
+                                if "plus" equals id_str:
+                                    set tok_type to 12
+                                if "minus" equals id_str:
+                                    set tok_type to 13
+                                if "equals" equals id_str:
+                                    set tok_type to 18
+                                
+                                set tok to create_token(tok_type and id_str and current_line and current_col - id_len) + 0
+                                set ok to append_list(tokens and tok)
+                            else:
+                                if c == 34: # String Literal '"'
+                                    set pos to pos + 1
+                                    set current_col to current_col + 1
+                                    set str_start to pos
+                                    set str_loop to 1
+                                    repeat while pos < source_len && str_loop == 1:
+                                        set ch to get_character(source and pos)
+                                        if ch == 34:
+                                            set str_loop to 0
+                                            set pos to pos + 1
+                                            set current_col to current_col + 1
+                                        else:
+                                            set pos to pos + 1
+                                            set current_col to current_col + 1
+                                    
+                                    set str_len to pos - str_start - 1
+                                    set str_val to substring(source and str_start and str_len) + 0
+                                    set tok to create_token(26 and str_val and current_line and current_col - str_len - 2) + 0 # TOK_STRING_LITERAL = 26
+                                    set ok to append_list(tokens and tok)
+                                else:
+                                    # Parse Multi-character or single-character symbols
+                                    # Check lookahead for double symbols: == (18), != (19), && (20), || (21)
+                                    set sym_type to 0
+                                    set sym_val to ""
+                                    set sym_len to 1
+                                    
+                                    set next_c to get_character(source and pos + 1)
+                                    if c == 61 && next_c == 61: # ==
+                                        set sym_type to 18
+                                        set sym_val to "=="
+                                        set sym_len to 2
+                                    if c == 33 && next_c == 61: # !=
+                                        set sym_type to 19
+                                        set sym_val to "!="
+                                        set sym_len to 2
+                                    if c == 38 && next_c == 38: # &&
+                                        set sym_type to 20
+                                        set sym_val to "&&"
+                                        set sym_len to 2
+                                    if c == 124 && next_c == 124: # ||
+                                        set sym_type to 21
+                                        set sym_val to "||"
+                                        set sym_len to 2
+                                    
+                                    if sym_type == 0:
+                                        # Single-character symbol
+                                        if c == 58: # :
+                                            set sym_type to 22
+                                            set sym_val to ":"
+                                        if c == 40: # (
+                                            set sym_type to 23
+                                            set sym_val to "("
+                                        if c == 41: # )
+                                            set sym_type to 24
+                                            set sym_val to ")"
+                                        if c == 43: # +
+                                            set sym_type to 12
+                                            set sym_val to "+"
+                                        if c == 45: # -
+                                            set sym_type to 13
+                                            set sym_val to "-"
+                                        if c == 42: # *
+                                            set sym_type to 14
+                                            set sym_val to "*"
+                                        if c == 47: # /
+                                            set sym_type to 15
+                                            set sym_val to "/"
+                                        if c == 60: # <
+                                            set sym_type to 16
+                                            set sym_val to "<"
+                                        if c == 62: # >
+                                            set sym_type to 17
+                                            set sym_val to ">"
+                                    
+                                    if sym_type > 0:
+                                        set tok to create_token(sym_type and sym_val and current_line and current_col) + 0
+                                        set ok to append_list(tokens and tok)
+                                        set pos to pos + sym_len
+                                        set current_col to current_col + sym_len
+                                    else:
+                                        display "Lexer Error: Unknown symbol character code:"
+                                        display c
+                                        set pos to pos + 1
+                                        set current_col to current_col + 1
+                            
+    # Final cleanup of indentation stack to emit TOK_DEDENT
+    set stack_len to length_list(indent_stack)
+    repeat while stack_len > 1:
+        set tok to create_token(30 and "DEDENT" and current_line and current_col) + 0 # TOK_DEDENT = 30
+        set ok to append_list(tokens and tok)
+        set popped to pop_list(indent_stack)
+        set stack_len to stack_len - 1
+        
+    # Append TOK_EOF (31)
+    set tok to create_token(31 and "EOF" and current_line and current_col) + 0
+    set ok to append_list(tokens and tok)
+    
+    return tokens
+define main:
+    set source to "define main:\n    set x to 10 + 20"
+    set tokens to tokenize_source(source)
+    
+    set idx to 0
+    set len to length_list(tokens)
+    repeat while idx < len:
+        set tok to get_list(tokens and idx)
+        set type to get_token_type(tok)
+        set val to get_token_value(tok)
+        
+        display "Token type:"
+        display type
+        display "Token value:"
+        set ok to display_string(val)
+        
+        set idx to idx + 1
+    return 0

@@ -1,0 +1,77 @@
+# ErnosPlain Self-Hosted Compiler Driver
+
+define get_file_stem with path:
+    set len to string_length(path)
+    set last_slash to 0 - 1
+    set idx to 0
+    repeat while idx < len:
+        set ch to get_character(path and idx)
+        if ch == 47: # '/'
+            set last_slash to idx
+        set idx to idx + 1
+        
+    set start to last_slash + 1
+    
+    set dot_pos to len
+    set idx2 to start
+    repeat while idx2 < len:
+        set ch to get_character(path and idx2)
+        if ch == 46: # '.'
+            set dot_pos to idx2
+        set idx2 to idx2 + 1
+        
+    set stem_len to dot_pos - start
+    set stem to substring(path and start and stem_len)
+    return stem
+
+define main:
+    set arg_count to get_argument_count()
+    if arg_count < 2:
+        display "Usage: epc <filename.ep>"
+        return 1
+        
+    set input_path to get_argument(1)
+    set source to read_file_content(input_path)
+    if string_length(source) == 0:
+        display "Error: File is empty or does not exist."
+        return 1
+        
+    set stem to get_file_stem(input_path)
+    
+    display "[1/3] Tokenizing and Parsing..."
+    set tokens to tokenize_source(source)
+    set state to create_parser_state(tokens)
+    set program_ast to parse_program(state)
+    
+    display "[2/3] Generating ARM64 Assembly..."
+    set assembly to generate_assembly(program_ast)
+    
+    # Write temporary assembly file
+    set asm_path to string_concat(stem and ".s")
+    set ok to write_file_content(asm_path and assembly)
+    
+    # Write temporary runtime file
+    set runtime_path to string_concat(stem and "_runtime.c")
+    set runtime_src to "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\nchar* read_file_content(const char* filepath) {\n    char mode[3];\n    mode[0] = 'r';\n    mode[1] = 'b';\n    mode[2] = '\\0';\n    FILE* f = fopen(filepath, mode);\n    if (!f) {\n        char* empty = malloc(1);\n        if (empty) empty[0] = '\\0';\n        return empty;\n    }\n    fseek(f, 0, SEEK_END);\n    long size = ftell(f);\n    fseek(f, 0, SEEK_SET);\n    char* buf = malloc(size + 1);\n    if (!buf) {\n        fclose(f);\n        char* empty = malloc(1);\n        if (empty) empty[0] = '\\0';\n        return empty;\n    }\n    size_t read_bytes = fread(buf, 1, size, f);\n    buf[read_bytes] = '\\0';\n    fclose(f);\n    return buf;\n}\n\nlong long string_length(const char* s) {\n    if (!s) return 0;\n    return strlen(s);\n}\n\nlong long get_character(const char* s, long long index) {\n    if (!s) return 0;\n    long long len = strlen(s);\n    if (index < 0 || index >= len) return 0;\n    return (unsigned char)s[index];\n}\n\ntypedef struct {\n    long long* data;\n    long long capacity;\n    long long length;\n} EpList;\n\nlong long create_list(void) {\n    EpList* list = malloc(sizeof(EpList));\n    if (!list) return 0;\n    list->capacity = 4;\n    list->length = 0;\n    list->data = malloc(list->capacity * sizeof(long long));\n    return (long long)list;\n}\n\nlong long append_list(long long list_ptr, long long value) {\n    EpList* list = (EpList*)list_ptr;\n    if (!list) return 0;\n    if (list->length >= list->capacity) {\n        list->capacity *= 2;\n        list->data = realloc(list->data, list->capacity * sizeof(long long));\n    }\n    list->data[list->length] = value;\n    list->length += 1;\n    return value;\n}\n\nlong long get_list(long long list_ptr, long long index) {\n    EpList* list = (EpList*)list_ptr;\n    if (!list || index < 0 || index >= list->length) return 0;\n    return list->data[index];\n}\n\nlong long set_list(long long list_ptr, long long index, long long value) {\n    EpList* list = (EpList*)list_ptr;\n    if (!list || index < 0 || index >= list->length) return 0;\n    list->data[index] = value;\n    return value;\n}\n\nlong long length_list(long long list_ptr) {\n    EpList* list = (EpList*)list_ptr;\n    if (!list) return 0;\n    return list->length;\n}\n\nvoid free_list(long long list_ptr) {\n    EpList* list = (EpList*)list_ptr;\n    if (!list) return;\n    free(list->data);\n    free(list);\n}\n\nint ep_argc = 0;\nchar** ep_argv = NULL;\n\nvoid init_ep_args(int argc, char** argv) {\n    ep_argc = argc;\n    ep_argv = argv;\n}\n\nlong long get_argument_count(void) {\n    return ep_argc;\n}\n\nconst char* get_argument(long long index) {\n    if (index < 0 || index >= ep_argc) {\n        char* empty = malloc(1);\n        if (empty) empty[0] = '\\0';\n        return empty;\n    }\n    return ep_argv[index];\n}\n\nlong long write_file_content(const char* filepath, const char* content) {\n    char mode[3];\n    mode[0] = 'w';\n    mode[1] = 'b';\n    mode[2] = '\\0';\n    FILE* f = fopen(filepath, mode);\n    if (!f) return 0;\n    size_t len = strlen(content);\n    size_t written = fwrite(content, 1, len, f);\n    fclose(f);\n    return written == len ? 1 : 0;\n}\n\nlong long run_command(const char* command) {\n    if (!command) return -1;\n    return system(command);\n}\n\nchar* substring(const char* s, long long start, long long len) {\n    if (!s) {\n        char* empty = malloc(1);\n        if (empty) empty[0] = '\\0';\n        return empty;\n    }\n    long long total_len = strlen(s);\n    if (start < 0 || start >= total_len || len <= 0) {\n        char* empty = malloc(1);\n        if (empty) empty[0] = '\\0';\n        return empty;\n    }\n    if (start + len > total_len) {\n        len = total_len - start;\n    }\n    char* sub = malloc(len + 1);\n    if (!sub) {\n        char* empty = malloc(1);\n        if (empty) empty[0] = '\\0';\n        return empty;\n    }\n    strncpy(sub, s + start, len);\n    sub[len] = '\\0';\n    return sub;\n}\n\nchar* string_from_list(long long list_ptr) {\n    EpList* list = (EpList*)list_ptr;\n    if (!list) {\n        char* empty = malloc(1);\n        if (empty) empty[0] = '\\0';\n        return empty;\n    }\n    char* s = malloc(list->length + 1);\n    if (!s) {\n        char* empty = malloc(1);\n        if (empty) empty[0] = '\\0';\n        return empty;\n    }\n    for (long long i = 0; i < list->length; i++) {\n        s[i] = (char)list->data[i];\n    }\n    s[list->length] = '\\0';\n    return s;\n}\n\nlong long pop_list(long long list_ptr) {\n    EpList* list = (EpList*)list_ptr;\n    if (!list || list->length <= 0) return 0;\n    list->length -= 1;\n    return list->data[list->length];\n}\n\nvoid display_string(const char* s) {\n    if (s) puts(s);\n}\n"
+    set ok to write_file_content(runtime_path and runtime_src)
+    
+    display "[3/3] Assembling and Linking via Clang..."
+    set cmd_half1 to string_concat("clang " and asm_path)
+    set cmd_half2 to string_concat(cmd_half1 and " ")
+    set cmd_half3 to string_concat(cmd_half2 and runtime_path)
+    set cmd_half4 to string_concat(cmd_half3 and " -o ")
+    set compile_cmd to string_concat(cmd_half4 and stem)
+    
+    set status to run_command(compile_cmd)
+    
+    set rm_cmd1 to string_concat("rm " and asm_path)
+    set status2 to run_command(rm_cmd1)
+    set rm_cmd2 to string_concat("rm " and runtime_path)
+    set status3 to run_command(rm_cmd2)
+    
+    if status == 0:
+        display "Self-hosted compilation successful!"
+        return 0
+    else:
+        display "Compilation failed."
+        return 1

@@ -1,0 +1,781 @@
+# ErnosPlain Self-Hosted Code Generator Module
+
+# Map helpers
+define map_get with keys and values and key:
+    set key_str to string_concat(key and "")
+    set len to length_list(keys)
+    set idx to 0
+    repeat while idx < len:
+        set k to get_list(keys and idx)
+        if key_str equals k:
+            return get_list(values and idx)
+        set idx to idx + 1
+    return 0
+
+define map_put with keys and values and key and val:
+    set key_str to string_concat(key and "")
+    set len to length_list(keys)
+    set idx to 0
+    set found to 0
+    repeat while idx < len && found == 0:
+        set k to get_list(keys and idx)
+        if key_str equals k:
+            set ok to set_list(values and idx and val)
+            set found to 1
+        set idx to idx + 1
+    if found == 0:
+        set ok to append_list(keys and key)
+        set ok to append_list(values and val)
+    return 0
+
+# String helpers
+define string_concat with s1 and s2:
+    set lst to create_list()
+    set len1 to string_length(s1)
+    set idx to 0
+    repeat while idx < len1:
+        set ok to append_list(lst and get_character(s1 and idx))
+        set idx to idx + 1
+        
+    set len2 to string_length(s2)
+    set idx2 to 0
+    repeat while idx2 < len2:
+        set ok to append_list(lst and get_character(s2 and idx2))
+        set idx2 to idx2 + 1
+        
+    set res to string_from_list(lst)
+    return res
+
+define int_to_string with n:
+    if n == 0:
+        return "0"
+    set lst to create_list()
+    set temp to n
+    set digits to create_list()
+    repeat while temp > 0:
+        set digit to temp - (temp / 10 * 10)
+        set ok to append_list(digits and digit + 48)
+        set temp to temp / 10
+    
+    set len to length_list(digits)
+    repeat while len > 0:
+        set d to pop_list(digits)
+        set ok to append_list(lst and d)
+        set len to len - 1
+        
+    set res to string_from_list(lst)
+    return res
+
+define escape_string with s:
+    set lst to create_list()
+    set len to string_length(s)
+    set idx to 0
+    repeat while idx < len:
+        set ch to get_character(s and idx)
+        if ch == 92: # \
+            set ok to append_list(lst and 92)
+            set ok to append_list(lst and 92)
+        else:
+            if ch == 34: # "
+                set ok to append_list(lst and 92)
+                set ok to append_list(lst and 34)
+            else:
+                if ch == 10: # \n
+                    set ok to append_list(lst and 92)
+                    set ok to append_list(lst and 110)
+                else:
+                    if ch == 9: # \t
+                        set ok to append_list(lst and 92)
+                        set ok to append_list(lst and 116)
+                    else:
+                        if ch == 13: # \r
+                            set ok to append_list(lst and 92)
+                            set ok to append_list(lst and 114)
+                        else:
+                            set ok to append_list(lst and ch)
+        set idx to idx + 1
+        
+    set res to string_from_list(lst)
+    return res
+
+define join_strings with lines:
+    set lst to create_list()
+    set len to length_list(lines)
+    set idx to 0
+    repeat while idx < len:
+        set line to get_list(lines and idx)
+        set line_len to string_length(line)
+        set c_idx to 0
+        repeat while c_idx < line_len:
+            set ok to append_list(lst and get_character(line and c_idx))
+            set c_idx to c_idx + 1
+        set idx to idx + 1
+        
+    set res to string_from_list(lst)
+    return res
+
+# Codegen State Helpers
+define create_codegen_state:
+    set state to create_list()
+    set ok to append_list(state and (create_list() + 0)) # assembly_lines (0)
+    set ok to append_list(state and (create_list() + 0)) # string_literals (1)
+    set ok to append_list(state and 0)                 # label_count (2)
+    set ok to append_list(state and (create_list() + 0)) # func_keys (3)
+    set ok to append_list(state and (create_list() + 0)) # func_values (4)
+    return state
+
+define emit with state and line:
+    set lines to get_list(state and 0)
+    set ok to append_list(lines and line)
+    return 0
+
+define add_string_literal with state and s:
+    set s_str to string_concat(s and "")
+    set lits to get_list(state and 1)
+    set len to length_list(lits)
+    set idx to 0
+    repeat while idx < len:
+        set val to get_list(lits and idx)
+        if s_str equals val:
+            return idx
+        set idx to idx + 1
+    set ok to append_list(lits and s)
+    return len
+
+define get_new_label with state and prefix:
+    set count to get_list(state and 2)
+    set next_count to count + 1
+    set ok to set_list(state and 2 and next_count)
+    
+    set num_str to int_to_string(count)
+    set label_half to string_concat("L_" and prefix)
+    set label to string_concat(label_half and "_")
+    set final_label to string_concat(label and num_str)
+    
+    return final_label
+
+# Type Inference Pass
+define analyze_return_types with state and program:
+    set keys to get_list(state and 3)
+    set values to get_list(state and 4)
+    
+    set ok to map_put(keys and values and "read_file_content" and 3) # TYPE_DYNSTR = 3
+    set ok to map_put(keys and values and "create_list" and 4)        # TYPE_LIST = 4
+    set ok to map_put(keys and values and "append_list" and 1)       # TYPE_INT = 1
+    set ok to map_put(keys and values and "get_list" and 1)
+    set ok to map_put(keys and values and "set_list" and 1)
+    set ok to map_put(keys and values and "length_list" and 1)
+    set ok to map_put(keys and values and "string_length" and 1)
+    set ok to map_put(keys and values and "get_character" and 1)
+    set ok to map_put(keys and values and "display_string" and 1)
+    set ok to map_put(keys and values and "get_argument_count" and 1)
+    set ok to map_put(keys and values and "get_argument" and 2)      # TYPE_STR = 2
+    set ok to map_put(keys and values and "write_file_content" and 1)
+    set ok to map_put(keys and values and "run_command" and 1)
+    set ok to map_put(keys and values and "substring" and 3)
+    set ok to map_put(keys and values and "string_from_list" and 3)
+    set ok to map_put(keys and values and "pop_list" and 1)
+    
+    set funcs to get_list(program and 1)
+    set funcs_len to length_list(funcs)
+    
+    set pass to 0
+    repeat while pass < 3:
+        set idx to 0
+        repeat while idx < funcs_len:
+            set func to get_list(funcs and idx)
+            set name to get_list(func and 1)
+            set params to get_list(func and 2)
+            set body to get_list(func and 3)
+            
+            set var_keys to create_list() + 0
+            set var_values to create_list() + 0
+            
+            set p_len to length_list(params)
+            set p_idx to 0
+            repeat while p_idx < p_len:
+                set p_name to get_list(params and p_idx)
+                set ok to map_put(var_keys and var_values and p_name and 1)
+                set p_idx to p_idx + 1
+                
+            set ok to collect_var_types(state and body and var_keys and var_values)
+            
+            set ret_t to determine_ret_type(state and body and var_keys and var_values)
+            set ok to map_put(keys and values and name and ret_t)
+            
+            set idx to idx + 1
+        set pass to pass + 1
+        
+    return 0
+
+define collect_var_types with state and stmts and var_keys and var_values:
+    set len to length_list(stmts)
+    set idx to 0
+    repeat while idx < len:
+        set stmt to get_list(stmts and idx)
+        set type to get_list(stmt and 0)
+        if type == 7: # NODE_SET
+            set var_name to get_list(stmt and 1)
+            set expr to get_list(stmt and 2)
+            set t to infer_type(state and expr and var_keys and var_values)
+            set ok to map_put(var_keys and var_values and var_name and t)
+        else:
+            if type == 10: # NODE_IF
+                set then_b to get_list(stmt and 2)
+                set ok to collect_var_types(state and then_b and var_keys and var_values)
+                set else_b to get_list(stmt and 3)
+                if else_b != 0:
+                    set ok to collect_var_types(state and else_b and var_keys and var_values)
+            else:
+                if type == 11: # NODE_REPEAT_WHILE
+                    set body to get_list(stmt and 2)
+                    set ok to collect_var_types(state and body and var_keys and var_values)
+        set idx to idx + 1
+    return 0
+
+define determine_ret_type with state and stmts and var_keys and var_values:
+    set len to length_list(stmts)
+    set idx to 0
+    repeat while idx < len:
+        set stmt to get_list(stmts and idx)
+        set type to get_list(stmt and 0)
+        if type == 8: # NODE_RETURN
+            set expr to get_list(stmt and 1)
+            return infer_type(state and expr and var_keys and var_values)
+        else:
+            if type == 10: # NODE_IF
+                set then_b to get_list(stmt and 2)
+                set ret_t to determine_ret_type(state and then_b and var_keys and var_values)
+                if ret_t != 0:
+                    return ret_t
+                set else_b to get_list(stmt and 3)
+                if else_b != 0:
+                    set ret_t2 to determine_ret_type(state and else_b and var_keys and var_values)
+                    if ret_t2 != 0:
+                        return ret_t2
+            else:
+                if type == 11: # NODE_REPEAT_WHILE
+                    set body to get_list(stmt and 2)
+                    set ret_t to determine_ret_type(state and body and var_keys and var_values)
+                    if ret_t != 0:
+                        return ret_t
+        set idx to idx + 1
+    return 1
+
+define infer_type with state and expr and var_keys and var_values:
+    set type to get_list(expr and 0)
+    if type == 1: # NODE_INT
+        return 1
+    if type == 2: # NODE_STR
+        return 2
+    if type == 3: # NODE_IDENT
+        set name to get_list(expr and 1)
+        set t to map_get(var_keys and var_values and name)
+        if t != 0:
+            return t
+        return 1
+    if type == 4 || type == 5 || type == 14: # NODE_BINARY, NODE_COMP, NODE_LOGICAL
+        return 1
+    if type == 6: # NODE_CALL
+        set name to get_list(expr and 1)
+        set func_keys to get_list(state and 3)
+        set func_values to get_list(state and 4)
+        set t to map_get(func_keys and func_values and name)
+        if t != 0:
+            return t
+        return 1
+    return 1
+
+# Variable offset collection
+define collect_vars with state and stmts and var_offsets and var_types and offset_list:
+    set len to length_list(stmts)
+    set idx to 0
+    repeat while idx < len:
+        set stmt to get_list(stmts and idx)
+        set type to get_list(stmt and 0)
+        if type == 7: # NODE_SET
+            set name to get_list(stmt and 1)
+            set expr to get_list(stmt and 2)
+            
+            set keys to get_list(var_offsets and 0)
+            set values to get_list(var_offsets and 1)
+            set off to map_get(keys and values and name)
+            if off == 0:
+                set current_offset to get_list(offset_list and 0)
+                set ok to map_put(keys and values and name and current_offset)
+                set ok to set_list(offset_list and 0 and current_offset + 8)
+                
+            set t to infer_type(state and expr and get_list(var_types and 0) and get_list(var_types and 1))
+            set expr_type to get_list(expr and 0)
+            if expr_type == 3: # NODE_IDENT
+                if t == 4: # TYPE_LIST
+                    set t to 1
+                if t == 3: # TYPE_DYNSTR
+                    set t to 2
+                    
+            set ok to map_put(get_list(var_types and 0) and get_list(var_types and 1) and name and t)
+        else:
+            if type == 10: # NODE_IF
+                set then_b to get_list(stmt and 2)
+                set ok to collect_vars(state and then_b and var_offsets and var_types and offset_list)
+                set else_b to get_list(stmt and 3)
+                if else_b != 0:
+                    set ok to collect_vars(state and else_b and var_offsets and var_types and offset_list)
+            else:
+                if type == 11: # NODE_REPEAT_WHILE
+                    set body to get_list(stmt and 2)
+                    set ok to collect_vars(state and body and var_offsets and var_types and offset_list)
+        set idx to idx + 1
+    return 0
+
+# Generator Functions
+define gen_function with state and func:
+    set name to get_list(func and 1)
+    display "gen_function entered: "
+    set ok to display_string(name)
+    set params to get_list(func and 2)
+    set body to get_list(func and 3)
+    
+    set var_offsets_keys to create_list() + 0
+    set var_offsets_values to create_list() + 0
+    set var_offsets to create_list() + 0
+    set ok to append_list(var_offsets and var_offsets_keys)
+    set ok to append_list(var_offsets and var_offsets_values)
+    
+    set var_types_keys to create_list() + 0
+    set var_types_values to create_list() + 0
+    set var_types to create_list() + 0
+    set ok to append_list(var_types and var_types_keys)
+    set ok to append_list(var_types and var_types_values)
+    
+    set offset_list to create_list() + 0
+    set ok to append_list(offset_list and 16)
+    
+    set p_len to length_list(params)
+    set p_idx to 0
+    repeat while p_idx < p_len:
+        set p_name to get_list(params and p_idx)
+        set off to get_list(offset_list and 0)
+        set ok to map_put(var_offsets_keys and var_offsets_values and p_name and off)
+        set ok to map_put(var_types_keys and var_types_values and p_name and 1)
+        set ok to set_list(offset_list and 0 and off + 8)
+        set p_idx to p_idx + 1
+        
+    set ok to collect_vars(state and body and var_offsets and var_types and offset_list)
+    display "collect_vars done"
+    
+    set num_vars to length_list(var_offsets_keys)
+    set local_bytes to num_vars * 8
+    set aligned_local_bytes to (local_bytes + 15) / 16 * 16
+    set frame_size to 16 + aligned_local_bytes
+    
+    set ok to emit(state and string_concat("_" and name))
+    set ok to emit(state and ":\n")
+    
+    set fs_str to int_to_string(frame_size) + 0
+    set stp_str to string_concat("    stp x29, x30, [sp, #-" and fs_str) + 0
+    set stp_str to string_concat(stp_str and "]!\n") + 0
+    set ok to emit(state and stp_str)
+    set ok to emit(state and "    mov x29, sp\n")
+    
+    if "main" equals name:
+        set ok to emit(state and "    bl _init_ep_args\n")
+        
+    set p_idx to 0
+    repeat while p_idx < p_len:
+        set p_name to get_list(params and p_idx)
+        set off to map_get(var_offsets_keys and var_offsets_values and p_name)
+        set off_str to int_to_string(off) + 0
+        set p_reg_str to int_to_string(p_idx) + 0
+        set str_instr to string_concat("    str x" and p_reg_str) + 0
+        set str_instr to string_concat(str_instr and ", [x29, ") + 0
+        set str_instr to string_concat(str_instr and off_str) + 0
+        set str_instr to string_concat(str_instr and "]\n") + 0
+        set ok to emit(state and str_instr)
+        set p_idx to p_idx + 1
+    display "param copy done"
+        
+    set idx to 0
+    repeat while idx < num_vars:
+        set var_name to get_list(var_offsets_keys and idx)
+        set var_name_str to string_concat(var_name and "")
+        set is_param to 0
+        set p_i to 0
+        repeat while p_i < p_len:
+            if var_name_str equals get_list(params and p_i):
+                set is_param to 1
+            set p_i to p_i + 1
+            
+        if is_param == 0:
+            set t to map_get(var_types_keys and var_types_values and var_name)
+            if t == 3 || t == 4:
+                set off to map_get(var_offsets_keys and var_offsets_values and var_name)
+                set off_str to int_to_string(off) + 0
+                set ok to emit(state and "    mov x0, #0\n")
+                set str_instr to string_concat("    str x0, [x29, " and off_str) + 0
+                set str_instr to string_concat(str_instr and "]\n") + 0
+                set ok to emit(state and str_instr)
+        set idx to idx + 1
+    display "local var init done"
+        
+    set cleanup_label_half to string_concat("L_cleanup_" and name) + 0
+    
+    set body_len to length_list(body)
+    set idx to 0
+    repeat while idx < body_len:
+        set stmt to get_list(body and idx)
+        set ok to gen_statement(state and stmt and var_offsets_keys and var_offsets_values and var_types_keys and var_types_values and cleanup_label_half)
+        set idx to idx + 1
+    display "body codegen done"
+        
+    set ok to emit(state and string_concat(cleanup_label_half and ":\n"))
+    set ok to emit(state and "    str x0, [sp, #-16]!\n")
+    
+    set idx to 0
+    repeat while idx < num_vars:
+        set var_name to get_list(var_offsets_keys and idx)
+        set var_name_str to string_concat(var_name and "")
+        set is_param to 0
+        set p_i to 0
+        repeat while p_i < p_len:
+            if var_name_str equals get_list(params and p_i):
+                set is_param to 1
+            set p_i to p_i + 1
+            
+        if is_param == 0:
+            set t to map_get(var_types_keys and var_types_values and var_name)
+            set off to map_get(var_offsets_keys and var_offsets_values and var_name)
+            set off_str to int_to_string(off) + 0
+            if t == 4:
+                set ok to emit(state and string_concat("    ldr x0, [x29, " and off_str))
+                set ok to emit(state and "]\n    bl _free_list\n")
+            if t == 3:
+                set ok to emit(state and string_concat("    ldr x0, [x29, " and off_str))
+                set ok to emit(state and "]\n    bl _free\n")
+        set idx to idx + 1
+        
+    set ok to emit(state and "    ldr x0, [sp], #16\n")
+    
+    set epilogue_label to string_concat("L_epilogue_" and name) + 0
+    set ok to emit(state and string_concat(epilogue_label and ":\n"))
+    set ok to emit(state and "    mov sp, x29\n")
+    set ldp_str to string_concat("    ldp x29, x30, [sp], #" and fs_str) + 0
+    set ldp_str to string_concat(ldp_str and "\n    ret\n\n") + 0
+    set ok to emit(state and ldp_str)
+    
+    return 0
+
+define gen_statement with state and stmt and var_keys and var_values and type_keys and type_values and cleanup_lbl:
+    set type to get_list(stmt and 0)
+    
+    if type == 7: # NODE_SET
+        set name to get_list(stmt and 1)
+        set expr to get_list(stmt and 2)
+        set ok to gen_expr(state and expr and var_keys and var_values and type_keys and type_values)
+        
+        set t to map_get(type_keys and type_values and name)
+        set off to map_get(var_keys and var_values and name)
+        set off_str to int_to_string(off) + 0
+        if t == 4:
+            set ok to emit(state and string_concat("    ldr x0, [x29, " and off_str))
+            set ok to emit(state and "]\n    bl _free_list\n")
+        if t == 3:
+            set ok to emit(state and string_concat("    ldr x0, [x29, " and off_str))
+            set ok to emit(state and "]\n    bl _free\n")
+            
+        set ok to emit(state and "    ldr x0, [sp], #16\n")
+        set str_instr to string_concat("    str x0, [x29, " and off_str) + 0
+        set str_instr to string_concat(str_instr and "]\n") + 0
+        set ok to emit(state and str_instr)
+        return 0
+        
+    if type == 8: # NODE_RETURN
+        set expr to get_list(stmt and 1)
+        set ok to gen_expr(state and expr and var_keys and var_values and type_keys and type_values)
+        set ok to emit(state and "    ldr x0, [sp], #16\n")
+        
+        set expr_type to get_list(expr and 0)
+        if expr_type == 3:
+            set name to get_list(expr and 1)
+            set t to map_get(type_keys and type_values and name)
+            if t == 3 || t == 4:
+                set off to map_get(var_keys and var_values and name)
+                set off_str to int_to_string(off) + 0
+                set ok to emit(state and "    mov x1, #0\n")
+                set str_instr to string_concat("    str x1, [x29, " and off_str) + 0
+                set str_instr to string_concat(str_instr and "]\n") + 0
+                set ok to emit(state and str_instr)
+                
+        set ok to emit(state and string_concat("    b " and cleanup_lbl))
+        set ok to emit(state and "\n")
+        return 0
+        
+    if type == 9: # NODE_DISPLAY
+        set expr to get_list(stmt and 1)
+        set t to infer_type(state and expr and type_keys and type_values)
+        set ok to gen_expr(state and expr and var_keys and var_values and type_keys and type_values)
+        
+        if t == 2 || t == 3:
+            set ok to emit(state and "    adrp x0, fmt_str@PAGE\n    add x0, x0, fmt_str@PAGEOFF\n")
+        else:
+            set ok to emit(state and "    adrp x0, fmt_int@PAGE\n    add x0, x0, fmt_int@PAGEOFF\n")
+            
+        set ok to emit(state and "    bl _printf\n    add sp, sp, #16\n")
+        return 0
+        
+    if type == 10: # NODE_IF
+        set cond to get_list(stmt and 1)
+        set then_b to get_list(stmt and 2)
+        set else_b to get_list(stmt and 3)
+        
+        set else_lbl to get_new_label(state and "else") + 0
+        set end_lbl to get_new_label(state and "end") + 0
+        
+        set ok to gen_expr(state and cond and var_keys and var_values and type_keys and type_values)
+        set ok to emit(state and "    ldr x0, [sp], #16\n    cmp x0, #0\n")
+        set ok to emit(state and string_concat("    b.eq " and else_lbl))
+        set ok to emit(state and "\n")
+        
+        set t_len to length_list(then_b)
+        set t_idx to 0
+        repeat while t_idx < t_len:
+            set s to get_list(then_b and t_idx)
+            set ok to gen_statement(state and s and var_keys and var_values and type_keys and type_values and cleanup_lbl)
+            set t_idx to t_idx + 1
+            
+        set ok to emit(state and string_concat("    b " and end_lbl))
+        set ok to emit(state and "\n")
+        
+        set ok to emit(state and string_concat(else_lbl and ":\n"))
+        if else_b != 0:
+            set e_len to length_list(else_b)
+            set e_idx to 0
+            repeat while e_idx < e_len:
+                set s to get_list(else_b and e_idx)
+                set ok to gen_statement(state and s and var_keys and var_values and type_keys and type_values and cleanup_lbl)
+                set e_idx to e_idx + 1
+                
+        set ok to emit(state and string_concat(end_lbl and ":\n"))
+        return 0
+        
+    if type == 11: # NODE_REPEAT_WHILE
+        set cond to get_list(stmt and 1)
+        set body to get_list(stmt and 2)
+        
+        set start_lbl to get_new_label(state and "loop_start") + 0
+        set end_lbl to get_new_label(state and "loop_end") + 0
+        
+        set ok to emit(state and string_concat(start_lbl and ":\n"))
+        set ok to gen_expr(state and cond and var_keys and var_values and type_keys and type_values)
+        set ok to emit(state and "    ldr x0, [sp], #16\n    cmp x0, #0\n")
+        set ok to emit(state and string_concat("    b.eq " and end_lbl))
+        set ok to emit(state and "\n")
+        
+        set b_len to length_list(body)
+        set b_idx to 0
+        repeat while b_idx < b_len:
+            set s to get_list(body and b_idx)
+            set ok to gen_statement(state and s and var_keys and var_values and type_keys and type_values and cleanup_lbl)
+            set b_idx to b_idx + 1
+            
+        set ok to emit(state and string_concat("    b " and start_lbl))
+        set ok to emit(state and "\n")
+        set ok to emit(state and string_concat(end_lbl and ":\n"))
+        return 0
+        
+    return 0
+
+define gen_expr with state and expr and var_keys and var_values and type_keys and type_values:
+    set type to get_list(expr and 0)
+    
+    if type == 1: # NODE_INT
+        set val to get_list(expr and 1)
+        set val_str to int_to_string(val) + 0
+        set ok to emit(state and string_concat("    ldr x0, =" and val_str))
+        set ok to emit(state and "\n    str x0, [sp, #-16]!\n")
+        return 0
+        
+    if type == 2: # NODE_STR
+        set val to get_list(expr and 1)
+        set idx to add_string_literal(state and val)
+        set idx_str to int_to_string(idx) + 0
+        set ok to emit(state and string_concat("    adrp x0, str_lit_" and idx_str))
+        set ok to emit(state and "@PAGE\n")
+        set ok to emit(state and string_concat("    add x0, x0, str_lit_" and idx_str))
+        set ok to emit(state and "@PAGEOFF\n    str x0, [sp, #-16]!\n")
+        return 0
+        
+    if type == 3: # NODE_IDENT
+        set name to get_list(expr and 1)
+        set off to map_get(var_keys and var_values and name)
+        set off_str to int_to_string(off) + 0
+        set ok to emit(state and string_concat("    ldr x0, [x29, " and off_str))
+        set ok to emit(state and "]\n    str x0, [sp, #-16]!\n")
+        return 0
+        
+    if type == 4: # NODE_BINARY
+        set left to get_list(expr and 1)
+        set op to get_list(expr and 2)
+        set right to get_list(expr and 3)
+        
+        set ok to gen_expr(state and left and var_keys and var_values and type_keys and type_values)
+        set ok to gen_expr(state and right and var_keys and var_values and type_keys and type_values)
+        
+        set ok to emit(state and "    ldr x1, [sp], #16\n    ldr x0, [sp], #16\n")
+        
+        if op == 1:
+            set ok to emit(state and "    add x0, x0, x1\n")
+        if op == 2:
+            set ok to emit(state and "    sub x0, x0, x1\n")
+        if op == 3:
+            set ok to emit(state and "    mul x0, x0, x1\n")
+        if op == 4:
+            set ok to emit(state and "    sdiv x0, x0, x1\n")
+            
+        set ok to emit(state and "    str x0, [sp, #-16]!\n")
+        return 0
+        
+    if type == 5: # NODE_COMP
+        set left to get_list(expr and 1)
+        set op to get_list(expr and 2)
+        set right to get_list(expr and 3)
+        
+        set lt to infer_type(state and left and type_keys and type_values)
+        set is_string to 0
+        if lt == 2 || lt == 3:
+            set is_string to 1
+            
+        set ok to gen_expr(state and left and var_keys and var_values and type_keys and type_values)
+        set ok to gen_expr(state and right and var_keys and var_values and type_keys and type_values)
+        
+        set ok to emit(state and "    ldr x1, [sp], #16\n    ldr x0, [sp], #16\n")
+        
+        if is_string == 1:
+            set ok to emit(state and "    bl _strcmp\n    cmp x0, #0\n")
+        else:
+            set ok to emit(state and "    cmp x0, x1\n")
+            
+        set cond_str to ""
+        if op == 1:
+            set cond_str to "lt"
+        if op == 2:
+            set cond_str to "gt"
+        if op == 3:
+            set cond_str to "eq"
+        if op == 4:
+            set cond_str to "ne"
+            
+        set ok to emit(state and string_concat("    cset x0, " and cond_str))
+        set ok to emit(state and "\n    str x0, [sp, #-16]!\n")
+        return 0
+        
+    if type == 14: # NODE_LOGICAL
+        set left to get_list(expr and 1)
+        set op to get_list(expr and 2)
+        set right to get_list(expr and 3)
+        
+        if op == 1:
+            set false_lbl to get_new_label(state and "logical_false") + 0
+            set end_lbl to get_new_label(state and "logical_end") + 0
+            
+            set ok to gen_expr(state and left and var_keys and var_values and type_keys and type_values)
+            set ok to emit(state and "    ldr x0, [sp], #16\n    cmp x0, #0\n")
+            set ok to emit(state and string_concat("    b.eq " and false_lbl))
+            set ok to emit(state and "\n")
+            
+            set ok to gen_expr(state and right and var_keys and var_values and type_keys and type_values)
+            set ok to emit(state and "    ldr x0, [sp], #16\n    cmp x0, #0\n")
+            set ok to emit(state and string_concat("    b.eq " and false_lbl))
+            set ok to emit(state and "\n")
+            
+            set ok to emit(state and "    mov x0, #1\n")
+            set ok to emit(state and string_concat("    b " and end_lbl))
+            set ok to emit(state and "\n")
+            
+            set ok to emit(state and string_concat(false_lbl and ":\n    mov x0, #0\n"))
+            set ok to emit(state and string_concat(end_lbl and ":\n    str x0, [sp, #-16]!\n"))
+            return 0
+            
+        if op == 2:
+            set true_lbl to get_new_label(state and "logical_true") + 0
+            set end_lbl to get_new_label(state and "logical_end") + 0
+            
+            set ok to gen_expr(state and left and var_keys and var_values and type_keys and type_values)
+            set ok to emit(state and "    ldr x0, [sp], #16\n    cmp x0, #0\n")
+            set ok to emit(state and string_concat("    b.ne " and true_lbl))
+            set ok to emit(state and "\n")
+            
+            set ok to gen_expr(state and right and var_keys and var_values and type_keys and type_values)
+            set ok to emit(state and "    ldr x0, [sp], #16\n    cmp x0, #0\n")
+            set ok to emit(state and string_concat("    b.ne " and true_lbl))
+            set ok to emit(state and "\n")
+            
+            set ok to emit(state and "    mov x0, #0\n")
+            set ok to emit(state and string_concat("    b " and end_lbl))
+            set ok to emit(state and "\n")
+            
+            set ok to emit(state and string_concat(true_lbl and ":\n    mov x0, #1\n"))
+            set ok to emit(state and string_concat(end_lbl and ":\n    str x0, [sp, #-16]!\n"))
+            return 0
+            
+    if type == 6: # NODE_CALL
+        set name to get_list(expr and 1)
+        set args to get_list(expr and 2)
+        
+        set args_len to length_list(args)
+        set a_idx to 0
+        repeat while a_idx < args_len:
+            set arg to get_list(args and a_idx)
+            set ok to gen_expr(state and arg and var_keys and var_values and type_keys and type_values)
+            set a_idx to a_idx + 1
+            
+        set a_idx2 to args_len - 1
+        repeat while a_idx2 > 0 - 1:
+            set reg_str to int_to_string(a_idx2) + 0
+            set ldr_instr to string_concat("    ldr x" and reg_str) + 0
+            set ldr_instr to string_concat(ldr_instr and ", [sp], #16\n") + 0
+            set ok to emit(state and ldr_instr)
+            set a_idx2 to a_idx2 - 1
+            
+        set ok to emit(state and string_concat("    bl _" and name))
+        set ok to emit(state and "\n    str x0, [sp, #-16]!\n")
+        return 0
+        
+    return 0
+
+define generate_assembly with program:
+    display "generate_assembly entered"
+    set state to create_codegen_state()
+    display "codegen state created"
+    set ok to analyze_return_types(state and program)
+    display "analyze_return_types done"
+    set ok to emit(state and ".global _main\n.align 4\n\n")
+    
+    set funcs to get_list(program and 1)
+    set len to length_list(funcs)
+    set idx to 0
+    repeat while idx < len:
+        set func to get_list(funcs and idx)
+        display "compiling function..."
+        set ok to gen_function(state and func)
+        set idx to idx + 1
+        
+    set ok to emit(state and ".section __TEXT,__cstring,cstring_literals\nfmt_int:\n    .asciz \"%lld\\n\"\nfmt_str:\n    .asciz \"%s\\n\"\n")
+    
+    set lits to get_list(state and 1)
+    set lits_len to length_list(lits)
+    set idx2 to 0
+    repeat while idx2 < lits_len:
+        set lit to get_list(lits and idx2)
+        set escaped to escape_string(lit) + 0
+        set idx_str to int_to_string(idx2) + 0
+        set lit_label to string_concat("str_lit_" and idx_str) + 0
+        set ok to emit(state and string_concat(lit_label and ":\n    .asciz \""))
+        set ok to emit(state and escaped)
+        set ok to emit(state and "\"\n")
+        set idx2 to idx2 + 1
+        
+    set lines to get_list(state and 0)
+    set assembly_code to join_strings(lines)
+    
+    return assembly_code
