@@ -173,6 +173,9 @@ impl Codegen {
         self.func_return_types.insert("json_get_bool".to_string(), Type::Int);
         self.func_return_types.insert("ep_sha1".to_string(), Type::DynStr);
         self.func_return_types.insert("ep_net_recv_bytes".to_string(), Type::DynStr);
+        self.func_return_types.insert("channel_try_recv".to_string(), Type::Int);
+        self.func_return_types.insert("channel_has_data".to_string(), Type::Int);
+        self.func_return_types.insert("channel_select".to_string(), Type::Int);
 
         for ext in &program.externals {
             if let Some(ref rt) = ext.return_type {
@@ -1269,7 +1272,9 @@ impl Codegen {
                         obj_str, field_name, struct_name, struct_name, field_name
                     ))
                 } else {
-                    Err(format!("Field access on non-struct type"))
+                    let var_name = if let ExprNode::Identifier(n) = &obj.node { n.clone() } else { "?".to_string() };
+                    Err(format!("Field access '.{}' on non-struct variable '{}' (type: {:?}) at line {}:{}. Add a type annotation like 'with {} as StructName'",
+                        field_name, var_name, obj_type, expr.span.line, expr.span.col, var_name))
                 }
             }
             ExprNode::StructCreate(struct_name, fields) => {
@@ -1304,7 +1309,11 @@ impl Codegen {
                 let obj_type = self.infer_type(obj, var_types);
                 let struct_name = match &obj_type {
                     Type::Struct(s) => s.clone(),
-                    _ => return Err(format!("Method call on non-struct type")),
+                    _ => {
+                        let var_name = if let ExprNode::Identifier(n) = &obj.node { n.clone() } else { "?".to_string() };
+                        return Err(format!("Method '.{}()' called on non-struct variable '{}' (type: {:?}) at line {}:{}",
+                            method_name, var_name, obj_type, expr.span.line, expr.span.col));
+                    }
                 };
                 let mut all_args = vec![obj_str];
                 for arg in args {
@@ -2523,6 +2532,9 @@ long long json_get_int(long long json_val, long long key_val);
 long long json_get_bool(long long json_val, long long key_val);
 long long ep_sha1(long long data_val);
 long long ep_net_recv_bytes(long long fd, long long count);
+long long channel_try_recv(long long chan_ptr, long long out_ptr);
+long long channel_has_data(long long chan_ptr);
+long long channel_select(long long channels_list, long long timeout_ms);
 
 typedef struct {
     long long* data;
@@ -2577,6 +2589,72 @@ long long receive_channel(long long chan_ptr) {
     ep_cond_signal(&chan->cond_send);
     ep_mutex_unlock(&chan->mutex);
     return value;
+}
+
+// Non-blocking receive — returns 1 if data was available, 0 if channel empty
+long long channel_try_recv(long long chan_ptr, long long out_ptr) {
+    EpChannel* chan = (EpChannel*)chan_ptr;
+    if (!chan) return 0;
+    ep_mutex_lock(&chan->mutex);
+    if (chan->size <= 0) {
+        ep_mutex_unlock(&chan->mutex);
+        return 0;
+    }
+    long long value = chan->data[chan->head];
+    chan->head = (chan->head + 1) % chan->capacity;
+    chan->size -= 1;
+    ep_cond_signal(&chan->cond_send);
+    ep_mutex_unlock(&chan->mutex);
+    if (out_ptr) {
+        *((long long*)out_ptr) = value;
+    }
+    return 1;
+}
+
+// Check if channel has data without consuming it
+long long channel_has_data(long long chan_ptr) {
+    EpChannel* chan = (EpChannel*)chan_ptr;
+    if (!chan) return 0;
+    ep_mutex_lock(&chan->mutex);
+    int has = (chan->size > 0) ? 1 : 0;
+    ep_mutex_unlock(&chan->mutex);
+    return has;
+}
+
+// Select: wait for any of N channels to have data, with timeout in ms
+// channels_list is a list of channel pointers
+// Returns index (0-based) of first ready channel, or -1 on timeout
+long long channel_select(long long channels_list, long long timeout_ms) {
+    EpList* list = (EpList*)channels_list;
+    if (!list || list->length == 0) return -1;
+    
+    struct timespec start, now;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    
+    while (1) {
+        // Poll all channels
+        for (long long i = 0; i < list->length; i++) {
+            EpChannel* chan = (EpChannel*)list->data[i];
+            if (chan) {
+                ep_mutex_lock(&chan->mutex);
+                if (chan->size > 0) {
+                    ep_mutex_unlock(&chan->mutex);
+                    return i;
+                }
+                ep_mutex_unlock(&chan->mutex);
+            }
+        }
+        
+        // Check timeout
+        if (timeout_ms >= 0) {
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            long long elapsed = (now.tv_sec - start.tv_sec) * 1000 + (now.tv_nsec - start.tv_nsec) / 1000000;
+            if (elapsed >= timeout_ms) return -1;
+        }
+        
+        // Brief sleep to avoid busy-wait
+        usleep(1000); // 1ms
+    }
 }
 
 long long ep_net_connect(const char* host, long long port) {
