@@ -2823,7 +2823,16 @@ define show_status with p as Player and c as Companion:
     set biome to get_biome(p.floor)
     set biome_emoji to get_biome_emoji(biome)
     display f"  ========================================"
-    display f"  {p.name} — Level {p.level} | Floor {p.floor} | {biome_emoji} {biome}"
+    set status_line to concat("  " and p.name)
+    set status_line to concat(status_line and " — Level ")
+    set status_line to concat(status_line and int_to_string(p.level))
+    set status_line to concat(status_line and " | Floor ")
+    set status_line to concat(status_line and int_to_string(p.floor))
+    set status_line to concat(status_line and " | ")
+    set status_line to concat(status_line and biome_emoji)
+    set status_line to concat(status_line and " ")
+    set status_line to concat(status_line and biome)
+    display status_line
     display f"  ========================================"
     set p_bar to health_bar(p.health and p.max_health and 20)
     display f"  HP:   {p_bar} {p.health}/{p.max_health}"
@@ -2838,10 +2847,21 @@ define show_status with p as Player and c as Companion:
         set stage_name to get_stage_name(c.stage)
         set c_bar to health_bar(c.health and c.max_health and 15)
         display ""
-        display f"  {cemoji} {c.name} — {stage_name} {c.species} (Lv.{c.level})"
+        set c_line to concat("  " and cemoji)
+        set c_line to concat(c_line and " ")
+        set c_line to concat(c_line and c.name)
+        set c_line to concat(c_line and " — ")
+        set c_line to concat(c_line and stage_name)
+        set c_line to concat(c_line and " ")
+        set c_line to concat(c_line and c.species)
+        set c_line to concat(c_line and " (Lv.")
+        set c_line to concat(c_line and int_to_string(c.level))
+        set c_line to concat(c_line and ")")
+        display c_line
         display f"  HP:   {c_bar} {c.health}/{c.max_health}"
         display f"  ATK: {c.attack}  Bond: {c.bond}/100  Trust: {c.trust}/100"
-        display f"  Mood: {get_mood_text(c.happiness)} | Hunger: {c.hunger}/100"
+        set mood_text to get_mood_text(c.happiness)
+        display f"  Mood: {mood_text} | Hunger: {c.hunger}/100"
         if c.ability1 != "none":
             set ab_str to c.ability1
             if c.ability2 != "none":
@@ -2851,7 +2871,16 @@ define show_status with p as Player and c as Companion:
             display f"  Abilities: {ab_str}"
     else:
         set stage_emoji to get_stage_emoji(c.stage)
-        display f"  {stage_emoji} {c.name} — {get_stage_name(c.stage)} (Bond: {c.bond}/100)"
+        set stage_nm to get_stage_name(c.stage)
+        set egg_line to concat("  " and stage_emoji)
+        set egg_line to concat(egg_line and " ")
+        set egg_line to concat(egg_line and c.name)
+        set egg_line to concat(egg_line and " — ")
+        set egg_line to concat(egg_line and stage_nm)
+        set egg_line to concat(egg_line and " (Bond: ")
+        set egg_line to concat(egg_line and int_to_string(c.bond))
+        set egg_line to concat(egg_line and "/100)")
+        display egg_line
     display f"  ========================================"
 
 define show_title:
@@ -2998,18 +3027,33 @@ define main:
     display "  A mysterious egg appears before you..."
     display "  What species do you sense within?"
     display ""
-    set species_list to get_species_list()
-    set i to 0
-    repeat while i < length_list(species_list):
-        set sp to get_list(species_list and i)
-        set desc to get_species_desc(sp)
-        display f"    {i + 1}) {desc}"
-        set i to i + 1
+    set d1 to get_species_desc("Drake")
+    set d2 to get_species_desc("Kitsune")
+    set d3 to get_species_desc("Griffin")
+    set d4 to get_species_desc("Phantom")
+    set d5 to get_species_desc("Wyrm")
+    set d6 to get_species_desc("Golem")
+    display concat("    1) " and d1)
+    display concat("    2) " and d2)
+    display concat("    3) " and d3)
+    display concat("    4) " and d4)
+    display concat("    5) " and d5)
+    display concat("    6) " and d6)
     display ""
     set sp_pick to string_to_int(read_line())
     if sp_pick < 1 || sp_pick > 6:
         set sp_pick to 1
-    set chosen_species to get_list(species_list and sp_pick - 1)
+    set chosen_species to "Drake"
+    if sp_pick == 2:
+        set chosen_species to "Kitsune"
+    else if sp_pick == 3:
+        set chosen_species to "Griffin"
+    else if sp_pick == 4:
+        set chosen_species to "Phantom"
+    else if sp_pick == 5:
+        set chosen_species to "Wyrm"
+    else if sp_pick == 6:
+        set chosen_species to "Golem"
 
     display ""
     display "  Name your companion:"
@@ -3022,7 +3066,13 @@ define main:
         species is chosen_species
 
     set cemoji to get_species_emoji(c.species)
-    display f"  {cemoji} A glowing {chosen_species} egg named {c.name} joins your journey!"
+    set join_msg to concat("  " and cemoji)
+    set join_msg to concat(join_msg and " A glowing ")
+    set join_msg to concat(join_msg and chosen_species)
+    set join_msg to concat(join_msg and " egg named ")
+    set join_msg to concat(join_msg and c.name)
+    set join_msg to concat(join_msg and " joins your journey!")
+    display join_msg
     display ""
 
     # ── Initialize systems ──
@@ -3067,7 +3117,10 @@ define main:
         set biome to get_biome(p.floor)
         set biome_emoji to get_biome_emoji(biome)
         set room_desc to get_room_desc(p.floor and p.turns_total)
-        display f"  {biome_emoji} {room_desc}"
+        set room_line to concat("  " and biome_emoji)
+        set room_line to concat(room_line and " ")
+        set room_line to concat(room_line and room_desc)
+        display room_line
 
         # ── Companion ambient comment ──
         if p.turns_total % 3 == 0:
