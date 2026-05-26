@@ -117,6 +117,7 @@ impl Codegen {
         self.func_return_types.insert("append_list".to_string(), Type::Int);
         self.func_return_types.insert("get_list".to_string(), Type::Int);
         self.func_return_types.insert("set_list".to_string(), Type::Int);
+        self.func_return_types.insert("remove_list".to_string(), Type::Int);
         self.func_return_types.insert("length_list".to_string(), Type::Int);
         self.func_return_types.insert("string_length".to_string(), Type::Int);
         self.func_return_types.insert("get_character".to_string(), Type::Int);
@@ -1568,7 +1569,8 @@ impl Codegen {
         lines.push("#include <sys/wait.h>\n".to_string());
         lines.push("#include <unistd.h>\n".to_string());
         lines.push("#include <stdio.h>\n".to_string());
-        lines.push("#include <stdlib.h>\n\n".to_string());
+        lines.push("#include <stdlib.h>\n".to_string());
+        lines.push("#include <stdint.h>\n\n".to_string());
         
         lines.push("int run_test(long long (*test_func)(void), const char* name) {\n".to_string());
         lines.push("    printf(\"test_%s ... \", name);\n".to_string());
@@ -2183,6 +2185,7 @@ impl Codegen {
 
 const RUNTIME_HEADER_AND_SRC: &str = r#"#include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <setjmp.h>
 #include <signal.h>
@@ -2608,6 +2611,7 @@ long long set_list(long long list_ptr, long long index, long long value);
 long long length_list(long long list_ptr);
 long long free_list(long long list_ptr);
 long long pop_list(long long list_ptr);
+long long remove_list(long long list_ptr, long long index);
 char* string_from_list(long long list_ptr);
 long long string_length(const char* s);
 long long display_string(const char* s);
@@ -3741,6 +3745,17 @@ long long pop_list(long long list_ptr) {
     if (!list || list->length <= 0) return 0;
     list->length -= 1;
     return list->data[list->length];
+}
+
+long long remove_list(long long list_ptr, long long index) {
+    EpList* list = (EpList*)list_ptr;
+    if (!list || index < 0 || index >= list->length) return 0;
+    long long removed = list->data[index];
+    for (long long i = index; i < list->length - 1; i++) {
+        list->data[i] = list->data[i + 1];
+    }
+    list->length -= 1;
+    return removed;
 }
 
 long long display_string(const char* s) {

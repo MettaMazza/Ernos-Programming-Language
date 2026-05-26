@@ -115,7 +115,7 @@ fn main() {
     // Handle global flags
     if args[1] == "--version" || args[1] == "-v" {
         println!("Ernos Compiler v1.0.0");
-        println!("  Backend: C (Clang) / ARM64 native");
+        println!("  Backend: C (Clang) / native assembly");
         println!("  Target:  {}", std::env::consts::ARCH);
         println!("  OS:      {}", std::env::consts::OS);
         return;
@@ -440,7 +440,7 @@ fn main() {
             opt_stats.constants_folded, opt_stats.dead_stmts_eliminated);
     }
 
-    println!("[2/3] Generating ARM64 Assembly...");
+    println!("[2/3] Generating C Code...");
 
     // Code generation (C backend)
     let mut codegen = codegen::Codegen::new();
@@ -584,7 +584,7 @@ fn print_usage() {
     eprintln!();
     eprintln!("\x1b[1mUSAGE:\x1b[0m");
     eprintln!("  epc <filename.ep>               Compile to native binary");
-    eprintln!("  epc <filename.ep> --native      Compile via ARM64 (no Clang)");
+    eprintln!("  epc <filename.ep> --native      Compile via native assembly (no Clang)");
     eprintln!("  epc <filename.ep> --release     Compile with optimizations (O3+LTO)");
     eprintln!("  epc test <filename.ep>          Run as test");
     eprintln!();
@@ -684,10 +684,13 @@ fn run_repl() {
     let stdin = io::stdin();
     let mut history: Vec<String> = Vec::new();
     let mut line_buffer = String::new();
-    let in_block = false;
+    let mut _in_block = false;
+    let mut accumulated_lines: Vec<String> = Vec::new();
+    let mut user_functions: Vec<String> = Vec::new();
+    let mut block_buffer: Vec<String> = Vec::new();
 
     loop {
-        if in_block {
+        if _in_block {
             print!("\x1b[33m...  \x1b[0m");
         } else {
             print!("\x1b[1;32mep>\x1b[0m ");
@@ -706,6 +709,30 @@ fn run_repl() {
 
         let trimmed = line_buffer.trim();
 
+        // Handle multi-line block input
+        if _in_block {
+            if trimmed.is_empty() {
+                // Empty line ends the block
+                _in_block = false;
+                let block_text = block_buffer.join("\n");
+                block_buffer.clear();
+
+                // Check if this is a function definition
+                if block_text.starts_with("define ") && !block_text.starts_with("define main") {
+                    user_functions.push(block_text.clone());
+                    history.push(block_text);
+                    println!("\x1b[2mFunction defined.\x1b[0m");
+                } else {
+                    accumulated_lines.push(block_text.clone());
+                    history.push(block_text);
+                }
+                continue;
+            } else {
+                block_buffer.push(line_buffer.trim_end().to_string());
+                continue;
+            }
+        }
+
         // Handle meta-commands
         if trimmed == "exit" || trimmed == "quit" {
             println!("\x1b[2mGoodbye!\x1b[0m");
@@ -717,12 +744,17 @@ fn run_repl() {
             println!("  \x1b[36m:help\x1b[0m      Show this help");
             println!("  \x1b[36m:history\x1b[0m   Show command history");
             println!("  \x1b[36m:clear\x1b[0m     Clear history");
+            println!("  \x1b[36m:reset\x1b[0m     Clear all session state");
             println!("  \x1b[36mexit\x1b[0m       Exit the REPL");
             println!();
+            println!("\x1b[1mSession State:\x1b[0m");
+            println!("  Variables persist across lines (set x to 42, then display x)");
+            println!("  Enter a block (define, if, etc.) and end with an empty line");
+            println!();
             println!("\x1b[1mExamples:\x1b[0m");
-            println!("  \x1b[2mdisplay 42\x1b[0m");
+            println!("  \x1b[2mset x to 42\x1b[0m");
+            println!("  \x1b[2mdisplay x\x1b[0m");
             println!("  \x1b[2mdisplay concat(\"hello\" and \" world\")\x1b[0m");
-            println!("  \x1b[2mdisplay 10 + 20 * 3\x1b[0m");
             continue;
         }
 
@@ -739,15 +771,52 @@ fn run_repl() {
             continue;
         }
 
+        if trimmed == ":reset" {
+            accumulated_lines.clear();
+            user_functions.clear();
+            history.clear();
+            println!("Session state and history cleared.");
+            continue;
+        }
+
         if trimmed.is_empty() {
+            continue;
+        }
+
+        // Check if this starts a multi-line block (ends with ':')
+        if trimmed.ends_with(':') && (trimmed.starts_with("define ")
+            || trimmed.starts_with("if ")
+            || trimmed.starts_with("repeat ")
+            || trimmed.starts_with("for ")
+            || trimmed.starts_with("while "))
+        {
+            _in_block = true;
+            block_buffer.clear();
+            block_buffer.push(trimmed.to_string());
             continue;
         }
 
         // Save to history
         history.push(trimmed.to_string());
 
-        // Wrap the input in a main function and compile
-        let source = format!("define main:\n    {}\n    return 0\n", trimmed);
+        // Check if this is a function definition (single line with body)
+        if trimmed.starts_with("define ") && !trimmed.starts_with("define main") {
+            user_functions.push(trimmed.to_string());
+            println!("\x1b[2mFunction defined.\x1b[0m");
+            continue;
+        }
+
+        // Add to accumulated lines
+        accumulated_lines.push(format!("    {}", trimmed));
+
+        // Build the full source with all accumulated state
+        let funcs = user_functions.join("\n\n");
+        let body = accumulated_lines.join("\n");
+        let source = if funcs.is_empty() {
+            format!("define main:\n{}\n    return 0\n", body)
+        } else {
+            format!("{}\n\ndefine main:\n{}\n    return 0\n", funcs, body)
+        };
 
         // Try to parse and evaluate
         let mut lexer_instance = lexer::Lexer::new(&source);
@@ -755,6 +824,8 @@ fn run_repl() {
             Ok(t) => t,
             Err(e) => {
                 eprintln!("\x1b[31mLexer error:\x1b[0m {:?}", e);
+                // Remove the last line that caused the error
+                accumulated_lines.pop();
                 continue;
             }
         };
@@ -764,6 +835,7 @@ fn run_repl() {
             Ok(p) => p,
             Err(e) => {
                 eprintln!("\x1b[31mParse error:\x1b[0m {}", e.message);
+                accumulated_lines.pop();
                 continue;
             }
         };
@@ -778,6 +850,7 @@ fn run_repl() {
             Ok(code) => code,
             Err(e) => {
                 eprintln!("\x1b[31mCodegen error:\x1b[0m {}", e);
+                accumulated_lines.pop();
                 continue;
             }
         };
@@ -787,6 +860,7 @@ fn run_repl() {
         let tmp_bin = "/tmp/ep_repl";
         if let Err(e) = fs::write(tmp_c, &c_code) {
             eprintln!("\x1b[31mError writing temp file:\x1b[0m {}", e);
+            accumulated_lines.pop();
             continue;
         }
 
@@ -800,11 +874,13 @@ fn run_repl() {
                 if !output.status.success() {
                     let stderr = String::from_utf8_lossy(&output.stderr);
                     eprintln!("\x1b[31mCompile error:\x1b[0m {}", stderr);
+                    accumulated_lines.pop();
                     continue;
                 }
             }
             Err(e) => {
                 eprintln!("\x1b[31mFailed to run compiler:\x1b[0m {}", e);
+                accumulated_lines.pop();
                 continue;
             }
         }
@@ -829,7 +905,7 @@ fn run_repl() {
             }
         }
 
-        // Cleanup
+        // Cleanup temp files
         let _ = fs::remove_file(tmp_c);
         let _ = fs::remove_file(tmp_bin);
     }

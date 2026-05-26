@@ -272,7 +272,7 @@ impl NativeCodegen {
             }
 
             _ => {
-                // Other statement types not yet supported in native backend
+                return Err(format!("Native ARM64 backend: unsupported statement type: {:?}", stmt.node));
             }
         }
         Ok(())
@@ -416,8 +416,7 @@ impl NativeCodegen {
             }
 
             _ => {
-                // Unsupported expression type in native backend — emit 0
-                self.emit(&format!("    mov {}, #0 // unsupported expr", dest));
+                return Err(format!("Native ARM64 backend: unsupported expression type: {:?}", expr.node));
             }
         }
         Ok(())

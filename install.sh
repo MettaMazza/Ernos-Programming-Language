@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ErnosPlain Installer Script
-# Installs the ErnosPlain compiler globally on macOS ARM64 systems.
+# Installs the ErnosPlain compiler globally on macOS and Linux systems.
 
 set -e
 
@@ -23,27 +23,41 @@ echo -e "${BOLD}1. Checking system compatibility...${NC}"
 OS=$(uname -s)
 ARCH=$(uname -m)
 
-if [ "$OS" != "Darwin" ]; then
-    echo -e "${RED}Error: ErnosPlain currently only supports macOS.${NC}"
+if [ "$OS" != "Darwin" ] && [ "$OS" != "Linux" ]; then
+    echo -e "${RED}Error: ErnosPlain supports macOS and Linux. Detected OS: $OS${NC}"
     exit 1
 fi
 
-if [ "$ARCH" != "arm64" ]; then
-    echo -e "${YELLOW}Warning: ErnosPlain compiles natively to ARM64 assembly (Apple Silicon).${NC}"
-    echo -e "${YELLOW}Non-ARM64 systems are not officially supported.${NC}"
+if [ "$ARCH" != "arm64" ] && [ "$ARCH" != "aarch64" ] && [ "$ARCH" != "x86_64" ]; then
+    echo -e "${YELLOW}Warning: Unsupported architecture: $ARCH${NC}"
+    echo -e "${YELLOW}Supported: arm64, aarch64, x86_64${NC}"
     exit 1
 fi
-echo -e "${GREEN}✓ Compatible macOS ARM64 system detected.${NC}"
+echo -e "${GREEN}✓ Compatible $OS $ARCH system detected.${NC}"
 echo ""
 
-# 2. Dependency Check (Clang and Cargo)
+# 2. Dependency Check (C compiler and Cargo)
 echo -e "${BOLD}2. Verifying build dependencies...${NC}"
-if ! command -v clang &> /dev/null; then
-    echo -e "${RED}Error: 'clang' was not found on your system.${NC}"
-    echo -e "${RED}Please install Xcode Command Line Tools by running: xcode-select --install${NC}"
-    exit 1
+
+if [ "$OS" = "Linux" ]; then
+    if command -v clang &> /dev/null; then
+        echo -e "${GREEN}✓ Clang C compiler is installed.${NC}"
+    elif command -v gcc &> /dev/null; then
+        echo -e "${GREEN}✓ GCC C compiler is installed.${NC}"
+    else
+        echo -e "${RED}Error: A C compiler (gcc or clang) is required.${NC}"
+        echo -e "${RED}Install with: sudo apt install build-essential  (Debian/Ubuntu)${NC}"
+        echo -e "${RED}         or: sudo dnf install gcc               (Fedora)${NC}"
+        exit 1
+    fi
+elif [ "$OS" = "Darwin" ]; then
+    if ! command -v clang &> /dev/null; then
+        echo -e "${RED}Error: 'clang' was not found on your system.${NC}"
+        echo -e "${RED}Please install Xcode Command Line Tools by running: xcode-select --install${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ Clang C compiler is installed.${NC}"
 fi
-echo -e "${GREEN}✓ Clang assembler is installed.${NC}"
 
 if ! command -v cargo &> /dev/null; then
     echo -e "${RED}Error: Rust/Cargo is required to build the bootstrap compiler driver.${NC}"
@@ -90,6 +104,20 @@ echo ""
 
 # 5. PATH Verification and Guide
 echo -e "${BOLD}5. Verification & PATH setup...${NC}"
+
+# Detect the appropriate shell config file
+if [ "$OS" = "Linux" ]; then
+    if [ -n "$BASH_VERSION" ] || [ "$(basename "$SHELL")" = "bash" ]; then
+        SHELL_RC="$HOME/.bashrc"
+    elif [ "$(basename "$SHELL")" = "zsh" ]; then
+        SHELL_RC="$HOME/.zshrc"
+    else
+        SHELL_RC="$HOME/.profile"
+    fi
+else
+    SHELL_RC="$HOME/.zshrc"
+fi
+
 if [[ ":$PATH:" == *":$INSTALL_DIR:"* ]]; then
     echo -e "${GREEN}✓ $INSTALL_DIR is already in your shell's PATH variable.${NC}"
     echo ""
@@ -97,11 +125,11 @@ if [[ ":$PATH:" == *":$INSTALL_DIR:"* ]]; then
     echo -e "You can now compile ErnosPlain files globally by typing: ${BOLD}epc <file.ep>${NC}"
 else
     echo -e "${YELLOW}Almost done! You need to add $INSTALL_DIR to your shell's PATH.${NC}"
-    echo -e "Run the following command to add it to your shell configuration (e.g., .zshrc):"
+    echo -e "Run the following command to add it to your shell configuration ($(basename "$SHELL_RC")):"
     echo ""
-    echo -e "  ${BOLD}echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc${NC}"
+    echo -e "  ${BOLD}echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> $SHELL_RC${NC}"
     echo ""
-    echo -e "Then reload your shell: ${BOLD}source ~/.zshrc${NC}"
+    echo -e "Then reload your shell: ${BOLD}source $SHELL_RC${NC}"
     echo -e "After doing this, you can compile globally by typing: ${BOLD}epc <file.ep>${NC}"
 fi
 

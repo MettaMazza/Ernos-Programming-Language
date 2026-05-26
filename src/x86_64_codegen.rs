@@ -308,7 +308,9 @@ impl X86_64Codegen {
                 self.gen_expr(expr, "rax", frame_size)?;
             }
 
-            _ => {}
+            _ => {
+                return Err(format!("Native x86_64 backend: unsupported statement type: {:?}", stmt.node));
+            }
         }
         Ok(())
     }
@@ -454,7 +456,7 @@ impl X86_64Codegen {
             }
 
             _ => {
-                self.emit(&format!("    mov {}, 0 // unsupported expr", dest));
+                return Err(format!("Native x86_64 backend: unsupported expression type: {:?}", expr.node));
             }
         }
         Ok(())
