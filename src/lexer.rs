@@ -159,7 +159,71 @@ impl<'a> Lexer<'a> {
                     raw_tokens.pop();
                 }
                 
-                self.advance(); // consume open quote
+                self.advance(); // consume first quote
+                
+                // Check for triple-quote """..."""
+                let is_triple = if self.peek() == Some('"') {
+                    // Check if the next char is also a quote
+                    let saved_pos = self.pos;
+                    self.advance(); // consume second quote
+                    if self.peek() == Some('"') {
+                        self.advance(); // consume third quote
+                        true
+                    } else {
+                        // It was just "" (empty string)
+                        self.pos = saved_pos;
+                        false
+                    }
+                } else {
+                    false
+                };
+                
+                if is_triple {
+                    // Multi-line string: read until """
+                    let mut s = String::new();
+                    let mut closed = false;
+                    while let Some(ch) = self.peek() {
+                        if ch == '"' {
+                            let _saved = self.pos;
+                            self.advance();
+                            if self.peek() == Some('"') {
+                                self.advance();
+                                if self.peek() == Some('"') {
+                                    self.advance();
+                                    closed = true;
+                                    break;
+                                } else {
+                                    s.push('"');
+                                    s.push('"');
+                                }
+                            } else {
+                                s.push('"');
+                            }
+                        } else if ch == '\\' {
+                            self.advance();
+                            match self.peek() {
+                                Some('n') => { s.push('\n'); self.advance(); }
+                                Some('t') => { s.push('\t'); self.advance(); }
+                                Some('"') => { s.push('"'); self.advance(); }
+                                Some('\\') => { s.push('\\'); self.advance(); }
+                                Some(other) => { s.push('\\'); s.push(other); self.advance(); }
+                                None => break,
+                            }
+                        } else {
+                            s.push(ch);
+                            self.advance();
+                        }
+                    }
+                    if !closed {
+                        return Err(LexError {
+                            message: "Unterminated triple-quoted string".to_string(),
+                            span,
+                        });
+                    }
+                    raw_tokens.push((RawToken::StringVal(s), span));
+                    continue;
+                }
+                
                 let mut s = String::new();
                 let mut closed = false;
                 let mut has_interp = false;

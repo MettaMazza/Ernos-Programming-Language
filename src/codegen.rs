@@ -136,6 +136,9 @@ impl Codegen {
         self.func_return_types.insert("map_get_val".to_string(), Type::Int);
         self.func_return_types.insert("map_contains".to_string(), Type::Int);
         self.func_return_types.insert("map_delete".to_string(), Type::Int);
+        self.func_return_types.insert("map_keys".to_string(), Type::List);
+        self.func_return_types.insert("map_size".to_string(), Type::Int);
+        self.func_return_types.insert("map_values".to_string(), Type::List);
         self.func_return_types.insert("free_map".to_string(), Type::Int);
         self.func_return_types.insert("create_deque".to_string(), Type::Int);
         self.func_return_types.insert("deque_push_back".to_string(), Type::Int);
@@ -2906,6 +2909,36 @@ long long map_delete(long long map_ptr, long long key_val) {
         if (h == start_h) break;
     }
     return 0;
+}
+
+long long map_keys(long long map_ptr) {
+    EpMap* map = (EpMap*)map_ptr;
+    if (!map) return (long long)create_list();
+    long long list = create_list();
+    for (long long i = 0; i < map->capacity; i++) {
+        if (map->entries[i].used && map->entries[i].key) {
+            append_list(list, (long long)strdup(map->entries[i].key));
+        }
+    }
+    return list;
+}
+
+long long map_values(long long map_ptr) {
+    EpMap* map = (EpMap*)map_ptr;
+    if (!map) return (long long)create_list();
+    long long list = create_list();
+    for (long long i = 0; i < map->capacity; i++) {
+        if (map->entries[i].used && map->entries[i].key) {
+            append_list(list, map->entries[i].value);
+        }
+    }
+    return list;
+}
+
+long long map_size(long long map_ptr) {
+    EpMap* map = (EpMap*)map_ptr;
+    if (!map) return 0;
+    return map->size;
 }
 
 long long free_map(long long map_ptr) {
