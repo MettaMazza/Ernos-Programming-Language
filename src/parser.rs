@@ -1029,11 +1029,11 @@ impl Parser {
             }
             // Allow keywords as variable names in expression position
             ref kw @ (Token::Choice | Token::Field | Token::Variant | Token::Structure |
-            Token::Channel | Token::Check | Token::Trait | Token::Implement) => {
+            Token::Check | Token::Trait | Token::Implement) => {
                 let name = match kw {
                     Token::Choice => "choice", Token::Field => "field",
                     Token::Variant => "variant", Token::Structure => "structure",
-                    Token::Channel => "channel", Token::Check => "check",
+                    Token::Check => "check",
                     Token::Trait => "trait", Token::Implement => "implement",
                     _ => unreachable!(),
                 };

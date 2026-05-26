@@ -171,6 +171,8 @@ impl Codegen {
         self.func_return_types.insert("json_get_string".to_string(), Type::DynStr);
         self.func_return_types.insert("json_get_int".to_string(), Type::Int);
         self.func_return_types.insert("json_get_bool".to_string(), Type::Int);
+        self.func_return_types.insert("ep_sha1".to_string(), Type::DynStr);
+        self.func_return_types.insert("ep_net_recv_bytes".to_string(), Type::DynStr);
 
         for ext in &program.externals {
             if let Some(ref rt) = ext.return_type {
@@ -196,7 +198,8 @@ impl Codegen {
                     } else if param.1 {
                         Type::RefList
                     } else {
-                        Type::Int
+                        // Try to infer struct type from field access patterns in the body
+                        self.infer_param_struct_type(&param.0, &func.body).unwrap_or(Type::Int)
                     };
                     var_types.insert(param.0.clone(), param_type);
                 }
@@ -205,6 +208,120 @@ impl Codegen {
                 let ret = self.determine_ret_type(&func.body, &var_types).unwrap_or(Type::Int);
                 self.func_return_types.insert(func.name.clone(), ret);
             }
+        }
+    }
+
+    /// Collect all field names accessed on a variable via FieldAccess in the AST
+    fn collect_field_accesses_expr(&self, param_name: &str, expr: &Expr, fields: &mut Vec<String>) {
+        match &expr.node {
+            ExprNode::FieldAccess(obj, field_name) => {
+                if let ExprNode::Identifier(name) = &obj.node {
+                    if name == param_name {
+                        fields.push(field_name.clone());
+                    }
+                }
+                self.collect_field_accesses_expr(param_name, obj, fields);
+            }
+            ExprNode::Binary(l, _, r) | ExprNode::Comparison(l, _, r) | ExprNode::Logical(l, _, r) => {
+                self.collect_field_accesses_expr(param_name, l, fields);
+                self.collect_field_accesses_expr(param_name, r, fields);
+            }
+            ExprNode::Call(_, args) => {
+                for a in args { self.collect_field_accesses_expr(param_name, a, fields); }
+            }
+            ExprNode::MethodCall(obj, _, args) => {
+                self.collect_field_accesses_expr(param_name, obj, fields);
+                for a in args { self.collect_field_accesses_expr(param_name, a, fields); }
+            }
+            ExprNode::UnaryNot(inner) | ExprNode::TryExpr(inner) | ExprNode::Await(inner) | ExprNode::Borrow(inner) | ExprNode::Receive(inner) => {
+                self.collect_field_accesses_expr(param_name, inner, fields);
+            }
+            ExprNode::StructCreate(_, field_inits) => {
+                for (_, fexpr) in field_inits { self.collect_field_accesses_expr(param_name, fexpr, fields); }
+            }
+            ExprNode::EnumCreate(_, _, args) => {
+                for a in args { self.collect_field_accesses_expr(param_name, a, fields); }
+            }
+            ExprNode::Closure(_, body) => {
+                self.collect_field_accesses_stmts(param_name, body, fields);
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_field_accesses_stmts(&self, param_name: &str, stmts: &[Stmt], fields: &mut Vec<String>) {
+        for stmt in stmts {
+            match &stmt.node {
+                StmtNode::Display(e) | StmtNode::ExprStmt(e) | StmtNode::Return(e) => {
+                    self.collect_field_accesses_expr(param_name, e, fields);
+                }
+                StmtNode::Set(_, expr, _) => {
+                    self.collect_field_accesses_expr(param_name, expr, fields);
+                }
+                StmtNode::FieldSet(obj, field_name, expr) => {
+                    // Also collect the field name from FieldSet (set p.field to ...)
+                    if let ExprNode::Identifier(name) = &obj.node {
+                        if name == param_name {
+                            fields.push(field_name.clone());
+                        }
+                    }
+                    self.collect_field_accesses_expr(param_name, obj, fields);
+                    self.collect_field_accesses_expr(param_name, expr, fields);
+                }
+                StmtNode::If(cond, then_b, else_b) => {
+                    self.collect_field_accesses_expr(param_name, cond, fields);
+                    self.collect_field_accesses_stmts(param_name, then_b, fields);
+                    if let Some(eb) = else_b { self.collect_field_accesses_stmts(param_name, eb, fields); }
+                }
+                StmtNode::RepeatWhile(cond, body) => {
+                    self.collect_field_accesses_expr(param_name, cond, fields);
+                    self.collect_field_accesses_stmts(param_name, body, fields);
+                }
+                StmtNode::ForEach(_, iter_expr, body) => {
+                    self.collect_field_accesses_expr(param_name, iter_expr, fields);
+                    self.collect_field_accesses_stmts(param_name, body, fields);
+                }
+                StmtNode::Send(val, chan) => {
+                    self.collect_field_accesses_expr(param_name, val, fields);
+                    self.collect_field_accesses_expr(param_name, chan, fields);
+                }
+                StmtNode::Spawn(_, args) => {
+                    for a in args { self.collect_field_accesses_expr(param_name, a, fields); }
+                }
+                StmtNode::Match(expr, arms) => {
+                    self.collect_field_accesses_expr(param_name, expr, fields);
+                    for (_, _, body) in arms { self.collect_field_accesses_stmts(param_name, body, fields); }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Try to infer a struct type for a parameter by matching field access patterns
+    fn infer_param_struct_type(&self, param_name: &str, body: &[Stmt]) -> Option<Type> {
+        let mut accessed_fields = Vec::new();
+        self.collect_field_accesses_stmts(param_name, body, &mut accessed_fields);
+        if accessed_fields.is_empty() {
+            return None;
+        }
+        // Deduplicate
+        accessed_fields.sort();
+        accessed_fields.dedup();
+        
+        // Find structs where ALL accessed fields exist
+        let mut candidates = Vec::new();
+        for (struct_name, sd) in &self.struct_defs {
+            let struct_field_names: Vec<&str> = sd.fields.iter().map(|(n, _)| n.as_str()).collect();
+            let all_match = accessed_fields.iter().all(|f| struct_field_names.contains(&f.as_str()));
+            if all_match {
+                candidates.push(struct_name.clone());
+            }
+        }
+        
+        if candidates.len() == 1 {
+            Some(Type::Struct(candidates[0].clone()))
+        } else {
+            None // Ambiguous or no match — require explicit annotation
         }
     }
 
@@ -1764,7 +1881,8 @@ impl Codegen {
             } else if param.1 {
                 Type::RefList
             } else {
-                Type::Int
+                // Try to infer struct type from field access patterns
+                self.infer_param_struct_type(&param.0, &func.body).unwrap_or(Type::Int)
             };
             var_types.insert(param.0.clone(), param_type);
         }
@@ -2403,6 +2521,8 @@ long long string_replace(long long s_val, long long old_val, long long new_val);
 long long json_get_string(long long json_val, long long key_val);
 long long json_get_int(long long json_val, long long key_val);
 long long json_get_bool(long long json_val, long long key_val);
+long long ep_sha1(long long data_val);
+long long ep_net_recv_bytes(long long fd, long long count);
 
 typedef struct {
     long long* data;
@@ -4277,6 +4397,87 @@ long long json_get_bool(long long json_val, long long key_val) {
     if (!val) return 0;
     if (strncmp(val, "true", 4) == 0) return 1;
     return 0;
+}
+
+// SHA-1 implementation (RFC 3174) for WebSocket handshake
+static unsigned int sha1_left_rotate(unsigned int x, int n) {
+    return (x << n) | (x >> (32 - n));
+}
+
+long long ep_sha1(long long data_val) {
+    const unsigned char* data = (const unsigned char*)data_val;
+    if (!data) return (long long)strdup("");
+    size_t len = strlen((const char*)data);
+
+    unsigned int h0 = 0x67452301, h1 = 0xEFCDAB89, h2 = 0x98BADCFE, h3 = 0x10325476, h4 = 0xC3D2E1F0;
+    size_t new_len = len + 1;
+    while (new_len % 64 != 56) new_len++;
+    unsigned char* msg = (unsigned char*)calloc(new_len + 8, 1);
+    memcpy(msg, data, len);
+    msg[len] = 0x80;
+    unsigned long long bits_len = (unsigned long long)len * 8;
+    for (int i = 0; i < 8; i++) msg[new_len + 7 - i] = (unsigned char)(bits_len >> (i * 8));
+
+    for (size_t offset = 0; offset < new_len + 8; offset += 64) {
+        unsigned int w[80];
+        for (int i = 0; i < 16; i++) {
+            w[i] = ((unsigned int)msg[offset + i*4] << 24) | ((unsigned int)msg[offset + i*4+1] << 16) |
+                    ((unsigned int)msg[offset + i*4+2] << 8) | (unsigned int)msg[offset + i*4+3];
+        }
+        for (int i = 16; i < 80; i++) w[i] = sha1_left_rotate(w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16], 1);
+        unsigned int a = h0, b = h1, c = h2, d = h3, e = h4;
+        for (int i = 0; i < 80; i++) {
+            unsigned int f, k;
+            if (i < 20) { f = (b & c) | ((~b) & d); k = 0x5A827999; }
+            else if (i < 40) { f = b ^ c ^ d; k = 0x6ED9EBA1; }
+            else if (i < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDC; }
+            else { f = b ^ c ^ d; k = 0xCA62C1D6; }
+            unsigned int temp = sha1_left_rotate(a, 5) + f + e + k + w[i];
+            e = d; d = c; c = sha1_left_rotate(b, 30); b = a; a = temp;
+        }
+        h0 += a; h1 += b; h2 += c; h3 += d; h4 += e;
+    }
+    free(msg);
+
+    // Return Base64-encoded hash directly (for WebSocket handshake)
+    unsigned char hash[20];
+    hash[0] = (h0>>24)&0xFF; hash[1] = (h0>>16)&0xFF; hash[2] = (h0>>8)&0xFF; hash[3] = h0&0xFF;
+    hash[4] = (h1>>24)&0xFF; hash[5] = (h1>>16)&0xFF; hash[6] = (h1>>8)&0xFF; hash[7] = h1&0xFF;
+    hash[8] = (h2>>24)&0xFF; hash[9] = (h2>>16)&0xFF; hash[10] = (h2>>8)&0xFF; hash[11] = h2&0xFF;
+    hash[12] = (h3>>24)&0xFF; hash[13] = (h3>>16)&0xFF; hash[14] = (h3>>8)&0xFF; hash[15] = h3&0xFF;
+    hash[16] = (h4>>24)&0xFF; hash[17] = (h4>>16)&0xFF; hash[18] = (h4>>8)&0xFF; hash[19] = h4&0xFF;
+
+    // Base64 encode the 20-byte hash
+    size_t b64_len = 4 * ((20 + 2) / 3);
+    char* result = (char*)malloc(b64_len + 1);
+    size_t j = 0;
+    for (size_t bi = 0; bi < 20; bi += 3) {
+        unsigned int n2 = ((unsigned int)hash[bi]) << 16;
+        if (bi + 1 < 20) n2 |= ((unsigned int)hash[bi+1]) << 8;
+        if (bi + 2 < 20) n2 |= (unsigned int)hash[bi+2];
+        result[j++] = b64_table[(n2 >> 18) & 0x3F];
+        result[j++] = b64_table[(n2 >> 12) & 0x3F];
+        result[j++] = (bi + 1 < 20) ? b64_table[(n2 >> 6) & 0x3F] : '=';
+        result[j++] = (bi + 2 < 20) ? b64_table[n2 & 0x3F] : '=';
+    }
+    result[j] = '\0';
+    ep_gc_register(result, EP_OBJ_STRING);
+    return (long long)result;
+}
+
+// Read exact N bytes from a socket
+long long ep_net_recv_bytes(long long fd, long long count) {
+    if (count <= 0) return (long long)strdup("");
+    char* buf = (char*)malloc(count + 1);
+    ssize_t total = 0;
+    while (total < count) {
+        ssize_t n = recv((int)fd, buf + total, count - total, 0);
+        if (n <= 0) break;
+        total += n;
+    }
+    buf[total] = '\0';
+    ep_gc_register(buf, EP_OBJ_STRING);
+    return (long long)buf;
 }
 
 "#;

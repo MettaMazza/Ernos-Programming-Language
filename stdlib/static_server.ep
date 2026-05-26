@@ -1,0 +1,124 @@
+# ErnosPlain Static File Server Library
+# Serves static files over HTTP with MIME type detection and path sanitization
+
+import "http"
+import "fs"
+import "string"
+
+# ───────────── MIME Type Detection ─────────────
+
+define get_mime_type with ext:
+    if concat(ext and "") equals "html":
+        return "text/html"
+    else if concat(ext and "") equals "htm":
+        return "text/html"
+    else if concat(ext and "") equals "css":
+        return "text/css"
+    else if concat(ext and "") equals "js":
+        return "application/javascript"
+    else if concat(ext and "") equals "json":
+        return "application/json"
+    else if concat(ext and "") equals "png":
+        return "image/png"
+    else if concat(ext and "") equals "jpg":
+        return "image/jpeg"
+    else if concat(ext and "") equals "jpeg":
+        return "image/jpeg"
+    else if concat(ext and "") equals "gif":
+        return "image/gif"
+    else if concat(ext and "") equals "svg":
+        return "image/svg+xml"
+    else if concat(ext and "") equals "ico":
+        return "image/x-icon"
+    else if concat(ext and "") equals "woff":
+        return "font/woff"
+    else if concat(ext and "") equals "woff2":
+        return "font/woff2"
+    else if concat(ext and "") equals "txt":
+        return "text/plain"
+    else if concat(ext and "") equals "xml":
+        return "application/xml"
+    else if concat(ext and "") equals "wasm":
+        return "application/wasm"
+    else:
+        return "application/octet-stream"
+
+# ───────────── Path Security ─────────────
+
+define sanitize_path with path:
+    # Prevent directory traversal attacks
+    if string_contains(path and ".."):
+        return "/index.html"
+    # Default to index.html for root
+    if concat(path and "") equals "/":
+        return "/index.html"
+    return path
+
+# ───────────── HTTP Request Parsing ─────────────
+
+define extract_request_path with raw_request:
+    # Parse "GET /path HTTP/1.1\r\n..." to extract "/path"
+    set first_space to string_index_of(raw_request and " ")
+    if first_space < 0:
+        return "/"
+    set after_method to first_space + 1
+    set rest to substring(raw_request and after_method and string_length(raw_request) - after_method)
+    set second_space to string_index_of(rest and " ")
+    if second_space < 0:
+        return rest
+    return substring(rest and 0 and second_space)
+
+define extract_request_method with raw_request:
+    set first_space to string_index_of(raw_request and " ")
+    if first_space < 0:
+        return "GET"
+    return substring(raw_request and 0 and first_space)
+
+# ───────────── Static File Server ─────────────
+
+define serve_static with port and root_dir:
+    display concat("🌐 Static file server starting on port " and int_to_string(port))
+    display concat("📁 Serving files from: " and root_dir)
+    set server to start_server(port)
+    
+    repeat while 1 == 1:
+        receive request from server
+        set client_fd to get_list(request and 0)
+        set req_str to get_list(request and 1)
+        
+        # Parse the request
+        set method to extract_request_method(req_str)
+        set raw_path to extract_request_path(req_str)
+        set safe_path to sanitize_path(raw_path)
+        
+        # Strip leading slash for path_join
+        set rel_path to safe_path
+        if string_length(safe_path) > 1:
+            set first_char to get_character(safe_path and 0)
+            if first_char == 47:
+                set rel_path to substring(safe_path and 1 and string_length(safe_path) - 1)
+        
+        # Build full filesystem path
+        set file_path to path_join(root_dir and rel_path)
+        
+        # Log the request
+        display concat(concat(method and " ") and concat(raw_path and concat(" -> " and file_path)))
+        
+        # Serve the file or 404
+        if file_exists(file_path):
+            if is_directory(file_path):
+                # Try index.html inside directory
+                set index_path to path_join(file_path and "index.html")
+                if file_exists(index_path):
+                    set content to read_file(index_path)
+                    send_response(client_fd and 200 and "text/html" and content)
+                else:
+                    send_response(client_fd and 404 and "text/plain" and "Not Found")
+            else:
+                set content to read_file(file_path)
+                set ext to path_extension(file_path)
+                set mime to get_mime_type(ext)
+                send_response(client_fd and 200 and mime and content)
+        else:
+            send_response(client_fd and 404 and "text/plain" and "404 Not Found")
+    return 0
