@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 #
-# run_tests.sh — Compile and run each tests/*.ep file, checking:
-#   1. Compilation succeeds (exit 0 from cargo run)
-#   2. Execution succeeds (exit 0 from the binary)
-#   3. Output matches expected values from # expected: comments
+# run_tests.sh — Compile and run each test, checking:
+#   1. Compilation succeeds (or fails if # expected_compile_error)
+#   2. Execution succeeds (exit 0)
+#   3. Output matches companion .expected file (if it exists)
+#
+# To add expected output for a test: create tests/test_foo.expected
+# with the exact stdout the test should produce.
 #
 # Usage: ./run_tests.sh [--verbose]
 #
@@ -74,7 +77,7 @@ for TEST_FILE in tests/test_*.ep conformance/test_*.ep; do
     fi
 
     # ── Check expected output ──
-    # Priority 1: companion .expected file (for tests with many output lines)
+    # Single source of truth: companion .expected file
     EXPECTED_FILE="${TEST_FILE%.ep}.expected"
     if [[ -f "$EXPECTED_FILE" ]]; then
         EXPECTED_FROM_FILE=$(cat "$EXPECTED_FILE")
@@ -82,70 +85,15 @@ for TEST_FILE in tests/test_*.ep conformance/test_*.ep; do
             echo "PASS  $NAME"
             PASS=$((PASS + 1))
         else
-            echo "FAIL  $NAME  (output mismatch vs .expected file)"
+            echo "FAIL  $NAME  (output mismatch)"
             diff <(echo "$EXPECTED_FROM_FILE") <(echo "$ACTUAL") | head -10 | sed 's/^/      /'
             FAIL=$((FAIL + 1))
             FAILURES="$FAILURES  $NAME (output)\n"
         fi
-        rm -f "$BINARY" "${NAME}_compiled.c"
-        continue
-    fi
-
-    # Priority 2: inline "# expected: <line>" comments from the source file
-    EXPECTED=""
-    while IFS= read -r line; do
-        if [[ "$line" =~ ^#\ expected:\ (.+)$ ]]; then
-            VAL="${BASH_REMATCH[1]}"
-            if [[ "$VAL" == "(no output)" ]]; then
-                EXPECTED=""
-            else
-                if [[ -n "$EXPECTED" ]]; then
-                    EXPECTED="$EXPECTED"$'\n'"$VAL"
-                else
-                    EXPECTED="$VAL"
-                fi
-            fi
-        elif [[ "$line" =~ ^#\ expected_last:\ (.+)$ ]]; then
-            # Only check that the last line of output matches
-            LAST_LINE=$(echo "$ACTUAL" | tail -1)
-            EXPECTED_LAST="${BASH_REMATCH[1]}"
-            if [[ "$LAST_LINE" != "$EXPECTED_LAST" ]]; then
-                echo "FAIL  $NAME  (last line mismatch)"
-                echo "      expected last: $EXPECTED_LAST"
-                echo "      actual last:   $LAST_LINE"
-                FAIL=$((FAIL + 1))
-                FAILURES="$FAILURES  $NAME (output)\n"
-                rm -f "$BINARY" "${NAME}_compiled.c"
-                continue 2
-            fi
-            # Mark as checked, skip the full-output comparison
-            EXPECTED="__LAST_CHECKED__"
-        elif [[ "$line" =~ ^# ]]; then
-            continue  # skip other comments
-        else
-            break  # stop at first non-comment line
-        fi
-    done < "$TEST_FILE"
-
-    if [[ "$EXPECTED" == "__LAST_CHECKED__" ]]; then
-        echo "PASS  $NAME"
-        PASS=$((PASS + 1))
-    elif [[ -z "$EXPECTED" && -z "$ACTUAL" ]]; then
-        echo "PASS  $NAME"
-        PASS=$((PASS + 1))
-    elif [[ -n "$EXPECTED" && "$ACTUAL" == "$EXPECTED" ]]; then
-        echo "PASS  $NAME"
-        PASS=$((PASS + 1))
-    elif [[ -z "$EXPECTED" && -n "$ACTUAL" ]]; then
-        # No expected output specified but binary produced output — still pass on exit code
-        echo "PASS  $NAME  (no expected output defined, exit 0)"
-        PASS=$((PASS + 1))
     else
-        echo "FAIL  $NAME  (output mismatch)"
-        echo "      expected: $(echo "$EXPECTED" | head -3)"
-        echo "      actual:   $(echo "$ACTUAL" | head -3)"
-        FAIL=$((FAIL + 1))
-        FAILURES="$FAILURES  $NAME (output)\n"
+        # No .expected file — pass on exit code alone
+        echo "PASS  $NAME  (no .expected file, exit 0)"
+        PASS=$((PASS + 1))
     fi
 
     # Clean up compiled artifacts

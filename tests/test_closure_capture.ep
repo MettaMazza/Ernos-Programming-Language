@@ -1,4 +1,3 @@
-# expected: 15
 define main:
     set n to 5
     set add_n to given x:

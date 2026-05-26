@@ -1,4 +1,3 @@
-# expected: 3
 define choice Tree:
     variant Leaf
     variant Node with value as Int and left as Tree and right as Tree

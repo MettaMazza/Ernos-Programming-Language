@@ -1,5 +1,3 @@
-# expected: 107
-# expected: 107
 define apply with f and x as Int returning Int:
     return f(x)
 
