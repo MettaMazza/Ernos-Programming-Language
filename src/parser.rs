@@ -881,6 +881,48 @@ impl Parser {
             Token::True => Expr::with_span(ExprNode::BoolLiteral(true), span),
             Token::False => Expr::with_span(ExprNode::BoolLiteral(false), span),
             Token::StringLiteral(s) => Expr::with_span(ExprNode::StringLiteral(s), span),
+            Token::InterpStringParts(parts) => {
+                // Desugar "hello {name}!" into concat(concat("hello " and name) and "!")
+                // Build a list of Expr nodes for each part
+                let mut exprs: Vec<Expr> = Vec::new();
+                for (literal, expr_src) in &parts {
+                    if !literal.is_empty() {
+                        exprs.push(Expr::with_span(ExprNode::StringLiteral(literal.clone()), span));
+                    }
+                    if !expr_src.is_empty() {
+                        // Parse the expression source as a mini-program
+                        let mut mini_lexer = crate::lexer::Lexer::new(expr_src);
+                        let mini_tokens = mini_lexer.tokenize().map_err(|e| ParseError {
+                            message: format!("Error in interpolated expression '{{{}}}': {}", expr_src, e.message),
+                            span,
+                        })?;
+                        // Build a temporary parser for the expression tokens
+                        let mut mini_parser = Parser::new(mini_tokens);
+                        let expr_node = mini_parser.parse_expr(Precedence::Lowest)?;
+                        // Wrap non-string expressions in int_to_string
+                        let wrapped = Expr::with_span(
+                            ExprNode::Call("ep_auto_to_string".to_string(), vec![expr_node]),
+                            span,
+                        );
+                        exprs.push(wrapped);
+                    }
+                }
+                // Chain all parts with concat()
+                if exprs.is_empty() {
+                    Expr::with_span(ExprNode::StringLiteral(String::new()), span)
+                } else if exprs.len() == 1 {
+                    exprs.pop().unwrap()
+                } else {
+                    let mut result = exprs.remove(0);
+                    for part in exprs {
+                        result = Expr::with_span(
+                            ExprNode::Call("concat".to_string(), vec![result, part]),
+                            span,
+                        );
+                    }
+                    result
+                }
+            }
             Token::Channel => Expr::with_span(ExprNode::Channel, span),
             Token::Receive => {
                 self.expect(Token::From)?;

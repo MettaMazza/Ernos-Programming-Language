@@ -176,6 +176,7 @@ impl Codegen {
         self.func_return_types.insert("channel_try_recv".to_string(), Type::Int);
         self.func_return_types.insert("channel_has_data".to_string(), Type::Int);
         self.func_return_types.insert("channel_select".to_string(), Type::Int);
+        self.func_return_types.insert("ep_auto_to_string".to_string(), Type::DynStr);
 
         for ext in &program.externals {
             if let Some(ref rt) = ext.return_type {
@@ -2565,6 +2566,7 @@ long long ep_net_recv_bytes(long long fd, long long count);
 long long channel_try_recv(long long chan_ptr, long long out_ptr);
 long long channel_has_data(long long chan_ptr);
 long long channel_select(long long channels_list, long long timeout_ms);
+long long ep_auto_to_string(long long val);
 
 typedef struct {
     long long* data;
@@ -4386,6 +4388,28 @@ long long string_replace(long long s_val, long long old_val, long long new_val) 
     *dst = '\0';
     ep_gc_register(result, EP_OBJ_STRING);
     return (long long)result;
+}
+
+// Auto-convert any value to string for string interpolation
+long long ep_auto_to_string(long long val) {
+    // If the value is 0, return "0"
+    if (val == 0) return (long long)strdup("0");
+    // Heuristic: if val looks like a valid heap pointer (> 4096), try to use it as a string
+    // This works because strings are heap-allocated char* in ErnosPlain
+    if (val > 4096) {
+        // Check if it looks like a readable string (first byte is printable ASCII or common escape)
+        const char* p = (const char*)(void*)val;
+        // Simple validation: check first char is not obviously garbage
+        unsigned char first = (unsigned char)*p;
+        if (first >= 0x20 && first < 0x7F || first == '\n' || first == '\t' || first == '\r' || first == 0) {
+            return val; // Return the string pointer as-is
+        }
+    }
+    // Otherwise, convert integer to string
+    char* buf = (char*)malloc(32);
+    snprintf(buf, 32, "%lld", val);
+    ep_gc_register(buf, EP_OBJ_STRING);
+    return (long long)buf;
 }
 
 long long ep_random_int(long long min, long long max) {

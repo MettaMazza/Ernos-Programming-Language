@@ -12,6 +12,7 @@ enum RawToken {
     Number(i64),
     FloatNum(f64),
     StringVal(String),
+    InterpString(Vec<(String, String)>), // (literal_part, expression_source)
     Symbol(char),
     Spaces(usize),
     Newline,
@@ -147,14 +148,52 @@ impl<'a> Lexer<'a> {
                 }
                 raw_tokens.push((RawToken::Word(s), span));
             } else if c == '"' {
+                // Check if this is an f-string (f"...")
+                let is_fstring = if let Some((RawToken::Word(w), _)) = raw_tokens.last() {
+                    w == "f"
+                } else {
+                    false
+                };
+                // If f-string, remove the 'f' word token
+                if is_fstring {
+                    raw_tokens.pop();
+                }
+                
                 self.advance(); // consume open quote
                 let mut s = String::new();
                 let mut closed = false;
+                let mut has_interp = false;
+                let mut interp_parts: Vec<(String, String)> = Vec::new();
+                
                 while let Some(ch) = self.peek() {
                     if ch == '"' {
                         self.advance();
                         closed = true;
                         break;
+                    } else if ch == '{' && is_fstring {
+                        // String interpolation: {expr}
+                        has_interp = true;
+                        self.advance(); // consume '{'
+                        let literal_part = s.clone();
+                        s.clear();
+                        
+                        // Read expression until matching '}'
+                        let mut expr_str = String::new();
+                        let mut brace_depth = 1;
+                        while let Some(ec) = self.peek() {
+                            if ec == '}' {
+                                brace_depth -= 1;
+                                if brace_depth == 0 {
+                                    self.advance(); // consume '}'
+                                    break;
+                                }
+                            } else if ec == '{' {
+                                brace_depth += 1;
+                            }
+                            expr_str.push(ec);
+                            self.advance();
+                        }
+                        interp_parts.push((literal_part, expr_str));
                     } else if ch == '\\' {
                         self.advance(); // consume backslash
                         match self.peek() {
@@ -176,6 +215,14 @@ impl<'a> Lexer<'a> {
                             }
                             Some('\\') => {
                                 s.push('\\');
+                                self.advance();
+                            }
+                            Some('{') => {
+                                s.push('{');
+                                self.advance();
+                            }
+                            Some('}') => {
+                                s.push('}');
                                 self.advance();
                             }
                             Some(other) => {
@@ -206,7 +253,14 @@ impl<'a> Lexer<'a> {
                         span,
                     });
                 }
-                raw_tokens.push((RawToken::StringVal(s), span));
+                
+                if has_interp {
+                    // Add the trailing literal part
+                    interp_parts.push((s, String::new()));
+                    raw_tokens.push((RawToken::InterpString(interp_parts), span));
+                } else {
+                    raw_tokens.push((RawToken::StringVal(s), span));
+                }
             } else if c == ':' || c == '(' || c == ')' || c == '+' || c == '-' || c == '*' || c == '/'
                    || c == '<' || c == '>' || c == '&' || c == '|' || c == '=' || c == '!' || c == '.' || c == '%' {
                 self.advance();
@@ -324,6 +378,10 @@ impl<'a> Lexer<'a> {
                 }
                 RawToken::StringVal(s) => {
                     tokens.push((Token::StringLiteral(s.clone()), span.clone()));
+                    i += 1;
+                }
+                RawToken::InterpString(parts) => {
+                    tokens.push((Token::InterpStringParts(parts.clone()), span.clone()));
                     i += 1;
                 }
                 RawToken::Symbol(c) => {

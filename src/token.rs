@@ -82,6 +82,9 @@ pub enum Token {
     Integer(i64),
     Float(f64),
     StringLiteral(String),
+    /// Interpolated string parts: alternating (literal, expression_source) pairs + final literal
+    /// e.g., "hello {name}!" → [("hello ", "name"), ("!", "")]
+    InterpStringParts(Vec<(String, String)>),
 
     // Punctuation
     Colon,
