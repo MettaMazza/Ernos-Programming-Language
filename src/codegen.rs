@@ -2591,16 +2591,15 @@ static void ep_gc_unregister(void* ptr) {
 /* Cleanup all remaining GC objects (called at program exit) */
 static void ep_gc_shutdown(void) {
     ep_gc_enabled = 0;
+    /* Only free GC bookkeeping structures, not the tracked objects themselves.
+       The RAII auto-cleanup has already freed owned objects, and the OS will
+       reclaim everything else on process exit. Attempting to free individual
+       objects here causes double-free aborts when RAII and GC both track
+       the same allocation. */
     EpGCObject* cur = ep_gc_head;
     while (cur) {
         EpGCObject* next = cur->next;
-        if (cur->kind == EP_OBJ_LIST) {
-            EpList* list = (EpList*)cur->ptr;
-            if (list) { free(list->data); free(list); }
-        } else {
-            free(cur->ptr);
-        }
-        free(cur);
+        free(cur);  /* free the GCObject wrapper only */
         cur = next;
     }
     ep_gc_head = NULL;
