@@ -1268,7 +1268,18 @@ impl Codegen {
                 let right_str = self.gen_expr(right, var_types)?;
                 
                 let is_string = self.infer_type(left, var_types) == Type::Str || self.infer_type(left, var_types) == Type::DynStr;
-                if is_string {
+                // Check if comparing a string to integer 0 (null check pattern from try expressions)
+                let right_is_zero = matches!(&right.node, ExprNode::Integer(0));
+                let left_is_zero = matches!(&left.node, ExprNode::Integer(0));
+                if is_string && (right_is_zero || left_is_zero) {
+                    // Null check: use pointer comparison, not strcmp (strcmp(str, NULL) crashes)
+                    let op_str = match op {
+                        CompOp::Equals => "==",
+                        CompOp::NotEquals => "!=",
+                        _ => "==",
+                    };
+                    Ok(format!("({} {} {})", left_str, op_str, right_str))
+                } else if is_string {
                     let cmp_op = match op {
                         CompOp::LessThan => "< 0",
                         CompOp::GreaterThan => "> 0",
@@ -2464,7 +2475,7 @@ typedef struct {
 /* GC globals */
 static EpGCObject* ep_gc_head = NULL;
 static long long ep_gc_count = 0;
-static long long ep_gc_threshold = 256;
+static long long ep_gc_threshold = 4096;
 static int ep_gc_enabled = 1;
 static pthread_mutex_t ep_gc_mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -2592,9 +2603,20 @@ static void ep_gc_table_remove(void* key) {
     }
 }
 
-/* Dummy shadow stack API for compatibility with compiler-generated code */
-static void ep_gc_push_root(long long* root) { (void)root; }
-static void ep_gc_pop_roots(long long count) { (void)count; }
+/* Shadow stack for explicit GC roots */
+#define EP_GC_MAX_ROOTS 4096
+static long long* ep_gc_root_stack[EP_GC_MAX_ROOTS];
+static int ep_gc_root_sp = 0;
+
+static void ep_gc_push_root(long long* root) {
+    if (ep_gc_root_sp < EP_GC_MAX_ROOTS) {
+        ep_gc_root_stack[ep_gc_root_sp++] = root;
+    }
+}
+static void ep_gc_pop_roots(long long count) {
+    ep_gc_root_sp -= (int)count;
+    if (ep_gc_root_sp < 0) ep_gc_root_sp = 0;
+}
 
 /* Register a new GC object */
 static EpGCObject* ep_gc_register(void* ptr, EpObjKind kind) {
@@ -2655,38 +2677,15 @@ static void ep_gc_mark_object(void* ptr) {
     }
 }
 
-/* Mark phase: traverse from stack roots of all registered threads */
+/* Mark phase: traverse from explicit GC roots only */
 static void ep_gc_mark(void) {
-    jmp_buf regs;
-    memset(&regs, 0, sizeof(regs));
-    setjmp(regs); /* Spill registers of the current thread */
-    
-    // Update stack top of current thread
-    volatile void* stack_top;
-    stack_top = (void*)&stack_top;
-    ep_thread_local_top = (void*)stack_top;
-    
-    pthread_mutex_lock(&ep_thread_registry_mutex);
-    for (int i = 0; i < ep_num_threads; i++) {
-        if (ep_thread_active[i]) {
-            void** start = (void**)*ep_thread_tops[i];
-            void** end = (void**)ep_thread_bottoms[i];
-            if (start && end) {
-                if (start > end) {
-                    void** tmp = start;
-                    start = end;
-                    end = tmp;
-                }
-                for (void** cur = start; cur < end; cur++) {
-                    void* ptr = *cur;
-                    if (ptr) {
-                        ep_gc_mark_object(ptr);
-                    }
-                }
-            }
+    /* Mark all objects reachable from explicit shadow stack roots */
+    for (int i = 0; i < ep_gc_root_sp; i++) {
+        long long val = *ep_gc_root_stack[i];
+        if (val != 0) {
+            ep_gc_mark_object((void*)val);
         }
     }
-    pthread_mutex_unlock(&ep_thread_registry_mutex);
 }
 
 /* Sweep phase: free unmarked objects */
@@ -2728,7 +2727,7 @@ static void ep_gc_collect(void) {
     ep_gc_mark();
     ep_gc_sweep();
     ep_gc_threshold = ep_gc_count * 2;
-    if (ep_gc_threshold < 256) ep_gc_threshold = 256;
+    if (ep_gc_threshold < 4096) ep_gc_threshold = 4096;
 }
 
 /* Maybe trigger GC if we've exceeded threshold */
@@ -4827,7 +4826,7 @@ long long ep_auto_to_string(long long val) {
         // Use a signal-safe approach: check if the pointer is page-aligned-ish
         const char* p = (const char*)(void*)val;
         unsigned char first = (unsigned char)*p;
-        if (first >= 0x20 || first == '\n' || first == '\t' || first == '\r' || first == 0) {
+        if ((first >= 0x20 && first <= 0x7E) || (first >= 0xC0 && first <= 0xFD) || first == '\n' || first == '\t' || first == '\r' || first == 0) {
             return val; // Looks like a valid string
         }
     }

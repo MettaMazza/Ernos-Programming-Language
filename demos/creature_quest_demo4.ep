@@ -554,10 +554,16 @@ define ask_llm with prompt as Str returning Str:
     set body to concat(body and escaped)
     set body to concat(body and "\",\"stream\":false}")
     set headers to "Content-Type: application/json\r\n"
-    set response to ep_http_request("POST" and url and headers and body)
+    set raw_resp to try ep_http_request("POST" and url and headers and body)
+    if raw_resp == 0:
+        return ""
+    set response to ep_auto_to_string(raw_resp)
     if string_length(response) < 10:
         return ""
-    set answer to json_get_string(response and "response")
+    set raw_ans to try json_get_string(response and "response")
+    if raw_ans == 0:
+        return ""
+    set answer to ep_auto_to_string(raw_ans)
     return answer
 
 # ───────────── 4. Enums ─────────────
@@ -889,7 +895,10 @@ define companion_speak with c as Companion and event as Str and llm_on as Int an
         return companion_fallback(c.name and c.stage and c.personality and event)
     if c.stage == 0:
         return companion_fallback(c.name and c.stage and c.personality and event)
-    set prompt to build_companion_prompt(c and event and memory and journal_ctx)
+    set raw_prompt to try build_companion_prompt(c and event and memory and journal_ctx)
+    if raw_prompt == 0:
+        return companion_fallback(c.name and c.stage and c.personality and event)
+    set prompt to ep_auto_to_string(raw_prompt)
     set response to ask_llm(prompt)
     if string_length(response) < 3:
         return companion_fallback(c.name and c.stage and c.personality and event)
