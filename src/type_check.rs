@@ -1186,9 +1186,39 @@ impl TypeChecker {
                     enum_name.clone()
                 };
                 
-                // Type check variant args
-                for arg in args {
-                    let _t = self.check_expr(arg);
+                // Type check variant args against declared field types
+                let variant_fields = self.enum_defs.get(&actual_enum)
+                    .and_then(|variants| variants.iter().find(|(vn, _)| vn == variant_name))
+                    .map(|(_, fields)| fields.clone());
+
+                if let Some(fields) = variant_fields {
+                    if args.len() != fields.len() {
+                        self.error(
+                            format!("Enum variant '{}::{}' expects {} argument(s), found {}",
+                                actual_enum, variant_name, fields.len(), args.len()),
+                            expr.span,
+                        );
+                    }
+                    for (i, arg) in args.iter().enumerate() {
+                        let arg_type = self.check_expr(arg);
+                        if i < fields.len() {
+                            let (ref field_name, ref expected_type) = fields[i];
+                            if let Err(_) = unify(&mut self.subst, &arg_type, expected_type, arg.span) {
+                                self.error(
+                                    format!("Enum variant '{}::{}', field '{}': expected {}, found {}",
+                                        actual_enum, variant_name, field_name,
+                                        self.subst.apply(expected_type).display_name(),
+                                        self.subst.apply(&arg_type).display_name()),
+                                    arg.span,
+                                );
+                            }
+                        }
+                    }
+                } else {
+                    // Variant not found in enum def — just check args without field matching
+                    for arg in args {
+                        let _t = self.check_expr(arg);
+                    }
                 }
                 
                 MonoType::Enum(actual_enum, vec![])

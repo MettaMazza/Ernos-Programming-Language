@@ -41,6 +41,8 @@ pub struct Codegen {
     closure_c_names: HashMap<String, String>,
     /// Set by the Set handler to pass the variable name to Closure codegen
     pending_closure_name: Option<String>,
+    /// Maps closure C function name -> list of captured variable names from outer scope
+    closure_captures: HashMap<String, Vec<String>>,
 }
 
 impl Codegen {
@@ -57,6 +59,7 @@ impl Codegen {
             list_element_types: HashMap::new(),
             closure_c_names: HashMap::new(),
             pending_closure_name: None,
+            closure_captures: HashMap::new(),
         }
     }
 
@@ -961,6 +964,17 @@ impl Codegen {
                 } else {
                     self.out.push_str(&format!("    {} = {};\n", safe_name, expr_str));
                 }
+
+                // After free_list/free_map calls, null-out the freed variable to prevent
+                // double-free when the variable is later reassigned (pre-free pattern)
+                if let ExprNode::Call(func_name, args) = &expr.node {
+                    if (func_name == "free_list" || func_name == "free_map") && !args.is_empty() {
+                        if let ExprNode::Identifier(arg_name) = &args[0].node {
+                            let safe_arg = Self::sanitize_c_name(arg_name);
+                            self.out.push_str(&format!("    {} = 0;\n", safe_arg));
+                        }
+                    }
+                }
             }
             StmtNode::Return(expr) => {
                 let expr_str = self.gen_expr(expr, var_types)?;
@@ -1191,6 +1205,17 @@ impl Codegen {
             StmtNode::ExprStmt(expr) => {
                 let expr_str = self.gen_expr(expr, var_types)?;
                 self.out.push_str(&format!("    {};\n", expr_str));
+
+                // After free_list/free_map calls, null-out the freed variable to prevent
+                // double-free when the variable is later reassigned (pre-free pattern)
+                if let ExprNode::Call(func_name, args) = &expr.node {
+                    if (func_name == "free_list" || func_name == "free_map") && !args.is_empty() {
+                        if let ExprNode::Identifier(arg_name) = &args[0].node {
+                            let safe_arg = Self::sanitize_c_name(arg_name);
+                            self.out.push_str(&format!("    {} = 0;\n", safe_arg));
+                        }
+                    }
+                }
             }
         }
         Ok(())
@@ -1344,9 +1369,16 @@ impl Codegen {
                 let call_str = format!("{}({})", safe_name, formatted_args.join(", "));
                 
                 // Check if this is a closure call (variable holding a function pointer)
-                if let Some(c_func_name) = self.closure_c_names.get(name) {
+                if let Some(c_func_name) = self.closure_c_names.get(name).cloned() {
                     // Closure with a known C function name — call it directly
-                    Ok(format!("{}({})", c_func_name, formatted_args.join(", ")))
+                    // Append captured variables as extra arguments
+                    let mut all_args = formatted_args.clone();
+                    if let Some(captures) = self.closure_captures.get(&c_func_name) {
+                        for cap in captures {
+                            all_args.push(Self::sanitize_c_name(cap));
+                        }
+                    }
+                    Ok(format!("{}({})", c_func_name, all_args.join(", ")))
                 } else if var_types.contains_key(name) && !self.func_return_types.contains_key(name) {
                     // It's a variable, not a known function — treat as closure call via pointer
                     let arg_types: Vec<&str> = args.iter().map(|_| "long long").collect();
@@ -1532,15 +1564,38 @@ impl Codegen {
                     name
                 };
 
-                // Build parameter list for the C function
-                let c_params: Vec<String> = params.iter()
+                // Detect captured variables: identifiers in body that exist in outer
+                // var_types but are NOT closure parameters and NOT known functions
+                let param_set: std::collections::HashSet<&String> = params.iter().collect();
+                let mut captured: Vec<String> = Vec::new();
+                let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+                Self::collect_identifiers_in_stmts(body, &mut |ident| {
+                    if !param_set.contains(ident)
+                        && !seen.contains(ident)
+                        && var_types.contains_key(ident)
+                        && !self.func_return_types.contains_key(ident)
+                        && ident != "ret_val"
+                    {
+                        captured.push(ident.clone());
+                        seen.insert(ident.clone());
+                    }
+                });
+
+                // Build parameter list: explicit params + captured vars
+                let mut c_params: Vec<String> = params.iter()
                     .map(|p| format!("long long {}", p))
                     .collect();
+                for cap in &captured {
+                    c_params.push(format!("long long {}", Self::sanitize_c_name(cap)));
+                }
                 let c_param_str = if c_params.is_empty() {
                     "void".to_string()
                 } else {
                     c_params.join(", ")
                 };
+
+                // Store captures for this closure so call sites can pass them
+                self.closure_captures.insert(closure_name.clone(), captured);
 
                 // Generate the closure body using buffer swapping
                 // Start with a COPY of outer scope's var_types so closures can reference
@@ -1585,6 +1640,89 @@ impl Codegen {
                 parts.push(" _lit_list; })".to_string());
                 Ok(parts.join(""))
             }
+        }
+    }
+}
+
+// ========== Closure capture helpers ==========
+
+impl Codegen {
+    /// Walk statements and call `callback` with each identifier found
+    fn collect_identifiers_in_stmts(stmts: &[Stmt], callback: &mut dyn FnMut(&String)) {
+        for stmt in stmts {
+            match &stmt.node {
+                StmtNode::Set(_, expr, _) | StmtNode::ExprStmt(expr) | StmtNode::Return(expr) | StmtNode::Display(expr) => {
+                    Self::collect_identifiers_in_expr(expr, callback);
+                }
+                StmtNode::FieldSet(obj, _, val) => {
+                    Self::collect_identifiers_in_expr(obj, callback);
+                    Self::collect_identifiers_in_expr(val, callback);
+                }
+                StmtNode::If(cond, then_b, else_b) => {
+                    Self::collect_identifiers_in_expr(cond, callback);
+                    Self::collect_identifiers_in_stmts(then_b, callback);
+                    if let Some(eb) = else_b {
+                        Self::collect_identifiers_in_stmts(eb, callback);
+                    }
+                }
+                StmtNode::RepeatWhile(cond, body) => {
+                    Self::collect_identifiers_in_expr(cond, callback);
+                    Self::collect_identifiers_in_stmts(body, callback);
+                }
+                StmtNode::ForEach(_, iter, body) => {
+                    Self::collect_identifiers_in_expr(iter, callback);
+                    Self::collect_identifiers_in_stmts(body, callback);
+                }
+                StmtNode::Match(expr, arms) => {
+                    Self::collect_identifiers_in_expr(expr, callback);
+                    for (_, _, body) in arms {
+                        Self::collect_identifiers_in_stmts(body, callback);
+                    }
+                }
+                StmtNode::Spawn(_, args) => {
+                    for a in args { Self::collect_identifiers_in_expr(a, callback); }
+                }
+                StmtNode::Send(a, b) => {
+                    Self::collect_identifiers_in_expr(a, callback);
+                    Self::collect_identifiers_in_expr(b, callback);
+                }
+                StmtNode::Break | StmtNode::Continue => {}
+            }
+        }
+    }
+
+    /// Walk an expression and call `callback` with each identifier found
+    fn collect_identifiers_in_expr(expr: &Expr, callback: &mut dyn FnMut(&String)) {
+        match &expr.node {
+            ExprNode::Identifier(name) => callback(name),
+            ExprNode::Binary(l, _, r) | ExprNode::Comparison(l, _, r) | ExprNode::Logical(l, _, r) => {
+                Self::collect_identifiers_in_expr(l, callback);
+                Self::collect_identifiers_in_expr(r, callback);
+            }
+            ExprNode::Call(_, args) | ExprNode::EnumCreate(_, _, args) => {
+                for a in args { Self::collect_identifiers_in_expr(a, callback); }
+            }
+            ExprNode::UnaryNot(inner) | ExprNode::TryExpr(inner) | ExprNode::Await(inner)
+            | ExprNode::Borrow(inner) | ExprNode::Receive(inner) => {
+                Self::collect_identifiers_in_expr(inner, callback);
+            }
+            ExprNode::FieldAccess(obj, _) => {
+                Self::collect_identifiers_in_expr(obj, callback);
+            }
+            ExprNode::MethodCall(obj, _, args) => {
+                Self::collect_identifiers_in_expr(obj, callback);
+                for a in args { Self::collect_identifiers_in_expr(a, callback); }
+            }
+            ExprNode::StructCreate(_, field_inits) => {
+                for (_, fexpr) in field_inits { Self::collect_identifiers_in_expr(fexpr, callback); }
+            }
+            ExprNode::ListLiteral(elems) => {
+                for e in elems { Self::collect_identifiers_in_expr(e, callback); }
+            }
+            ExprNode::Closure(_, body) => {
+                Self::collect_identifiers_in_stmts(body, callback);
+            }
+            _ => {} // Integer, Float, Bool, String literals, Channel
         }
     }
 }
@@ -2045,6 +2183,7 @@ impl Codegen {
 
         // Pre-scan all functions to collect closure names and emit forward declarations
         self.closure_c_names.clear();
+        self.closure_captures.clear();
         for func in &program.functions {
             let mut var_types = HashMap::new();
             for param in &func.params {
@@ -2058,28 +2197,9 @@ impl Codegen {
             self.collect_var_types(&func.body, &mut var_types);
         }
         
-        // Collect forward declarations for closures (to be prepended at the end)
-        let mut closure_fwd_decls = String::new();
-        if !self.closure_c_names.is_empty() {
-            closure_fwd_decls.push_str("\n/* Forward declarations for closures */\n");
-            for func in &program.functions {
-                for stmt in &func.body {
-                    if let StmtNode::Set(name, expr, _) = &stmt.node {
-                        if let ExprNode::Closure(params, _) = &expr.node {
-                            if let Some(c_name) = self.closure_c_names.get(name) {
-                                let param_str = if params.is_empty() {
-                                    "void".to_string()
-                                } else {
-                                    params.iter().map(|_| "long long").collect::<Vec<_>>().join(", ")
-                                };
-                                closure_fwd_decls.push_str(&format!("long long {}({});\n", c_name, param_str));
-                            }
-                        }
-                    }
-                }
-            }
-            closure_fwd_decls.push('\n');
-        }
+        // Note: closure forward declarations are deferred until after gen_function
+        // because capture analysis happens during codegen
+        let closure_fwd_decls_placeholder = true; // marker for post-codegen generation
 
         for func in &program.functions {
             self.gen_function(func)?;
@@ -2108,8 +2228,33 @@ impl Codegen {
             self.out.push_str(C_MAIN_BOOTSTRAPPER);
         }
 
-        // Prepend closure forward declarations so they appear before closure defs
-        if !closure_fwd_decls.is_empty() {
+        // Generate closure forward declarations now that captures are known
+        let _ = closure_fwd_decls_placeholder; // suppress unused warning
+        if !self.closure_c_names.is_empty() {
+            let mut closure_fwd_decls = String::new();
+            closure_fwd_decls.push_str("\n/* Forward declarations for closures */\n");
+            for func in &program.functions {
+                for stmt in &func.body {
+                    if let StmtNode::Set(name, expr, _) = &stmt.node {
+                        if let ExprNode::Closure(params, _) = &expr.node {
+                            if let Some(c_name) = self.closure_c_names.get(name) {
+                                let mut param_count = params.len();
+                                // Add captured variable parameters
+                                if let Some(captures) = self.closure_captures.get(c_name) {
+                                    param_count += captures.len();
+                                }
+                                let param_str = if param_count == 0 {
+                                    "void".to_string()
+                                } else {
+                                    (0..param_count).map(|_| "long long").collect::<Vec<_>>().join(", ")
+                                };
+                                closure_fwd_decls.push_str(&format!("long long {}({});\n", c_name, param_str));
+                            }
+                        }
+                    }
+                }
+            }
+            closure_fwd_decls.push('\n');
             self.out = closure_fwd_decls + &self.out;
         }
 
