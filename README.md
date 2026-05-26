@@ -180,7 +180,7 @@ define structure User:
     field name as Str
     field age as Int
 
-define method greet on User:
+define greet on User:
     display concat("Hi, I'm " and self.name)
     return 0
 

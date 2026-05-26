@@ -218,7 +218,7 @@ set user to create User:
 
 ### Methods
 ```ernos
-define method distance on Point with other as Point returning Int:
+define distance on Point with other as Point returning Int:
     set dx to self.x - other.x
     set dy to self.y - other.y
     return dx * dx + dy * dy
