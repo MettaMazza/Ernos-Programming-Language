@@ -1370,20 +1370,42 @@ impl Codegen {
                 
                 // Check if this is a closure call (variable holding a function pointer)
                 if let Some(c_func_name) = self.closure_c_names.get(name).cloned() {
-                    // Closure with a known C function name — call it directly
-                    // Append captured variables as extra arguments
-                    let mut all_args = formatted_args.clone();
-                    if let Some(captures) = self.closure_captures.get(&c_func_name) {
-                        for cap in captures {
-                            all_args.push(Self::sanitize_c_name(cap));
-                        }
+                    // Direct call to a known closure — pass env from its EpClosure struct
+                    let args_str = formatted_args.join(", ");
+                    let env_arg = format!("(long long)((EpClosure*){})->env", safe_name);
+                    if args_str.is_empty() {
+                        Ok(format!("{}({})", c_func_name, env_arg))
+                    } else {
+                        Ok(format!("{}({}, {})", c_func_name, env_arg, args_str))
                     }
-                    Ok(format!("{}({})", c_func_name, all_args.join(", ")))
                 } else if var_types.contains_key(name) && !self.func_return_types.contains_key(name) {
-                    // It's a variable, not a known function — treat as closure call via pointer
-                    let arg_types: Vec<&str> = args.iter().map(|_| "long long").collect();
-                    let fn_type = format!("long long(*)({})", if arg_types.is_empty() { "void".to_string() } else { arg_types.join(", ") });
-                    Ok(format!("(({}){safe_name})({})", fn_type, formatted_args.join(", "), safe_name = safe_name))
+                    // Indirect call through a variable — could be an EpClosure or a raw fn ptr
+                    // Use magic number dispatch to handle both
+                    let n_args = args.len();
+                    let mut env_arg_types = vec!["long long".to_string()]; // env param
+                    for _ in 0..n_args { env_arg_types.push("long long".to_string()); }
+                    let closure_fn_type = format!("long long(*)({})", env_arg_types.join(", "));
+
+                    let mut raw_arg_types: Vec<String> = Vec::new();
+                    for _ in 0..n_args { raw_arg_types.push("long long".to_string()); }
+                    let raw_fn_type = format!("long long(*)({})", if raw_arg_types.is_empty() { "void".to_string() } else { raw_arg_types.join(", ") });
+
+                    let args_str = formatted_args.join(", ");
+                    let closure_call = if args_str.is_empty() {
+                        format!("(({})_cl->fn_ptr)((long long)_cl->env)", closure_fn_type)
+                    } else {
+                        format!("(({})_cl->fn_ptr)((long long)_cl->env, {})", closure_fn_type, args_str)
+                    };
+                    let raw_call = if args_str.is_empty() {
+                        format!("(({}){})()", raw_fn_type, safe_name)
+                    } else {
+                        format!("(({}){safe_name})({})", raw_fn_type, args_str, safe_name = safe_name)
+                    };
+
+                    Ok(format!(
+                        "({{ long long _fv = {sv}; EpClosure* _cl = (EpClosure*)_fv; (_fv != 0 && _cl->magic == EP_CLOSURE_MAGIC) ? {cl_call} : {raw_call}; }})",
+                        sv = safe_name, cl_call = closure_call, raw_call = raw_call
+                    ))
                 } else {
                     match name.as_str() {
                         "read_file_content" | "get_argument" | "substring" | "string_from_list" | "ep_net_recv" | "ep_md5" | "ep_sha256" => {
@@ -1581,21 +1603,17 @@ impl Codegen {
                     }
                 });
 
-                // Build parameter list: explicit params + captured vars
-                let mut c_params: Vec<String> = params.iter()
-                    .map(|p| format!("long long {}", p))
-                    .collect();
-                for cap in &captured {
-                    c_params.push(format!("long long {}", Self::sanitize_c_name(cap)));
+                // Build parameter list: _ep_env (first), then explicit params
+                let mut c_params: Vec<String> = vec!["long long _ep_env".to_string()];
+                for p in params.iter() {
+                    c_params.push(format!("long long {}", p));
                 }
-                let c_param_str = if c_params.is_empty() {
-                    "void".to_string()
-                } else {
-                    c_params.join(", ")
-                };
+                let c_param_str = c_params.join(", ");
+
+                let n_captures = captured.len();
 
                 // Store captures for this closure so call sites can pass them
-                self.closure_captures.insert(closure_name.clone(), captured);
+                self.closure_captures.insert(closure_name.clone(), captured.clone());
 
                 // Generate the closure body using buffer swapping
                 // Start with a COPY of outer scope's var_types so closures can reference
@@ -1605,11 +1623,31 @@ impl Codegen {
                     closure_var_types.insert(p.clone(), Type::Int);
                 }
 
-                // Save current output, generate closure into fresh buffer
+                // Generate closure body into a fresh buffer
                 let saved_out = std::mem::take(&mut self.out);
 
                 self.out.push_str(&format!("long long {}({}) {{\n", closure_name, c_param_str));
                 self.out.push_str("    long long ret_val = 0;\n");
+
+                // Unpack captured variables from _ep_env array
+                for (i, cap) in captured.iter().enumerate() {
+                    let safe_cap = Self::sanitize_c_name(cap);
+                    self.out.push_str(&format!("    long long {} = ((long long*)_ep_env)[{}];\n", safe_cap, i));
+                }
+
+                // Declare local variables in the closure body
+                // (variables defined by set/for-each that aren't params or captures)
+                let mut body_var_types = HashMap::new();
+                self.collect_var_types(body, &mut body_var_types);
+                for (var_name, _) in &body_var_types {
+                    let safe = Self::sanitize_c_name(var_name);
+                    let is_param = params.iter().any(|p| p == var_name);
+                    let is_capture = captured.iter().any(|c| c == var_name);
+                    if !is_param && !is_capture && var_name != "ret_val" {
+                        self.out.push_str(&format!("    long long {} = 0;\n", safe));
+                    }
+                }
+
                 for stmt in body {
                     self.gen_statement(stmt, &closure_var_types)?;
                 }
@@ -1617,12 +1655,30 @@ impl Codegen {
                 self.out.push_str("    return ret_val;\n");
                 self.out.push_str("}\n\n");
 
-                // Prepend closure function, then restore the main output
+                // Insert closure function at the bodies marker (after runtime defs and forward decls)
                 let closure_code = std::mem::take(&mut self.out);
-                self.out = closure_code + &saved_out;
+                let bodies_marker = "/* EP_CLOSURE_BODIES */\n";
+                if let Some(marker_pos) = saved_out.find(bodies_marker) {
+                    let insert_pos = marker_pos + bodies_marker.len();
+                    let (before, after) = saved_out.split_at(insert_pos);
+                    self.out = format!("{}{}{}", before, closure_code, after);
+                } else {
+                    // Fallback: append closure before current content
+                    self.out = closure_code + &saved_out;
+                }
 
-                // Return the function pointer as a long long
-                Ok(format!("(long long){}", closure_name))
+                // Return an EpClosure struct allocation with captures packed in env[]
+                let mut create_parts = Vec::new();
+                create_parts.push(format!(
+                    "({{ EpClosure* _cl_{0} = (EpClosure*)malloc(sizeof(EpClosure) + {1} * sizeof(long long)); _cl_{0}->magic = EP_CLOSURE_MAGIC; _cl_{0}->fn_ptr = (long long){2};",
+                    self.spawn_index, n_captures, closure_name
+                ));
+                for (i, cap) in captured.iter().enumerate() {
+                    create_parts.push(format!(" _cl_{}->env[{}] = {};", self.spawn_index, i, Self::sanitize_c_name(cap)));
+                }
+                create_parts.push(format!(" (long long)_cl_{}; }})", self.spawn_index));
+                self.spawn_index += 1;
+                Ok(create_parts.join(""))
             }
             ExprNode::ListLiteral(elements) => {
                 // Generate: ({ long long _lit = create_list(); append_list(_lit, e1); ... _lit; })
@@ -2146,6 +2202,10 @@ impl Codegen {
             }
         }
         self.out.push_str("\n");
+        // Marker for closure forward declarations (inserted after codegen)
+        self.out.push_str("/* EP_CLOSURE_FWD_DECLS */\n");
+        // Marker for closure function bodies (inserted during codegen)
+        self.out.push_str("/* EP_CLOSURE_BODIES */\n");
 
         let spawn_list = self.collect_all_spawns(program);
         self.out.push_str("\n/* Thread Spawn Wrappers */\n");
@@ -2238,16 +2298,9 @@ impl Codegen {
                     if let StmtNode::Set(name, expr, _) = &stmt.node {
                         if let ExprNode::Closure(params, _) = &expr.node {
                             if let Some(c_name) = self.closure_c_names.get(name) {
-                                let mut param_count = params.len();
-                                // Add captured variable parameters
-                                if let Some(captures) = self.closure_captures.get(c_name) {
-                                    param_count += captures.len();
-                                }
-                                let param_str = if param_count == 0 {
-                                    "void".to_string()
-                                } else {
-                                    (0..param_count).map(|_| "long long").collect::<Vec<_>>().join(", ")
-                                };
+                                // Always: _ep_env + user params
+                                let param_count = 1 + params.len();
+                                let param_str = (0..param_count).map(|_| "long long").collect::<Vec<_>>().join(", ");
                                 closure_fwd_decls.push_str(&format!("long long {}({});\n", c_name, param_str));
                             }
                         }
@@ -2255,8 +2308,14 @@ impl Codegen {
                 }
             }
             closure_fwd_decls.push('\n');
-            self.out = closure_fwd_decls + &self.out;
+            // Insert at marker position (after runtime defs, before user functions)
+            self.out = self.out.replace("/* EP_CLOSURE_FWD_DECLS */\n", &closure_fwd_decls);
+        } else {
+            // Remove the markers if no closures
+            self.out = self.out.replace("/* EP_CLOSURE_FWD_DECLS */\n", "");
         }
+        // Clean up bodies marker (already consumed during codegen, but might remain)
+        self.out = self.out.replace("/* EP_CLOSURE_BODIES */\n", "");
 
         Ok(self.out.clone())
     }
@@ -2616,6 +2675,14 @@ typedef struct {
     int completed;
     long long value;
 } EpFuture;
+
+/* Closure environment — captures travel with the function pointer */
+#define EP_CLOSURE_MAGIC 0x4550434C4FL
+typedef struct {
+    long long magic;
+    long long fn_ptr;
+    long long env[];  /* flexible array of captured values */
+} EpClosure;
 
 /* GC globals */
 static EpGCObject* ep_gc_head = NULL;
