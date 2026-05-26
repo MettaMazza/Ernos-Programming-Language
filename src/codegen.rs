@@ -30,6 +30,7 @@ pub struct Codegen {
     func_return_types: HashMap<String, Type>,
     current_return_type: Type,
     spawn_index: usize,
+    spawn_wrapper_index: usize,
     pub is_test_mode: bool,
     struct_defs: HashMap<String, StructDef>,
     enum_defs: HashMap<String, EnumDef>,
@@ -52,6 +53,7 @@ impl Codegen {
             func_return_types: HashMap::new(),
             current_return_type: Type::Int,
             spawn_index: 0,
+            spawn_wrapper_index: 0,
             is_test_mode: false,
             struct_defs: HashMap::new(),
             enum_defs: HashMap::new(),
@@ -1056,8 +1058,8 @@ impl Codegen {
                 self.out.push_str("    }\n");
             }
             StmtNode::Spawn(_func_name, args) => {
-                let idx = self.spawn_index;
-                self.spawn_index += 1;
+                let idx = self.spawn_wrapper_index;
+                self.spawn_wrapper_index += 1;
                 self.out.push_str("    {\n");
                 self.out.push_str(&format!("        spawn_args_{}* s_args = malloc(sizeof(spawn_args_{}));\n", idx, idx));
                 for (j, arg) in args.iter().enumerate() {
@@ -1853,6 +1855,11 @@ impl Codegen {
                 StmtNode::ForEach(_, _, body) => {
                     self.collect_spawns_in_stmts(body, spawn_list);
                 }
+                StmtNode::Match(_, arms) => {
+                    for (_, _, body) in arms {
+                        self.collect_spawns_in_stmts(body, spawn_list);
+                    }
+                }
                 _ => {}
             }
         }
@@ -2259,6 +2266,7 @@ impl Codegen {
         self.out.push_str("\n");
 
         self.spawn_index = 0;
+        self.spawn_wrapper_index = 0;
 
         // Pre-scan all functions to collect closure names and emit forward declarations
         self.closure_c_names.clear();
