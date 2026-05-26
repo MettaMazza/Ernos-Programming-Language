@@ -2534,7 +2534,6 @@ impl Codegen {
 
     /// Scan statements for explicit free_list/free_map calls and collect the variable names
     fn collect_user_freed(stmts: &[Stmt], freed: &mut std::collections::HashSet<String>) {
-        use crate::ast::ExprNode;
         for stmt in stmts {
             match &stmt.node {
                 StmtNode::Set(_, expr, _) | StmtNode::ExprStmt(expr) => {
