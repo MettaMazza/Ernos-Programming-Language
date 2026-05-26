@@ -627,6 +627,8 @@ impl TypeChecker {
         self.func_types.insert("ep_random_int".into(), (vec![MonoType::Int, MonoType::Int], MonoType::Int));
         self.func_types.insert("ep_time_ms".into(), (vec![], MonoType::Int));
         self.func_types.insert("ep_sleep_ms".into(), (vec![MonoType::Int], MonoType::Unit));
+        self.func_types.insert("ep_system".into(), (vec![MonoType::Str], MonoType::Int));
+        self.func_types.insert("ep_play_sound".into(), (vec![MonoType::Str], MonoType::Int));
 
         // Display helpers
         self.func_types.insert("display".into(), (vec![MonoType::Int], MonoType::Unit));

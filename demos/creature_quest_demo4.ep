@@ -25,6 +25,455 @@ define get_journal_path returning Str:
 define get_prestige_floor returning Int:
     return 100
 
+# ───────────── 1b. Sound Effects System ─────────────
+# Maps game events to macOS system sounds via afplay
+
+define get_sound_enabled returning Int:
+    return 1
+
+define sfx_attack:
+    if get_sound_enabled() == 1:
+        set ok to ep_play_sound("/System/Library/Sounds/Tink.aiff")
+
+define sfx_critical:
+    if get_sound_enabled() == 1:
+        set ok to ep_play_sound("/System/Library/Sounds/Glass.aiff")
+
+define sfx_hit:
+    if get_sound_enabled() == 1:
+        set ok to ep_play_sound("/System/Library/Sounds/Basso.aiff")
+
+define sfx_heal:
+    if get_sound_enabled() == 1:
+        set ok to ep_play_sound("/System/Library/Sounds/Bottle.aiff")
+
+define sfx_levelup:
+    if get_sound_enabled() == 1:
+        set ok to ep_play_sound("/System/Library/Sounds/Hero.aiff")
+
+define sfx_achievement:
+    if get_sound_enabled() == 1:
+        set ok to ep_play_sound("/System/Library/Sounds/Hero.aiff")
+
+define sfx_evolve:
+    if get_sound_enabled() == 1:
+        set ok to ep_play_sound("/System/Library/Sounds/Glass.aiff")
+
+define sfx_boss:
+    if get_sound_enabled() == 1:
+        set ok to ep_play_sound("/System/Library/Sounds/Submarine.aiff")
+
+define sfx_death:
+    if get_sound_enabled() == 1:
+        set ok to ep_play_sound("/System/Library/Sounds/Funk.aiff")
+
+define sfx_loot:
+    if get_sound_enabled() == 1:
+        set ok to ep_play_sound("/System/Library/Sounds/Pop.aiff")
+
+define sfx_shop:
+    if get_sound_enabled() == 1:
+        set ok to ep_play_sound("/System/Library/Sounds/Bottle.aiff")
+
+define sfx_flee:
+    if get_sound_enabled() == 1:
+        set ok to ep_play_sound("/System/Library/Sounds/Blow.aiff")
+
+define sfx_trap:
+    if get_sound_enabled() == 1:
+        set ok to ep_play_sound("/System/Library/Sounds/Sosumi.aiff")
+
+define sfx_shrine:
+    if get_sound_enabled() == 1:
+        set ok to ep_play_sound("/System/Library/Sounds/Ping.aiff")
+
+define sfx_prestige:
+    if get_sound_enabled() == 1:
+        set ok to ep_play_sound("/System/Library/Sounds/Hero.aiff")
+
+define sfx_menu:
+    if get_sound_enabled() == 1:
+        set ok to ep_play_sound("/System/Library/Sounds/Pop.aiff")
+
+# ───────────── 1c. ASCII Art — Companions ─────────────
+
+define show_egg_art with name as Str:
+    display f"        ___"
+    display f"       /   \\"
+    display f"      | ~~~ |"
+    display f"      | ~~~ |"
+    display f"       \\___/"
+    display f"      {name}"
+
+define show_drake_art with stage as Int and name as Str:
+    if stage <= 1:
+        display f"        /\\_/\\"
+        display f"       ( o.o )"
+        display f"       /|   |\\"
+        display f"      (_|   |_)"
+        display f"       {name}"
+    else if stage == 2:
+        display f"         __===~"
+        display f"        / o.o \\"
+        display f"       / /|  \\ \\"
+        display f"      /=/ |   \\=\\"
+        display f"     /_/  |_   \\_\\"
+        display f"       {name}"
+    else if stage == 3:
+        display f"      __/\\_/\\__"
+        display f"     /  o   o  \\"
+        display f"    | \\  ___  / |"
+        display f"     \\  \\/ \\/  /"
+        display f"      \\__/\\__/"
+        display f"     /| |  | |\\"
+        display f"    (_| |  | |_)"
+        display f"       {name}"
+    else if stage == 4:
+        display "    ~==\\_/\\__/==~"
+        display f"       / O  O \\"
+        display f"      |  \\__/  |"
+        display f"      \\  ~~~~  /"
+        display f"   ~~--\\______/--~~"
+        display f"     / |      | \\"
+        display f"    /  |      |  \\"
+        display f"       {name}"
+    else:
+        display f"   *  ~=====\\_/\\=====~  *"
+        display f"  *      / O    O \\      *"
+        display f"   *    |  \\~~~~/ |    *"
+        display f"    ~~--| ANCIENT  |--~~"
+        display f"        \\________/"
+        display f"      *  /|    |\\ *"
+        display f"        / |    | \\"
+        display f"          {name}"
+
+define show_kitsune_art with stage as Int and name as Str:
+    if stage <= 1:
+        display f"       /\\_/\\"
+        display f"      ( ^.^ )"
+        display f"       )   ("
+        display f"      (_____)"
+        display f"       {name}"
+    else if stage == 2:
+        display f"       /\\_/\\"
+        display f"      ( ^w^ )"
+        display f"      /|   |\\"
+        display f"     ~ |   | ~"
+        display f"       {name}"
+    else if stage == 3:
+        display f"      /\\   /\\"
+        display f"     /  \\_/  \\"
+        display f"    |  ^   ^  |"
+        display f"     \\  ~~~  /"
+        display f"    ~~\\_____/~~"
+        display f"     ~~ ||| ~~"
+        display f"       {name}"
+    else if stage == 4:
+        display f"     /\\  /\\  /\\"
+        display f"    /  \\/  \\/  \\"
+        display f"   |   ^    ^   |"
+        display f"    \\   ~~~~   /"
+        display f"   ~~\\_______/~~"
+        display f"    ~~|||||||~~"
+        display f"       {name}"
+    else:
+        display f"   * /\\ /\\ /\\ /\\ *"
+        display f"    /  V  V  V  \\"
+        display f"   |   ^    ^   |"
+        display f"    \\  MYTHIC  /"
+        display f"   *~\\_______/~*"
+        display f"    ~|||||||||~"
+        display f"       {name}"
+
+define show_griffin_art with stage as Int and name as Str:
+    if stage <= 1:
+        display f"       , ."
+        display f"      (o>o)"
+        display f"      /| |\\"
+        display f"     (_| |_)"
+        display f"       {name}"
+    else if stage == 2:
+        display f"      \\   /"
+        display f"    --( > )--"
+        display f"      /| |\\"
+        display f"     / | | \\"
+        display f"       {name}"
+    else if stage == 3:
+        display f"     \\\\   //"
+        display f"   ---( O O )---"
+        display f"      |\\___/|"
+        display f"     /|     |\\"
+        display f"    / |     | \\"
+        display f"       {name}"
+    else:
+        display f"   *\\\\     //*"
+        display f"  *--( O  O )--*"
+        display f"      |\\====/|"
+        display f"   * /|      |\\ *"
+        display f"    / | KING | \\"
+        display f"       {name}"
+
+define show_phantom_art with stage as Int and name as Str:
+    if stage <= 1:
+        display f"       .--."
+        display f"      ( oo )"
+        display f"      |    |"
+        display f"       \\~~/"
+        display f"       {name}"
+    else if stage == 2:
+        display f"      .----."
+        display f"     ( o  o )"
+        display f"     |  \\/  |"
+        display f"      \\ ~~ /"
+        display f"       ~~~~"
+        display f"       {name}"
+    else if stage == 3:
+        display f"     .------."
+        display f"    (  O  O  )"
+        display f"    |  \\  /  |"
+        display f"     \\  \\/  /"
+        display f"      \\~~~~/"
+        display f"     ~~~~~~~~"
+        display f"       {name}"
+    else:
+        display f"   *.--------.*"
+        display f"  *( O    O  )*"
+        display f"   |  \\==/   |"
+        display f"    \\ VOID  /"
+        display f"     \\~~~~/"
+        display f"   *~~~~~~~~*"
+        display f"       {name}"
+
+define show_wyrm_art with stage as Int and name as Str:
+    if stage <= 1:
+        display f"       ~~~~"
+        display f"      ( o.o)"
+        display f"       ~~~~"
+        display f"       {name}"
+    else if stage == 2:
+        display f"      ~~~~~~"
+        display f"     ( o  o )"
+        display f"    ~~\\    /~~"
+        display f"       ~~~~"
+        display f"       {name}"
+    else if stage == 3:
+        display f"     ~~~~~~~~"
+        display f"    ( O    O )"
+        display f"   ~~\\  ss  /~~"
+        display f"      \\    /"
+        display f"    ~~~~~~~~"
+        display f"       {name}"
+    else:
+        display f"   *~~~~~~~~~~*"
+        display f"  *( O    O  )*"
+        display f"   ~\\  SSS  /~"
+        display f"     \\ COIL /"
+        display f"   *~~~~~~~~*"
+        display f"       {name}"
+
+define show_golem_art with stage as Int and name as Str:
+    if stage <= 1:
+        display f"       [##]"
+        display f"      [o  o]"
+        display f"      [    ]"
+        display f"       [##]"
+        display f"       {name}"
+    else if stage == 2:
+        display f"      [####]"
+        display f"     [o    o]"
+        display f"     [ \\__/ ]"
+        display f"     [||  ||]"
+        display f"      [####]"
+        display f"       {name}"
+    else if stage == 3:
+        display f"     [######]"
+        display f"    [O      O]"
+        display f"    [  \\__/  ]"
+        display f"    [|||  |||]"
+        display f"    [||    ||]"
+        display f"     [######]"
+        display f"       {name}"
+    else:
+        display f"   *[########]*"
+        display f"  *[O        O]*"
+        display f"   [ MOUNTAIN ]"
+        display f"   [||||  ||||]"
+        display f"   [|||    |||]"
+        display f"   *[########]*"
+        display f"       {name}"
+
+define show_companion_art with species as Str and stage as Int and name as Str:
+    display ""
+    if stage == 0:
+        set ok to show_egg_art(name)
+    else if species == "Drake":
+        set ok to show_drake_art(stage and name)
+    else if species == "Kitsune":
+        set ok to show_kitsune_art(stage and name)
+    else if species == "Griffin":
+        set ok to show_griffin_art(stage and name)
+    else if species == "Phantom":
+        set ok to show_phantom_art(stage and name)
+    else if species == "Wyrm":
+        set ok to show_wyrm_art(stage and name)
+    else if species == "Golem":
+        set ok to show_golem_art(stage and name)
+    display ""
+
+# ───────────── 1d. ASCII Art — Monsters ─────────────
+
+define show_monster_art with name as Str:
+    if name == "Giant Rat":
+        display f"      (\\,/"
+        display f"      oo   )'"
+        display f"    ,_/|  /"
+        display f"    '--- \\"
+    else if name == "Wild Boar":
+        display f"      __,--."
+        display f"     /o  o /"
+        display f"    ( === //"
+        display f"     \\__//"
+    else if name == "Goblin Scout":
+        display f"      /\\  /\\"
+        display f"     ( o  o )"
+        display f"      >    <"
+        display f"     /|~~~~|\\"
+    else if name == "Spore Sprite":
+        display f"      .oOo."
+        display f"     ( @  @ )"
+        display f"      \\~~/"
+        display f"     ~~~~"
+    else if name == "Treant":
+        display f"     \\|/  \\|/"
+        display f"    --( o  o )--"
+        display f"      |\\__/|"
+        display f"     /||  ||\\"
+    else if name == "Magma Elemental":
+        display f"      /\\/\\"
+        display f"     (o)(o)"
+        display f"    /\\/\\/\\/\\"
+        display f"   ~~~~~~~~"
+    else if name == "Fire Drake":
+        display f"      __/\\_"
+        display f"     / o o \\"
+        display f"    ( ~VV~ )"
+        display f"     \\___/"
+    else if name == "Frost Wraith":
+        display f"     *  *  *"
+        display f"    ( O  O )"
+        display f"     \\____/"
+        display f"     * ~~ *"
+    else if name == "Ice Golem":
+        display f"     [****]"
+        display f"    [O    O]"
+        display f"    [  --  ]"
+        display f"    [||  ||]"
+    else if name == "Shade Assassin":
+        display f"      _.._"
+        display f"     / -- \\"
+        display f"    | x  x |"
+        display f"     \\==//"
+    else if name == "Cursed Knight":
+        display f"      [+]"
+        display f"     /o  o\\"
+        display f"    |[====]|"
+        display f"     /|  |\\"
+    else if name == "Storm Harpy":
+        display f"     ~\\  /~"
+        display f"    -(o)(o)-"
+        display f"      \\||/"
+        display f"       /\\"
+    else if name == "Crystal Spider":
+        display f"     /\\/\\/\\"
+        display f"    <o    o>"
+        display f"     \\/\\/"
+        display f"    /|  |\\"
+    else if name == "Deep Horror":
+        display f"    ~~~~~~~~"
+        display f"   ( O    O )"
+        display f"    \\||||||/"
+        display f"    ~~~~~~~~"
+    else:
+        display f"      ???"
+        display f"     /o o\\"
+        display f"    | --- |"
+        display f"     \\___/"
+
+# ───────────── 1e. ASCII Art — Bosses ─────────────
+
+define show_boss_art with name as Str:
+    if name == "Infernal Dragon":
+        display f"          __/\\\\_/\\\\__"
+        display f"         / O      O \\"
+        display f"        | \\  FIRE  / |"
+        display f"    ~~--\\  \\~~~~~~/  /--~~"
+        display f"         \\________/"
+        display f"        / |      | \\"
+        display f"       /  |      |  \\"
+    else if name == "Frost Sovereign":
+        display f"     *  [========]  *"
+        display f"    *  [ O    O  ]  *"
+        display f"       [  FROST  ]"
+        display f"    *  [||||||||]  *"
+        display f"       [||    ||]"
+        display f"     *  [======]  *"
+    else if name == "Plague Lord":
+        display f"      ~~~~.oOo.~~~~"
+        display f"     ( @@  PLAGUE @@ )"
+        display f"      \\~~~~~~~~~~~~/"
+        display f"     ~~||||||||||||~~"
+        display f"      ~~~~~~~~~~~~~~"
+    else if name == "Celestial Guardian":
+        display f"        *   *   *"
+        display f"      *  \\  |  /  *"
+        display f"     *   [ O  O ]   *"
+        display f"      *  [JUDGE]  *"
+        display f"        *[||||]*"
+        display f"         [    ]"
+    else if name == "Shadow Archon":
+        display f"    *..            ..*"
+        display f"    *. ( X    X ) .*"
+        display f"     *.| SHADOW |.*"
+        display f"      *\\======/*"
+        display f"     *..~~~~~~..*"
+    else:
+        display f"     ===\\/===\\/==="
+        display f"    | O  STORM  O |"
+        display f"    | \\========/ |"
+        display f"     \\==========/"
+        display f"     /||      ||\\"
+        display f"    / ||      || \\"
+
+# ───────────── 1f. ASCII Art — Biome Banners ─────────────
+
+define show_biome_banner with biome as Str:
+    display ""
+    if biome == "Crystal Caverns":
+        display "    /\\/\\ CRYSTAL CAVERNS /\\/\\"
+        display "   <*><*> Gems gleam   <*><*>"
+    else if biome == "Enchanted Meadow":
+        display "   ~*~ ENCHANTED MEADOW ~*~"
+        display "   ,,, Flowers bloom   ,,,"
+    else if biome == "Mushroom Forest":
+        display "   .oOo. MUSHROOM FOREST .oOo."
+        display "    ||| Spores drift     |||"
+    else if biome == "Lava Depths":
+        display "   /\\/\\ LAVA DEPTHS /\\/\\"
+        display "   ~~~~ Heat rises   ~~~~"
+    else if biome == "Frozen Halls":
+        display "   **** FROZEN HALLS ****"
+        display "   **** Ice echoes   ****"
+    else if biome == "Shadow Ruins":
+        display "   .... SHADOW RUINS ...."
+        display "   .... Darkness waits ...."
+    else if biome == "Sky Gardens":
+        display "   ~~~~ SKY GARDENS ~~~~"
+        display "   ~~~~ Clouds drift ~~~~"
+    else if biome == "Abyssal Depths":
+        display "   ~~~~ ABYSSAL DEPTHS ~~~~"
+        display "   ~~~~ The void stares ~~~~"
+    display ""
+
 # ───────────── 2. String / Math Helpers ─────────────
 
 define repeat_char with ch as Str and count as Int returning Str:
@@ -611,11 +1060,13 @@ define get_species_abilities with species as Str and stage as Int returning List
 define check_evolution with c as Companion returning Companion:
     set emoji to get_species_emoji(c.species)
     if c.stage == 0 && c.bond >= 5:
+        set ok to sfx_evolve()
         display ""
         display f"  ✨════════════════════════════════════════✨"
         display f"    {c.name}'s egg is cracking!"
         display f"    {emoji} {c.name} has HATCHED into a tiny {c.species}!"
         display f"  ✨════════════════════════════════════════✨"
+        set ok to show_companion_art(c.species and 1 and c.name)
         set c.stage to 1
         set c.max_health to 25
         set c.health to 25
@@ -628,11 +1079,13 @@ define check_evolution with c as Companion returning Companion:
         return c
 
     if c.stage == 1 && c.level >= 5:
+        set ok to sfx_evolve()
         display ""
         display f"  ✨════════════════════════════════════════✨"
         display f"    {emoji} {c.name} is glowing brightly!"
         display f"    {c.name} evolved into a JUVENILE {c.species}!"
         display f"  ✨════════════════════════════════════════✨"
+        set ok to show_companion_art(c.species and 2 and c.name)
         set c.stage to 2
         set c.max_health to 42
         set c.health to 42
@@ -644,11 +1097,13 @@ define check_evolution with c as Companion returning Companion:
         return c
 
     if c.stage == 2 && c.level >= 15:
+        set ok to sfx_evolve()
         display ""
         display f"  ✨════════════════════════════════════════✨"
         display f"    {emoji} {c.name} roars with power!"
         display f"    {c.name} evolved into an ADULT {c.species}!"
         display f"  ✨════════════════════════════════════════✨"
+        set ok to show_companion_art(c.species and 3 and c.name)
         set c.stage to 3
         set c.max_health to 70
         set c.health to 70
@@ -660,11 +1115,13 @@ define check_evolution with c as Companion returning Companion:
         return c
 
     if c.stage == 3 && c.level >= 30:
+        set ok to sfx_evolve()
         display ""
         display f"  ✨════════════════════════════════════════✨"
         display f"    {emoji} {c.name} ascends to legendary power!"
         display f"    {c.name} has become an ELDER {c.species}!"
         display f"  ✨════════════════════════════════════════✨"
+        set ok to show_companion_art(c.species and 4 and c.name)
         set c.stage to 4
         set c.max_health to 100
         set c.health to 100
@@ -676,11 +1133,13 @@ define check_evolution with c as Companion returning Companion:
         return c
 
     if c.stage == 4 && c.level >= 50:
+        set ok to sfx_prestige()
         display ""
         display f"  🌟════════════════════════════════════════🌟"
         display f"    {emoji} {c.name} TRANSCENDS mortal form!"
         display f"    {c.name} has become a MYTHIC {c.species}!"
         display f"  🌟════════════════════════════════════════🌟"
+        set ok to show_companion_art(c.species and 5 and c.name)
         set c.stage to 5
         set c.max_health to 140
         set c.health to 140
@@ -1690,13 +2149,16 @@ define run_combat with p as Player and c as Companion and m as Monster and inv a
     # Returns: 1 = player won, 0 = player died
     display ""
     if m.is_boss == 1:
+        set ok to sfx_boss()
         display f"  ══════════════════════════════════════"
         display f"    BOSS BATTLE: {m.name}!"
         display f"    HP: {m.health}  ATK: {m.attack}  DEF: {m.defense}"
         display f"  ══════════════════════════════════════"
+        set ok to show_boss_art(m.name)
     else:
         display f"  A wild {m.name} appears!"
         display f"    HP: {m.health}  ATK: {m.attack}  Element: {m.element}"
+        set ok to show_monster_art(m.name)
 
     set player_effects to create_status_map()
     set monster_effects to create_status_map()
@@ -1776,12 +2238,14 @@ define run_combat with p as Player and c as Companion and m as Monster and inv a
                     set crit_chance to 5 + p.speed * 2
                     if crit_roll <= crit_chance:
                         set base_dmg to base_dmg * 2
+                        set ok to sfx_critical()
                         display "  CRITICAL HIT!"
 
                     set actual_dmg to base_dmg - m.defense
                     if actual_dmg < 1:
                         set actual_dmg to 1
                     set m.health to m.health - actual_dmg
+                    set ok to sfx_attack()
                     display f"  You strike the {m.name} for {actual_dmg} damage!"
 
                 else if pick == 2:
@@ -1805,6 +2269,7 @@ define run_combat with p as Player and c as Companion and m as Monster and inv a
                         if p.health > p.max_health:
                             set p.health to p.max_health
                         set ok to remove_item(inv and "Healing Potion" and 1)
+                        set ok to sfx_heal()
                         display f"  Healed {heal} HP!"
                     else if item_pick == 2 && bomb_count > 0:
                         set bomb_dmg to 25 + p.level * 3
@@ -1850,6 +2315,7 @@ define run_combat with p as Player and c as Companion and m as Monster and inv a
                     set flee_roll to ep_random_int(1 and 100)
                     set flee_chance to 30 + (p.speed - m.speed) * 5
                     if flee_roll <= flee_chance:
+                        set ok to sfx_flee()
                         display "  You escaped!"
                         return 1
                     display "  Could not escape!"
@@ -1891,6 +2357,7 @@ define run_combat with p as Player and c as Companion and m as Monster and inv a
                     set m_dmg to 1
 
                 set p.health to p.health - m_dmg
+                set ok to sfx_hit()
                 display f"  You take {m_dmg} damage!"
 
                 if c.stage >= 1 && c.health > 0:
@@ -1953,6 +2420,7 @@ define run_combat with p as Player and c as Companion and m as Monster and inv a
         set p.attack to p.attack + 2
         set p.defense to p.defense + 1
         set p.speed to p.speed + 1
+        set ok to sfx_levelup()
         display f"  LEVEL UP! You are now level {p.level}!"
 
     set journal_ctx to journal_get_recent(3)
@@ -1964,6 +2432,7 @@ define run_combat with p as Player and c as Companion and m as Monster and inv a
 # ───────────── 20. Encounter Handlers ─────────────
 
 define encounter_treasure with p as Player and inv as Map:
+    set ok to sfx_loot()
     display ""
     display "  You found a treasure chest!"
     set roll to ep_random_int(1 and 100)
@@ -2011,6 +2480,7 @@ define encounter_trap with p as Player:
     if roll == 1:
         set dmg to 5 + p.floor * 2
         set p.health to p.health - dmg
+        set ok to sfx_trap()
         display f"  You triggered a spike trap! Took {dmg} damage!"
     else if roll == 2:
         set dmg to 3 + p.floor
@@ -2065,6 +2535,7 @@ define encounter_npc with p as Player and c as Companion and inv as Map:
             set c.happiness to 100
 
 define encounter_shrine with p as Player and c as Companion:
+    set ok to sfx_shrine()
     display ""
     display "  You discover an ancient shrine."
     display "    1) Pray (random blessing)"
@@ -2148,6 +2619,7 @@ define encounter_mystery with p as Player and c as Companion:
 # ───────────── 21. Shop System ─────────────
 
 define run_shop with p as Player and c as Companion and inv as Map:
+    set ok to sfx_shop()
     display ""
     display "  ======== SHOP ========"
     set shopping to 1
@@ -2290,6 +2762,7 @@ define can_prestige with p as Player returning Int:
 
 define do_prestige with p as Player and c as Companion and achievements as Map:
     display ""
+    set ok to sfx_prestige()
     display "  =================================================="
     display "    PRESTIGE ASCENSION"
     display "    You have conquered 100 floors!"
@@ -2393,6 +2866,11 @@ define show_title:
     display "  ║                                          ║"
     display "  ╚══════════════════════════════════════════╝"
     display ""
+    display "        __/\\_/\\__       /\\_/\\"
+    display "       /  o   o  \\     ( ^.^ )"
+    display "      | \\  ___  / |     )   ("
+    display "       \\  \\/ \\/  /    (_____)"
+    display "        \\__/\\__/"
 
 # ───────────── 25. Companion Interaction Menu ─────────────
 
@@ -2400,6 +2878,7 @@ define companion_menu with p as Player and c as Companion and inv as Map and mem
     display ""
     set cemoji to get_species_emoji(c.species)
     display f"  {cemoji} ====== {c.name} ======"
+    set ok to show_companion_art(c.species and c.stage and c.name)
     display "  1) Feed (uses Raw Meat)"
     display "  2) Play"
     display "  3) Pet"
@@ -2470,6 +2949,7 @@ define companion_menu with p as Player and c as Companion and inv as Map and mem
 
 define show_game_over with p as Player and c as Companion:
     display ""
+    set ok to sfx_death()
     display "  =================================================="
     display "    GAME OVER"
     display "  =================================================="
@@ -2657,6 +3137,8 @@ define main:
                     set ok to update_quest_progress(quests and 1 and 1)
                     set ok to journal_add(f"Defeated boss on floor {p.floor - 1}!" and p.floor and p.turns_total)
                     display f"  You descend to Floor {p.floor}..."
+                    set new_biome to get_biome(p.floor)
+                    set ok to show_biome_banner(new_biome)
 
             else if enc_roll <= 50:
                 # Normal combat
@@ -2708,6 +3190,7 @@ define main:
                 set new_biome to get_biome(p.floor)
                 set new_emoji to get_biome_emoji(new_biome)
                 display f"  {new_emoji} You descend to Floor {p.floor} — {new_biome}"
+                set ok to show_biome_banner(new_biome)
 
         else if action == 2:
             set ok to companion_menu(p and c and inv and memory and llm_on)

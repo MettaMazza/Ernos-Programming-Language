@@ -169,6 +169,8 @@ impl Codegen {
         self.func_return_types.insert("fs_get_size".to_string(), Type::Int);
         self.func_return_types.insert("ep_http_request".to_string(), Type::DynStr);
         self.func_return_types.insert("ep_sleep_ms".to_string(), Type::Int);
+        self.func_return_types.insert("ep_system".to_string(), Type::Int);
+        self.func_return_types.insert("ep_play_sound".to_string(), Type::Int);
         self.func_return_types.insert("concat".to_string(), Type::DynStr);
         self.func_return_types.insert("int_to_string".to_string(), Type::DynStr);
         self.func_return_types.insert("read_line".to_string(), Type::DynStr);
@@ -2966,6 +2968,16 @@ long long ep_net_close(long long fd) {
 long long ep_sleep_ms(long long ms) {
     usleep((useconds_t)(ms * 1000));
     return 0;
+}
+
+long long ep_system(long long cmd) {
+    return (long long)system((const char*)cmd);
+}
+
+long long ep_play_sound(long long path) {
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "afplay '%s' &", (const char*)path);
+    return (long long)system(cmd);
 }
 
 unsigned long hash_string(const char* str) {
