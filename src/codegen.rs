@@ -970,13 +970,11 @@ impl Codegen {
                     self.out.push_str(&format!("        free_list({});\n", safe_name));
                     self.out.push_str(&format!("        {} = tmp_val;\n", safe_name));
                     self.out.push_str("    }\n");
-                } else if let Some(Type::Enum(ename)) = t {
-                    self.out.push_str("    {\n");
-                    self.out.push_str(&format!("        long long tmp_val = {};\n", expr_str));
-                    self.out.push_str(&format!("        free_enum_{}({});\n", ename, safe_name));
-                    self.out.push_str(&format!("        {} = tmp_val;\n", safe_name));
-                    self.out.push_str("    }\n");
                 } else {
+                    // For enums, structs, and scalars: simple assignment.
+                    // We intentionally do NOT pre-free enums/structs here because
+                    // the new value may alias subtrees of the old value (e.g. BST
+                    // insert reuses children). The GC handles the old allocations.
                     self.out.push_str(&format!("    {} = {};\n", safe_name, expr_str));
                 }
 
