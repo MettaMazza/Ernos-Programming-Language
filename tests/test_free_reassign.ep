@@ -1,3 +1,4 @@
+# expected: 99
 define main:
     set c to create_list()
     set ok to append_list(c and 5)

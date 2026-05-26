@@ -1,3 +1,4 @@
+# expected: 106
 define main:
     set total to 0
     set xs to [1, 2, 3]

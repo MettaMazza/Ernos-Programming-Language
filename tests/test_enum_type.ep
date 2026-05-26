@@ -1,3 +1,4 @@
+# expected_compile_error
 define choice State:
     variant Idle
     variant Working with progress as Int

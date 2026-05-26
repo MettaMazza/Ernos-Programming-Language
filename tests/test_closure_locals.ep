@@ -1,3 +1,4 @@
+# expected: 15
 define main:
     set base to 10
     set f to given x:

@@ -1,3 +1,5 @@
+# expected: 1
+# expected: 2
 define structure Pt:
     field x as Int
 

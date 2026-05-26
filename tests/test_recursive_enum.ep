@@ -1,3 +1,4 @@
+# expected: (no output)
 define choice T:
     variant N
     variant C with v as Int and next as T
