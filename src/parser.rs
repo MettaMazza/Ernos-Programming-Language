@@ -854,6 +854,14 @@ impl Parser {
                 let inner = self.parse_expr(Precedence::Product)?;
                 Expr::with_span(ExprNode::UnaryNot(Box::new(inner)), span)
             }
+            Token::Minus => {
+                let inner = self.parse_expr(Precedence::Product)?;
+                Expr::with_span(ExprNode::Binary(
+                    Box::new(Expr::with_span(ExprNode::Integer(0), span)),
+                    Op::Sub,
+                    Box::new(inner),
+                ), span)
+            }
             Token::Await => {
                 let inner = self.parse_expr(Precedence::Lowest)?;
                 Expr::with_span(ExprNode::Await(Box::new(inner)), span)

@@ -804,6 +804,9 @@ impl Codegen {
                     Type::Bool => {
                         self.out.push_str(&format!("    printf(\"%s\\n\", ({}) ? \"true\" : \"false\");\n", expr_str));
                     }
+                    Type::Enum(ref enum_name) => {
+                        self.out.push_str(&format!("    printf(\"%s\\n\", display_enum_{}({}));\n", enum_name, expr_str));
+                    }
                     _ => {
                         self.out.push_str(&format!("    printf(\"%lld\\n\", (long long){});\n", expr_str));
                     }
@@ -1538,6 +1541,16 @@ impl Codegen {
                     self.out.push_str("    return (long long)e;\n");
                     self.out.push_str("}\n\n");
                 }
+
+                // Generate display helper: maps tag to variant name string
+                self.out.push_str(&format!("const char* display_enum_{}(long long ptr) {{\n", ed.name));
+                self.out.push_str(&format!("    if (ptr == 0) return \"(null)\";\n"));
+                self.out.push_str(&format!("    EpEnum_{}* e = (EpEnum_{}*)ptr;\n", ed.name, ed.name));
+                for (i, (vname, _)) in ed.variants.iter().enumerate() {
+                    self.out.push_str(&format!("    if (e->tag == {}) return \"{}\";\n", i, vname));
+                }
+                self.out.push_str("    return \"(unknown)\";\n");
+                self.out.push_str("}\n\n");
             }
         }
 
