@@ -46,7 +46,13 @@ define string_concat with s1 and s2:
     set res to string_from_list(lst)
     return res
 
-define int_to_string with n:
+define get_fn_c_name with func:
+    set name to get_list(func and 1)
+    if "main" equals name:
+        return "_main"
+    return name
+
+define ep_int_to_str with n:
     if n == 0:
         return "0"
     set lst to create_list()
@@ -123,7 +129,21 @@ define create_codegen_state:
     set ok to append_list(state and (create_list() + 0)) # func_keys (3)
     set ok to append_list(state and (create_list() + 0)) # func_values (4)
     set ok to append_list(state and 0)                 # current_return_type (5)
+    set ok to append_list(state and (create_list() + 0)) # spawn_list (6)
+    set ok to append_list(state and 0)                 # spawn_index (7)
     return state
+
+define get_codegen_spawn_list with state:
+    return get_list(state and 6)
+
+define set_codegen_spawn_list with state and spawn_list:
+    return set_list(state and 6 and spawn_list)
+
+define get_codegen_spawn_index with state:
+    return get_list(state and 7)
+
+define set_codegen_spawn_index with state and spawn_index:
+    return set_list(state and 7 and spawn_index)
 
 define emit with state and line:
     set lines to get_list(state and 0)
@@ -148,7 +168,7 @@ define get_new_label with state and prefix:
     set next_count to count + 1
     set ok to set_list(state and 2 and next_count)
     
-    set num_str to int_to_string(count)
+    set num_str to ep_int_to_str(count)
     set label_half to string_concat("L_" and prefix)
     set label to string_concat(label_half and "_")
     set final_label to string_concat(label and num_str)
@@ -184,8 +204,46 @@ define analyze_return_types with state and program:
     set ok to map_put(keys and values and "substring" and 3)
     set ok to map_put(keys and values and "string_from_list" and 3)
     set ok to map_put(keys and values and "pop_list" and 1)
+    set ok to map_put(keys and values and "get_list_data_ptr" and 1)
+    set ok to map_put(keys and values and "sqlite_get_callback_ptr" and 1)
+    set ok to map_put(keys and values and "free_list" and 1)
+    set ok to map_put(keys and values and "create_map" and 1)
+    set ok to map_put(keys and values and "map_insert" and 1)
+    set ok to map_put(keys and values and "map_get_val" and 1)
+    set ok to map_put(keys and values and "map_contains" and 1)
+    set ok to map_put(keys and values and "map_delete" and 1)
+    set ok to map_put(keys and values and "free_map" and 1)
+    set ok to map_put(keys and values and "create_deque" and 1)
+    set ok to map_put(keys and values and "deque_push_back" and 1)
+    set ok to map_put(keys and values and "deque_push_front" and 1)
+    set ok to map_put(keys and values and "deque_pop_back" and 1)
+    set ok to map_put(keys and values and "deque_pop_front" and 1)
+    set ok to map_put(keys and values and "deque_length" and 1)
+    set ok to map_put(keys and values and "free_deque" and 1)
+    set ok to map_put(keys and values and "fs_scan_dir" and 4)
+    set ok to map_put(keys and values and "fs_copy_file" and 1)
+    set ok to map_put(keys and values and "fs_delete_file" and 1)
+    set ok to map_put(keys and values and "fs_move_file" and 1)
+    set ok to map_put(keys and values and "fs_exists" and 1)
+    set ok to map_put(keys and values and "fs_is_dir" and 1)
+    set ok to map_put(keys and values and "fs_is_file" and 1)
+    set ok to map_put(keys and values and "fs_get_size" and 1)
+    set ok to map_put(keys and values and "ep_http_request" and 3)
+    set ok to map_put(keys and values and "ep_sleep_ms" and 1)
     
-    set funcs to get_list(program and 2)
+    set externals to get_list(program and 2)
+    set ext_len to length_list(externals)
+    set idx to 0
+    repeat while idx < ext_len:
+        set ext_node to get_list(externals and idx)
+        set ext_name to get_list(ext_node and 1)
+        set existing to map_get(keys and values and ext_name)
+        if existing == 0:
+            set ok to map_put(keys and values and ext_name and 1)
+        set idx to idx + 1
+
+        
+    set funcs to get_list(program and 3)
     set funcs_len to length_list(funcs)
     
     set pass to 0
@@ -203,8 +261,13 @@ define analyze_return_types with state and program:
             set p_len to length_list(params)
             set p_idx to 0
             repeat while p_idx < p_len:
-                set p_name to get_list(params and p_idx)
-                set ok to map_put(var_keys and var_values and p_name and 1)
+                set p_node to get_list(params and p_idx)
+                set p_name to get_list(p_node and 0)
+                set is_borrow to get_list(p_node and 1)
+                set param_type to 1
+                if is_borrow == 1:
+                    set param_type to 5
+                set ok to map_put(var_keys and var_values and p_name and param_type)
                 set p_idx to p_idx + 1
                 
             set ok to collect_var_types(state and body and var_keys and var_values)
@@ -295,6 +358,17 @@ define infer_type with state and expr and var_keys and var_values:
         if t != 0:
             return t
         return 1
+    if type == 20: # NODE_BORROW
+        set inner to get_list(expr and 1)
+        set t to infer_type(state and inner and var_keys and var_values)
+        if t == 4 || t == 5:
+            return 5
+        if t == 2 || t == 3 || t == 6:
+            return 6
+        return 5
+    if type == 21: # NODE_AWAIT
+        set inner to get_list(expr and 1)
+        return infer_type(state and inner and var_keys and var_values)
     return 1
 
 # Variable offset collection is no longer needed for C transpilation
@@ -304,6 +378,10 @@ define gen_function with state and func:
     set name to get_list(func and 1)
     set params to get_list(func and 2)
     set body to get_list(func and 3)
+    
+    set is_async to 0
+    if length_list(func) > 4:
+        set is_async to get_list(func and 4)
     
     # Save current return type in state
     set func_keys to get_list(state and 3)
@@ -318,24 +396,123 @@ define gen_function with state and func:
     set p_len to length_list(params)
     set p_idx to 0
     repeat while p_idx < p_len:
-        set p_name to get_list(params and p_idx)
-        set ok to map_put(var_types_keys and var_types_values and p_name and 1)
+        set p_node to get_list(params and p_idx)
+        set p_name to get_list(p_node and 0)
+        set is_borrow to get_list(p_node and 1)
+        set param_type to 1
+        if is_borrow == 1:
+            set param_type to 5
+        set ok to map_put(var_types_keys and var_types_values and p_name and param_type)
         set p_idx to p_idx + 1
         
     set ok to collect_var_types(state and body and var_types_keys and var_types_values)
     
-    set c_name to name
-    if "main" equals name:
-        set c_name to "_main"
+    if is_async == 1:
+        # 1. Thread argument struct
+        set struct_decl to "typedef struct {\n    EpFuture* fut;\n"
+        set j to 0
+        repeat while j < p_len:
+            set struct_decl to string_concat(struct_decl and "    long long arg")
+            set struct_decl to string_concat(struct_decl and ep_int_to_str(j))
+            set struct_decl to string_concat(struct_decl and ";\n")
+            set j to j + 1
+        if p_len == 0:
+            set struct_decl to string_concat(struct_decl and "    int dummy;\n")
+        set struct_decl to string_concat(struct_decl and "} ")
+        set struct_decl to string_concat(struct_decl and get_fn_c_name(func))
+        set struct_decl to string_concat(struct_decl and "_async_args;\n\n")
+        set ok to emit(state and struct_decl)
         
-    # Build function header: long long c_name(long long p1, long long p2, ...)
+        # 2. Thread wrapper function
+        set wrap_fn to "void* "
+        set wrap_fn to string_concat(wrap_fn and get_fn_c_name(func))
+        set wrap_fn to string_concat(wrap_fn and "_async_wrapper(void* r) {\n")
+        set wrap_fn to string_concat(wrap_fn and "    int stack_dummy;\n")
+        set wrap_fn to string_concat(wrap_fn and "    ep_gc_register_thread(&stack_dummy);\n")
+        set wrap_fn to string_concat(wrap_fn and "    ")
+        set wrap_fn to string_concat(wrap_fn and get_fn_c_name(func))
+        set wrap_fn to string_concat(wrap_fn and "_async_args* args = (")
+        set wrap_fn to string_concat(wrap_fn and get_fn_c_name(func))
+        set wrap_fn to string_concat(wrap_fn and "_async_args*)r;\n")
+        set wrap_fn to string_concat(wrap_fn and "    long long res = ")
+        set wrap_fn to string_concat(wrap_fn and get_fn_c_name(func))
+        set wrap_fn to string_concat(wrap_fn and "_impl(")
+        set j to 0
+        repeat while j < p_len:
+            set wrap_fn to string_concat(wrap_fn and "args->arg")
+            set wrap_fn to string_concat(wrap_fn and ep_int_to_str(j))
+            if j < p_len - 1:
+                set wrap_fn to string_concat(wrap_fn and ", ")
+            set j to j + 1
+        set wrap_fn to string_concat(wrap_fn and ");\n")
+        set wrap_fn to string_concat(wrap_fn and "    args->fut->value = res;\n")
+        set wrap_fn to string_concat(wrap_fn and "    args->fut->completed = 1;\n")
+        set wrap_fn to string_concat(wrap_fn and "    send_channel(args->fut->chan, res);\n")
+        set wrap_fn to string_concat(wrap_fn and "    free(args);\n")
+        set wrap_fn to string_concat(wrap_fn and "    ep_gc_unregister_thread();\n")
+        set wrap_fn to string_concat(wrap_fn and "    return NULL;\n")
+        set wrap_fn to string_concat(wrap_fn and "}\n\n")
+        set ok to emit(state and wrap_fn)
+        
+        # 3. Public wrapper function
+        set pub_fn to "long long "
+        set pub_fn to string_concat(pub_fn and get_fn_c_name(func))
+        set pub_fn to string_concat(pub_fn and "(")
+        set j to 0
+        repeat while j < p_len:
+            set p_node to get_list(params and j)
+            set p_name to get_list(p_node and 0)
+            set pub_fn to string_concat(pub_fn and "long long ")
+            set pub_fn to string_concat(pub_fn and p_name)
+            if j < p_len - 1:
+                set pub_fn to string_concat(pub_fn and ", ")
+            set j to j + 1
+        set pub_fn to string_concat(pub_fn and ") {\n")
+        set pub_fn to string_concat(pub_fn and "    EpFuture* fut = (EpFuture*)malloc(sizeof(EpFuture));\n")
+        set pub_fn to string_concat(pub_fn and "    fut->chan = create_channel();\n")
+        set pub_fn to string_concat(pub_fn and "    fut->completed = 0;\n")
+        set pub_fn to string_concat(pub_fn and "    fut->value = 0;\n")
+        set pub_fn to string_concat(pub_fn and "    ep_gc_register(fut, EP_OBJ_STRUCT);\n")
+        set pub_fn to string_concat(pub_fn and "    ")
+        set pub_fn to string_concat(pub_fn and get_fn_c_name(func))
+        set pub_fn to string_concat(pub_fn and "_async_args* args = (")
+        set pub_fn to string_concat(pub_fn and get_fn_c_name(func))
+        set pub_fn to string_concat(pub_fn and "_async_args*)malloc(sizeof(")
+        set pub_fn to string_concat(pub_fn and get_fn_c_name(func))
+        set pub_fn to string_concat(pub_fn and "_async_args));\n")
+        set pub_fn to string_concat(pub_fn and "    args->fut = fut;\n")
+        set j to 0
+        repeat while j < p_len:
+            set p_node to get_list(params and j)
+            set p_name to get_list(p_node and 0)
+            set pub_fn to string_concat(pub_fn and "    args->arg")
+            set pub_fn to string_concat(pub_fn and ep_int_to_str(j))
+            set pub_fn to string_concat(pub_fn and " = ")
+            set pub_fn to string_concat(pub_fn and p_name)
+            set pub_fn to string_concat(pub_fn and ";\n")
+            set j to j + 1
+        set pub_fn to string_concat(pub_fn and "    pthread_t thread;\n")
+        set pub_fn to string_concat(pub_fn and "    pthread_create(&thread, NULL, ")
+        set pub_fn to string_concat(pub_fn and get_fn_c_name(func))
+        set pub_fn to string_concat(pub_fn and "_async_wrapper, args);\n")
+        set pub_fn to string_concat(pub_fn and "    pthread_detach(thread);\n")
+        set pub_fn to string_concat(pub_fn and "    return (long long)fut;\n")
+        set pub_fn to string_concat(pub_fn and "}\n\n")
+        set ok to emit(state and pub_fn)
+        
+    set impl_name to get_fn_c_name(func)
+    if is_async == 1:
+        set impl_name to string_concat(get_fn_c_name(func) and "_impl")
+        
+    # Build function header: long long impl_name(long long p1, long long p2, ...)
     set header to "long long "
-    set header to string_concat(header and c_name)
+    set header to string_concat(header and impl_name)
     set header to string_concat(header and "(")
     
     set p_idx to 0
     repeat while p_idx < p_len:
-        set p_name to get_list(params and p_idx)
+        set p_node to get_list(params and p_idx)
+        set p_name to get_list(p_node and 0)
         set header to string_concat(header and "long long ")
         set header to string_concat(header and p_name)
         if p_idx < p_len - 1:
@@ -352,7 +529,8 @@ define gen_function with state and func:
         set is_param to 0
         set p_i to 0
         repeat while p_i < p_len:
-            set p_name to get_list(params and p_i)
+            set p_node to get_list(params and p_i)
+            set p_name to get_list(p_node and 0)
             if string_concat(var_name and "") equals string_concat(p_name and ""):
                 set is_param to 1
             set p_i to p_i + 1
@@ -367,6 +545,31 @@ define gen_function with state and func:
         
     set ok to emit(state and "    long long ret_val = 0;\n\n")
     
+    # Push GC roots
+    set gc_root_count to 0
+    set idx to 0
+    repeat while idx < num_vars:
+        set var_name to get_list(var_types_keys and idx)
+        set is_p to 0
+        set p_i to 0
+        repeat while p_i < p_len:
+            set p_node to get_list(params and p_i)
+            set p_name to get_list(p_node and 0)
+            if string_concat(var_name and "") equals string_concat(p_name and ""):
+                set is_p to 1
+            set p_i to p_i + 1
+        if is_p == 0:
+            set t to map_get(var_types_keys and var_types_values and var_name)
+            if t == 3 || t == 4: # TYPE_DYNSTR or TYPE_LIST
+                set root_line to "    ep_gc_push_root(&"
+                set root_line to string_concat(root_line and var_name)
+                set root_line to string_concat(root_line and ");\n")
+                set ok to emit(state and root_line)
+                set gc_root_count to gc_root_count + 1
+        set idx to idx + 1
+        
+    set ok to emit(state and "    ep_gc_maybe_collect();\n\n")
+    
     # Generate statements
     set body_len to length_list(body)
     set idx to 0
@@ -377,13 +580,20 @@ define gen_function with state and func:
         
     # Emit cleanup label and deallocations
     set ok to emit(state and "L_cleanup:\n")
+    if gc_root_count > 0:
+        set root_pop to "    ep_gc_pop_roots("
+        set root_pop to string_concat(root_pop and ep_int_to_str(gc_root_count))
+        set root_pop to string_concat(root_pop and ");\n")
+        set ok to emit(state and root_pop)
+        
     set idx to 0
     repeat while idx < num_vars:
         set var_name to get_list(var_types_keys and idx)
         set is_param to 0
         set p_i to 0
         repeat while p_i < p_len:
-            set p_name to get_list(params and p_i)
+            set p_node to get_list(params and p_i)
+            set p_name to get_list(p_node and 0)
             if string_concat(var_name and "") equals string_concat(p_name and ""):
                 set is_param to 1
             set p_i to p_i + 1
@@ -531,6 +741,67 @@ define gen_statement with state and stmt and var_keys and var_values:
         set ok to emit(state and "    }\n")
         return 0
         
+    if type == 15: # NODE_SPAWN
+        set func_name to get_list(stmt and 1)
+        set args to get_list(stmt and 2)
+        set args_len to length_list(args)
+        
+        set idx_val to get_codegen_spawn_index(state)
+        set ok to set_codegen_spawn_index(state and idx_val + 1)
+        
+        set ok to emit(state and "    {\n")
+        
+        set line to "        spawn_args_"
+        set line to string_concat(line and ep_int_to_str(idx_val))
+        set line to string_concat(line and "* s_args = malloc(sizeof(spawn_args_")
+        set line to string_concat(line and ep_int_to_str(idx_val))
+        set line to string_concat(line and "));\n")
+        set ok to emit(state and line)
+        
+        set j to 0
+        repeat while j < args_len:
+            set arg to get_list(args and j)
+            set arg_str to gen_expr(state and arg and var_keys and var_values)
+            set line to "        s_args->arg"
+            set line to string_concat(line and ep_int_to_str(j))
+            set line to string_concat(line and " = ")
+            set line to string_concat(line and arg_str)
+            set line to string_concat(line and ";\n")
+            set ok to emit(state and line)
+            set j to j + 1
+            
+        set ok to emit(state and "        pthread_t t;\n")
+        set line to "        pthread_create(&t, NULL, spawn_wrapper_"
+        set line to string_concat(line and ep_int_to_str(idx_val))
+        set line to string_concat(line and ", s_args);\n")
+        set ok to emit(state and line)
+        set ok to emit(state and "        pthread_detach(t);\n")
+        set ok to emit(state and "    }\n")
+        return 0
+        
+    if type == 16: # NODE_SEND
+        set chan to get_list(stmt and 1)
+        set val to get_list(stmt and 2)
+        set chan_str to gen_expr(state and chan and var_keys and var_values)
+        set val_str to gen_expr(state and val and var_keys and var_values)
+        set line to "    send_channel("
+        set line to string_concat(line and chan_str)
+        set line to string_concat(line and ", ")
+        set line to string_concat(line and val_str)
+        set line to string_concat(line and ");\n")
+        set ok to emit(state and line)
+        
+        set val_type to get_list(val and 0)
+        if val_type == 3: # NODE_IDENT
+            set name to get_list(val and 1)
+            set t to map_get(var_keys and var_values and name)
+            if t == 4: # TYPE_LIST = 4
+                set null_line to "    "
+                set null_line to string_concat(null_line and name)
+                set null_line to string_concat(null_line and " = 0;\n")
+                set ok to emit(state and null_line)
+        return 0
+        
     return 0
 
 define gen_expr with state and expr and var_keys and var_values:
@@ -538,7 +809,7 @@ define gen_expr with state and expr and var_keys and var_values:
     
     if type == 1: # NODE_INT
         set val to get_list(expr and 1)
-        return int_to_string(val)
+        return ep_int_to_str(val)
         
     if type == 2: # NODE_STR
         set val to get_list(expr and 1)
@@ -622,13 +893,12 @@ define gen_expr with state and expr and var_keys and var_values:
             if op == 4:
                 set op_str to "!="
                 
-            set res to "("
+            set res to ""
             set res to string_concat(res and left_str)
             set res to string_concat(res and " ")
             set res to string_concat(res and op_str)
             set res to string_concat(res and " ")
             set res to string_concat(res and right_str)
-            set res to string_concat(res and ")")
             return res
             
     if type == 14: # NODE_LOGICAL
@@ -666,24 +936,29 @@ define gen_expr with state and expr and var_keys and var_values:
             set arg to get_list(args and idx)
             set arg_val to gen_expr(state and arg and var_keys and var_values)
             
-            set casted to arg_val
-            
+            set needs_cast to 0
             if "read_file_content" equals name || "string_length" equals name || "display_string" equals name || "run_command" equals name || "ep_md5" equals name || "ep_sha256" equals name || "ep_net_connect" equals name:
                 if idx == 0:
-                    set casted to string_concat("(char*)" and arg_val)
+                    set needs_cast to 1
             else:
                 if "get_character" equals name || "substring" equals name:
                     if idx == 0:
-                        set casted to string_concat("(char*)" and arg_val)
+                        set needs_cast to 1
                 else:
                     if "write_file_content" equals name:
                         if idx == 0 || idx == 1:
-                            set casted to string_concat("(char*)" and arg_val)
+                            set needs_cast to 1
                     else:
                         if "ep_net_send" equals name:
                             if idx == 1:
-                                set casted to string_concat("(char*)" and arg_val)
-                            
+                                set needs_cast to 1
+                                
+            set casted to ""
+            if needs_cast == 1:
+                set casted to string_concat("(char*)" and arg_val)
+            else:
+                set casted to arg_val
+                
             set ok to append_list(formatted_args and casted)
             set idx to idx + 1
             
@@ -709,6 +984,29 @@ define gen_expr with state and expr and var_keys and var_values:
         else:
             return call_str
             
+    if type == 17: # NODE_CHANNEL
+        return "create_channel()"
+        
+    if type == 18: # NODE_RECEIVE
+        set chan to get_list(expr and 1)
+        set chan_str to gen_expr(state and chan and var_keys and var_values)
+        set res to "receive_channel("
+        set res to string_concat(res and chan_str)
+        set res to string_concat(res and ")")
+        return res
+        
+    if type == 20: # NODE_BORROW
+        set inner to get_list(expr and 1)
+        return gen_expr(state and inner and var_keys and var_values)
+        
+    if type == 21: # NODE_AWAIT
+        set inner to get_list(expr and 1)
+        set inner_str to gen_expr(state and inner and var_keys and var_values)
+        set res to "({ EpFuture* _fut = (EpFuture*)"
+        set res to string_concat(res and inner_str)
+        set res to string_concat(res and "; long long _res = 0; if (_fut) { if (!_fut->completed) { _res = receive_channel(_fut->chan); } else { _res = _fut->value; } } _res; })")
+        return res
+            
     return ""
 
 define get_c_runtime_source:
@@ -716,13 +1014,459 @@ define get_c_runtime_source:
     set ok to append_list(lines and "#include <stdio.h>\n")
     set ok to append_list(lines and "#include <stdlib.h>\n")
     set ok to append_list(lines and "#include <string.h>\n")
-    set ok to append_list(lines and "#include <sys/socket.h>\n")
-    set ok to append_list(lines and "#include <netinet/in.h>\n")
-    set ok to append_list(lines and "#include <arpa/inet.h>\n")
-    set ok to append_list(lines and "#include <unistd.h>\n")
-    set ok to append_list(lines and "#include <netdb.h>\n\n")
-
-    # Networking standard library primitives
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "#ifdef _WIN32\n")
+    set ok to append_list(lines and "  #include <winsock2.h>\n")
+    set ok to append_list(lines and "  #include <ws2tcpip.h>\n")
+    set ok to append_list(lines and "  #include <windows.h>\n")
+    set ok to append_list(lines and "  #pragma comment(lib, \"ws2_32.lib\")\n")
+    set ok to append_list(lines and "  typedef HANDLE ep_thread_t;\n")
+    set ok to append_list(lines and "  typedef CRITICAL_SECTION ep_mutex_t;\n")
+    set ok to append_list(lines and "  typedef CONDITION_VARIABLE ep_cond_t;\n")
+    set ok to append_list(lines and "  #define ep_mutex_init(m) InitializeCriticalSection(m)\n")
+    set ok to append_list(lines and "  #define ep_mutex_lock(m) EnterCriticalSection(m)\n")
+    set ok to append_list(lines and "  #define ep_mutex_unlock(m) LeaveCriticalSection(m)\n")
+    set ok to append_list(lines and "  #define ep_cond_init(c) InitializeConditionVariable(c)\n")
+    set ok to append_list(lines and "  #define ep_cond_wait(c, m) SleepConditionVariableCS(c, m, INFINITE)\n")
+    set ok to append_list(lines and "  #define ep_cond_signal(c) WakeConditionVariable(c)\n")
+    set ok to append_list(lines and "#else\n")
+    set ok to append_list(lines and "  #include <sys/socket.h>\n")
+    set ok to append_list(lines and "  #include <netinet/in.h>\n")
+    set ok to append_list(lines and "  #include <arpa/inet.h>\n")
+    set ok to append_list(lines and "  #include <unistd.h>\n")
+    set ok to append_list(lines and "  #include <netdb.h>\n")
+    set ok to append_list(lines and "  #include <pthread.h>\n")
+    set ok to append_list(lines and "  typedef pthread_t ep_thread_t;\n")
+    set ok to append_list(lines and "  typedef pthread_mutex_t ep_mutex_t;\n")
+    set ok to append_list(lines and "  typedef pthread_cond_t ep_cond_t;\n")
+    set ok to append_list(lines and "  #define ep_mutex_init(m) pthread_mutex_init(m, NULL)\n")
+    set ok to append_list(lines and "  #define ep_mutex_lock(m) pthread_mutex_lock(m)\n")
+    set ok to append_list(lines and "  #define ep_mutex_unlock(m) pthread_mutex_unlock(m)\n")
+    set ok to append_list(lines and "  #define ep_cond_init(c) pthread_cond_init(c, NULL)\n")
+    set ok to append_list(lines and "  #define ep_cond_wait(c, m) pthread_cond_wait(c, m)\n")
+    set ok to append_list(lines and "  #define ep_cond_signal(c) pthread_cond_signal(c)\n")
+    set ok to append_list(lines and "#endif\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "/* ========== Ernos Mark-and-Sweep Garbage Collector ========== */\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "#include <setjmp.h>\n")
+    set ok to append_list(lines and "#include <pthread.h>\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "typedef enum {\n")
+    set ok to append_list(lines and "    EP_OBJ_LIST,\n")
+    set ok to append_list(lines and "    EP_OBJ_STRING,\n")
+    set ok to append_list(lines and "    EP_OBJ_STRUCT,\n")
+    set ok to append_list(lines and "    EP_OBJ_CLOSURE\n")
+    set ok to append_list(lines and "} EpObjKind;\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "typedef struct EpGCObject {\n")
+    set ok to append_list(lines and "    EpObjKind kind;\n")
+    set ok to append_list(lines and "    int marked;\n")
+    set ok to append_list(lines and "    void* ptr;                /* actual allocation pointer */\n")
+    set ok to append_list(lines and "    long long size;           /* payload size for structs */\n")
+    set ok to append_list(lines and "    long long num_fields;     /* number of fields for structs (each is long long) */\n")
+    set ok to append_list(lines and "    struct EpGCObject* next;  /* intrusive linked list */\n")
+    set ok to append_list(lines and "} EpGCObject;\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "typedef struct {\n")
+    set ok to append_list(lines and "    long long chan;\n")
+    set ok to append_list(lines and "    int completed;\n")
+    set ok to append_list(lines and "    long long value;\n")
+    set ok to append_list(lines and "} EpFuture;\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "/* GC globals */\n")
+    set ok to append_list(lines and "static EpGCObject* ep_gc_head = NULL;\n")
+    set ok to append_list(lines and "static long long ep_gc_count = 0;\n")
+    set ok to append_list(lines and "static long long ep_gc_threshold = 256;\n")
+    set ok to append_list(lines and "static int ep_gc_enabled = 1;\n")
+    set ok to append_list(lines and "static pthread_mutex_t ep_gc_mutex = PTHREAD_MUTEX_INITIALIZER;\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "/* Thread registry for conservative stack scanning in multi-threaded environment */\n")
+    set ok to append_list(lines and "#define EP_MAX_THREADS 256\n")
+    set ok to append_list(lines and "static __thread void* volatile ep_thread_local_top = NULL;\n")
+    set ok to append_list(lines and "static __thread void* ep_thread_local_bottom = NULL;\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "static void* volatile* ep_thread_tops[EP_MAX_THREADS];\n")
+    set ok to append_list(lines and "static void* ep_thread_bottoms[EP_MAX_THREADS];\n")
+    set ok to append_list(lines and "static int ep_thread_active[EP_MAX_THREADS];\n")
+    set ok to append_list(lines and "static int ep_num_threads = 0;\n")
+    set ok to append_list(lines and "static pthread_mutex_t ep_thread_registry_mutex = PTHREAD_MUTEX_INITIALIZER;\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "static void ep_gc_register_thread(void* stack_bottom) {\n")
+    set ok to append_list(lines and "    ep_thread_local_bottom = stack_bottom;\n")
+    set ok to append_list(lines and "    ep_thread_local_top = stack_bottom;\n")
+    set ok to append_list(lines and "    \n")
+    set ok to append_list(lines and "    pthread_mutex_lock(&ep_thread_registry_mutex);\n")
+    set ok to append_list(lines and "    int slot = -1;\n")
+    set ok to append_list(lines and "    for (int i = 0; i < ep_num_threads; i++) {\n")
+    set ok to append_list(lines and "        if (!ep_thread_active[i]) {\n")
+    set ok to append_list(lines and "            slot = i;\n")
+    set ok to append_list(lines and "            break;\n")
+    set ok to append_list(lines and "        }\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    if (slot == -1 && ep_num_threads < EP_MAX_THREADS) {\n")
+    set ok to append_list(lines and "        slot = ep_num_threads++;\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    if (slot != -1) {\n")
+    set ok to append_list(lines and "        ep_thread_tops[slot] = &ep_thread_local_top;\n")
+    set ok to append_list(lines and "        ep_thread_bottoms[slot] = stack_bottom;\n")
+    set ok to append_list(lines and "        ep_thread_active[slot] = 1;\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    pthread_mutex_unlock(&ep_thread_registry_mutex);\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "static void ep_gc_unregister_thread(void) {\n")
+    set ok to append_list(lines and "    pthread_mutex_lock(&ep_thread_registry_mutex);\n")
+    set ok to append_list(lines and "    pthread_t self = pthread_self();\n")
+    set ok to append_list(lines and "    for (int i = 0; i < ep_num_threads; i++) {\n")
+    set ok to append_list(lines and "        if (ep_thread_active[i] && ep_thread_tops[i] == &ep_thread_local_top) {\n")
+    set ok to append_list(lines and "            ep_thread_active[i] = 0;\n")
+    set ok to append_list(lines and "            break;\n")
+    set ok to append_list(lines and "        }\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    pthread_mutex_unlock(&ep_thread_registry_mutex);\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "#define EP_GC_UPDATE_TOP() { volatile int _dummy; ep_thread_local_top = (void*)&_dummy; }\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "/* Simple open-addressed hash map with linear probing for O(1) GC object lookup */\n")
+    set ok to append_list(lines and "typedef struct {\n")
+    set ok to append_list(lines and "    void* key;\n")
+    set ok to append_list(lines and "    EpGCObject* value;\n")
+    set ok to append_list(lines and "} EpGCEntry;\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "static EpGCEntry* ep_gc_table = NULL;\n")
+    set ok to append_list(lines and "static long long ep_gc_table_cap = 0;\n")
+    set ok to append_list(lines and "static long long ep_gc_table_size = 0;\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "static void ep_gc_table_insert(void* key, EpGCObject* value) {\n")
+    set ok to append_list(lines and "    if (ep_gc_table_size * 2 >= ep_gc_table_cap) {\n")
+    set ok to append_list(lines and "        long long old_cap = ep_gc_table_cap;\n")
+    set ok to append_list(lines and "        long long new_cap = old_cap == 0 ? 512 : old_cap * 2;\n")
+    set ok to append_list(lines and "        EpGCEntry* new_table = (EpGCEntry*)calloc(new_cap, sizeof(EpGCEntry));\n")
+    set ok to append_list(lines and "        for (long long i = 0; i < old_cap; i++) {\n")
+    set ok to append_list(lines and "            if (ep_gc_table[i].key != NULL) {\n")
+    set ok to append_list(lines and "                long long idx = ((uintptr_t)ep_gc_table[i].key) % new_cap;\n")
+    set ok to append_list(lines and "                while (new_table[idx].key != NULL) {\n")
+    set ok to append_list(lines and "                    idx = (idx + 1) % new_cap;\n")
+    set ok to append_list(lines and "                }\n")
+    set ok to append_list(lines and "                new_table[idx] = ep_gc_table[i];\n")
+    set ok to append_list(lines and "            }\n")
+    set ok to append_list(lines and "        }\n")
+    set ok to append_list(lines and "        free(ep_gc_table);\n")
+    set ok to append_list(lines and "        ep_gc_table = new_table;\n")
+    set ok to append_list(lines and "        ep_gc_table_cap = new_cap;\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    \n")
+    set ok to append_list(lines and "    long long idx = ((uintptr_t)key) % ep_gc_table_cap;\n")
+    set ok to append_list(lines and "    while (ep_gc_table[idx].key != NULL) {\n")
+    set ok to append_list(lines and "        if (ep_gc_table[idx].key == key) {\n")
+    set ok to append_list(lines and "            ep_gc_table[idx].value = value;\n")
+    set ok to append_list(lines and "            return;\n")
+    set ok to append_list(lines and "        }\n")
+    set ok to append_list(lines and "        idx = (idx + 1) % ep_gc_table_cap;\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    ep_gc_table[idx].key = key;\n")
+    set ok to append_list(lines and "    ep_gc_table[idx].value = value;\n")
+    set ok to append_list(lines and "    ep_gc_table_size++;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "static EpGCObject* ep_gc_table_get(void* key) {\n")
+    set ok to append_list(lines and "    if (ep_gc_table_cap == 0) return NULL;\n")
+    set ok to append_list(lines and "    long long idx = ((uintptr_t)key) % ep_gc_table_cap;\n")
+    set ok to append_list(lines and "    while (ep_gc_table[idx].key != NULL) {\n")
+    set ok to append_list(lines and "        if (ep_gc_table[idx].key == key) return ep_gc_table[idx].value;\n")
+    set ok to append_list(lines and "        idx = (idx + 1) % ep_gc_table_cap;\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    return NULL;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "static void ep_gc_table_remove(void* key) {\n")
+    set ok to append_list(lines and "    if (ep_gc_table_cap == 0) return;\n")
+    set ok to append_list(lines and "    long long idx = ((uintptr_t)key) % ep_gc_table_cap;\n")
+    set ok to append_list(lines and "    while (ep_gc_table[idx].key != NULL) {\n")
+    set ok to append_list(lines and "        if (ep_gc_table[idx].key == key) {\n")
+    set ok to append_list(lines and "            ep_gc_table[idx].key = NULL;\n")
+    set ok to append_list(lines and "            ep_gc_table[idx].value = NULL;\n")
+    set ok to append_list(lines and "            ep_gc_table_size--;\n")
+    set ok to append_list(lines and "            long long next_idx = (idx + 1) % ep_gc_table_cap;\n")
+    set ok to append_list(lines and "            while (ep_gc_table[next_idx].key != NULL) {\n")
+    set ok to append_list(lines and "                void* rehash_key = ep_gc_table[next_idx].key;\n")
+    set ok to append_list(lines and "                EpGCObject* rehash_val = ep_gc_table[next_idx].value;\n")
+    set ok to append_list(lines and "                ep_gc_table[next_idx].key = NULL;\n")
+    set ok to append_list(lines and "                ep_gc_table[next_idx].value = NULL;\n")
+    set ok to append_list(lines and "                ep_gc_table_size--;\n")
+    set ok to append_list(lines and "                ep_gc_table_insert(rehash_key, rehash_val);\n")
+    set ok to append_list(lines and "                next_idx = (next_idx + 1) % ep_gc_table_cap;\n")
+    set ok to append_list(lines and "            }\n")
+    set ok to append_list(lines and "            return;\n")
+    set ok to append_list(lines and "        }\n")
+    set ok to append_list(lines and "        idx = (idx + 1) % ep_gc_table_cap;\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "/* Dummy shadow stack API for compatibility with compiler-generated code */\n")
+    set ok to append_list(lines and "static void ep_gc_push_root(long long* root) { (void)root; }\n")
+    set ok to append_list(lines and "static void ep_gc_pop_roots(long long count) { (void)count; }\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "/* Register a new GC object */\n")
+    set ok to append_list(lines and "static EpGCObject* ep_gc_register(void* ptr, EpObjKind kind) {\n")
+    set ok to append_list(lines and "    if (!ptr) return NULL;\n")
+    set ok to append_list(lines and "    pthread_mutex_lock(&ep_gc_mutex);\n")
+    set ok to append_list(lines and "    EpGCObject* obj = (EpGCObject*)malloc(sizeof(EpGCObject));\n")
+    set ok to append_list(lines and "    if (!obj) {\n")
+    set ok to append_list(lines and "        pthread_mutex_unlock(&ep_gc_mutex);\n")
+    set ok to append_list(lines and "        return NULL;\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    obj->kind = kind;\n")
+    set ok to append_list(lines and "    obj->marked = 0;\n")
+    set ok to append_list(lines and "    obj->ptr = ptr;\n")
+    set ok to append_list(lines and "    obj->size = 0;\n")
+    set ok to append_list(lines and "    obj->num_fields = 0;\n")
+    set ok to append_list(lines and "    obj->next = ep_gc_head;\n")
+    set ok to append_list(lines and "    ep_gc_head = obj;\n")
+    set ok to append_list(lines and "    ep_gc_count++;\n")
+    set ok to append_list(lines and "    ep_gc_table_insert(ptr, obj);\n")
+    set ok to append_list(lines and "    pthread_mutex_unlock(&ep_gc_mutex);\n")
+    set ok to append_list(lines and "    return obj;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "/* Find GC object by pointer */\n")
+    set ok to append_list(lines and "static EpGCObject* ep_gc_find(void* ptr) {\n")
+    set ok to append_list(lines and "    return ep_gc_table_get(ptr);\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "/* Forward declarations for list type (needed by GC mark) */\n")
+    set ok to append_list(lines and "typedef struct {\n")
+    set ok to append_list(lines and "    long long* data;\n")
+    set ok to append_list(lines and "    long long length;\n")
+    set ok to append_list(lines and "    long long capacity;\n")
+    set ok to append_list(lines and "} EpList;\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "/* Mark a single object and recursively mark its children */\n")
+    set ok to append_list(lines and "static void ep_gc_mark_object(void* ptr) {\n")
+    set ok to append_list(lines and "    if (!ptr) return;\n")
+    set ok to append_list(lines and "    EpGCObject* obj = ep_gc_find(ptr);\n")
+    set ok to append_list(lines and "    if (!obj || obj->marked) return;\n")
+    set ok to append_list(lines and "    obj->marked = 1;\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "    if (obj->kind == EP_OBJ_LIST) {\n")
+    set ok to append_list(lines and "        EpList* list = (EpList*)ptr;\n")
+    set ok to append_list(lines and "        for (long long i = 0; i < list->length; i++) {\n")
+    set ok to append_list(lines and "            long long val = list->data[i];\n")
+    set ok to append_list(lines and "            if (val != 0) {\n")
+    set ok to append_list(lines and "                ep_gc_mark_object((void*)val);\n")
+    set ok to append_list(lines and "            }\n")
+    set ok to append_list(lines and "        }\n")
+    set ok to append_list(lines and "    } else if (obj->kind == EP_OBJ_STRUCT) {\n")
+    set ok to append_list(lines and "        long long* fields = (long long*)ptr;\n")
+    set ok to append_list(lines and "        for (long long i = 0; i < obj->num_fields; i++) {\n")
+    set ok to append_list(lines and "            if (fields[i] != 0) {\n")
+    set ok to append_list(lines and "                ep_gc_mark_object((void*)fields[i]);\n")
+    set ok to append_list(lines and "            }\n")
+    set ok to append_list(lines and "        }\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "/* Mark phase: traverse from stack roots of all registered threads */\n")
+    set ok to append_list(lines and "static void ep_gc_mark(void) {\n")
+    set ok to append_list(lines and "    jmp_buf regs;\n")
+    set ok to append_list(lines and "    memset(&regs, 0, sizeof(regs));\n")
+    set ok to append_list(lines and "    setjmp(regs); /* Spill registers of the current thread */\n")
+    set ok to append_list(lines and "    \n")
+    set ok to append_list(lines and "    // Update stack top of current thread\n")
+    set ok to append_list(lines and "    volatile void* stack_top;\n")
+    set ok to append_list(lines and "    stack_top = (void*)&stack_top;\n")
+    set ok to append_list(lines and "    ep_thread_local_top = (void*)stack_top;\n")
+    set ok to append_list(lines and "    \n")
+    set ok to append_list(lines and "    pthread_mutex_lock(&ep_thread_registry_mutex);\n")
+    set ok to append_list(lines and "    for (int i = 0; i < ep_num_threads; i++) {\n")
+    set ok to append_list(lines and "        if (ep_thread_active[i]) {\n")
+    set ok to append_list(lines and "            void** start = (void**)*ep_thread_tops[i];\n")
+    set ok to append_list(lines and "            void** end = (void**)ep_thread_bottoms[i];\n")
+    set ok to append_list(lines and "            if (start && end) {\n")
+    set ok to append_list(lines and "                if (start > end) {\n")
+    set ok to append_list(lines and "                    void** tmp = start;\n")
+    set ok to append_list(lines and "                    start = end;\n")
+    set ok to append_list(lines and "                    end = tmp;\n")
+    set ok to append_list(lines and "                }\n")
+    set ok to append_list(lines and "                for (void** cur = start; cur < end; cur++) {\n")
+    set ok to append_list(lines and "                    void* ptr = *cur;\n")
+    set ok to append_list(lines and "                    if (ptr) {\n")
+    set ok to append_list(lines and "                        ep_gc_mark_object(ptr);\n")
+    set ok to append_list(lines and "                    }\n")
+    set ok to append_list(lines and "                }\n")
+    set ok to append_list(lines and "            }\n")
+    set ok to append_list(lines and "        }\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    pthread_mutex_unlock(&ep_thread_registry_mutex);\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "/* Sweep phase: free unmarked objects */\n")
+    set ok to append_list(lines and "static void ep_gc_sweep(void) {\n")
+    set ok to append_list(lines and "    EpGCObject** cur = &ep_gc_head;\n")
+    set ok to append_list(lines and "    while (*cur) {\n")
+    set ok to append_list(lines and "        if (!(*cur)->marked) {\n")
+    set ok to append_list(lines and "            EpGCObject* garbage = *cur;\n")
+    set ok to append_list(lines and "            *cur = garbage->next;\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "            ep_gc_table_remove(garbage->ptr);\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "            if (garbage->kind == EP_OBJ_LIST) {\n")
+    set ok to append_list(lines and "                EpList* list = (EpList*)garbage->ptr;\n")
+    set ok to append_list(lines and "                if (list) {\n")
+    set ok to append_list(lines and "                    free(list->data);\n")
+    set ok to append_list(lines and "                    free(list);\n")
+    set ok to append_list(lines and "                }\n")
+    set ok to append_list(lines and "            } else if (garbage->kind == EP_OBJ_STRING) {\n")
+    set ok to append_list(lines and "                free(garbage->ptr);\n")
+    set ok to append_list(lines and "            } else if (garbage->kind == EP_OBJ_STRUCT) {\n")
+    set ok to append_list(lines and "                free(garbage->ptr);\n")
+    set ok to append_list(lines and "            } else if (garbage->kind == EP_OBJ_CLOSURE) {\n")
+    set ok to append_list(lines and "                free(garbage->ptr);\n")
+    set ok to append_list(lines and "            }\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "            free(garbage);\n")
+    set ok to append_list(lines and "            ep_gc_count--;\n")
+    set ok to append_list(lines and "        } else {\n")
+    set ok to append_list(lines and "            (*cur)->marked = 0;  /* reset for next cycle */\n")
+    set ok to append_list(lines and "            cur = &(*cur)->next;\n")
+    set ok to append_list(lines and "        }\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "/* Run a full GC collection */\n")
+    set ok to append_list(lines and "static void ep_gc_collect(void) {\n")
+    set ok to append_list(lines and "    if (!ep_gc_enabled) return;\n")
+    set ok to append_list(lines and "    ep_gc_mark();\n")
+    set ok to append_list(lines and "    ep_gc_sweep();\n")
+    set ok to append_list(lines and "    ep_gc_threshold = ep_gc_count * 2;\n")
+    set ok to append_list(lines and "    if (ep_gc_threshold < 256) ep_gc_threshold = 256;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "/* Maybe trigger GC if we've exceeded threshold */\n")
+    set ok to append_list(lines and "static void ep_gc_maybe_collect(void) {\n")
+    set ok to append_list(lines and "    EP_GC_UPDATE_TOP();\n")
+    set ok to append_list(lines and "    pthread_mutex_lock(&ep_gc_mutex);\n")
+    set ok to append_list(lines and "    if (ep_gc_count >= ep_gc_threshold) {\n")
+    set ok to append_list(lines and "        ep_gc_collect();\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    pthread_mutex_unlock(&ep_gc_mutex);\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "/* Unregister an object (for explicit free — removes from GC tracking) */\n")
+    set ok to append_list(lines and "static void ep_gc_unregister(void* ptr) {\n")
+    set ok to append_list(lines and "    if (!ptr) return;\n")
+    set ok to append_list(lines and "    pthread_mutex_lock(&ep_gc_mutex);\n")
+    set ok to append_list(lines and "    ep_gc_table_remove(ptr);\n")
+    set ok to append_list(lines and "    EpGCObject** cur = &ep_gc_head;\n")
+    set ok to append_list(lines and "    while (*cur) {\n")
+    set ok to append_list(lines and "        if ((*cur)->ptr == ptr) {\n")
+    set ok to append_list(lines and "            EpGCObject* found = *cur;\n")
+    set ok to append_list(lines and "            *cur = found->next;\n")
+    set ok to append_list(lines and "            free(found);\n")
+    set ok to append_list(lines and "            ep_gc_count--;\n")
+    set ok to append_list(lines and "            pthread_mutex_unlock(&ep_gc_mutex);\n")
+    set ok to append_list(lines and "            return;\n")
+    set ok to append_list(lines and "        }\n")
+    set ok to append_list(lines and "        cur = &(*cur)->next;\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    pthread_mutex_unlock(&ep_gc_mutex);\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "/* Cleanup all remaining GC objects (called at program exit) */\n")
+    set ok to append_list(lines and "static void ep_gc_shutdown(void) {\n")
+    set ok to append_list(lines and "    ep_gc_enabled = 0;\n")
+    set ok to append_list(lines and "    EpGCObject* cur = ep_gc_head;\n")
+    set ok to append_list(lines and "    while (cur) {\n")
+    set ok to append_list(lines and "        EpGCObject* next = cur->next;\n")
+    set ok to append_list(lines and "        if (cur->kind == EP_OBJ_LIST) {\n")
+    set ok to append_list(lines and "            EpList* list = (EpList*)cur->ptr;\n")
+    set ok to append_list(lines and "            if (list) { free(list->data); free(list); }\n")
+    set ok to append_list(lines and "        } else {\n")
+    set ok to append_list(lines and "            free(cur->ptr);\n")
+    set ok to append_list(lines and "        }\n")
+    set ok to append_list(lines and "        free(cur);\n")
+    set ok to append_list(lines and "        cur = next;\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    ep_gc_head = NULL;\n")
+    set ok to append_list(lines and "    ep_gc_count = 0;\n")
+    set ok to append_list(lines and "    if (ep_gc_table) {\n")
+    set ok to append_list(lines and "        free(ep_gc_table);\n")
+    set ok to append_list(lines and "        ep_gc_table = NULL;\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    ep_gc_table_cap = 0;\n")
+    set ok to append_list(lines and "    ep_gc_table_size = 0;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "/* ========== End Garbage Collector ========== */\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long create_list(void);\n")
+    set ok to append_list(lines and "long long append_list(long long list_ptr, long long value);\n")
+    set ok to append_list(lines and "long long get_list(long long list_ptr, long long index);\n")
+    set ok to append_list(lines and "long long set_list(long long list_ptr, long long index, long long value);\n")
+    set ok to append_list(lines and "long long length_list(long long list_ptr);\n")
+    set ok to append_list(lines and "long long free_list(long long list_ptr);\n")
+    set ok to append_list(lines and "long long pop_list(long long list_ptr);\n")
+    set ok to append_list(lines and "char* string_from_list(long long list_ptr);\n")
+    set ok to append_list(lines and "long long string_length(const char* s);\n")
+    set ok to append_list(lines and "long long display_string(const char* s);\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "typedef struct {\n")
+    set ok to append_list(lines and "    long long* data;\n")
+    set ok to append_list(lines and "    long long capacity;\n")
+    set ok to append_list(lines and "    long long head;\n")
+    set ok to append_list(lines and "    long long tail;\n")
+    set ok to append_list(lines and "    long long size;\n")
+    set ok to append_list(lines and "    ep_mutex_t mutex;\n")
+    set ok to append_list(lines and "    ep_cond_t cond_recv;\n")
+    set ok to append_list(lines and "    ep_cond_t cond_send;\n")
+    set ok to append_list(lines and "} EpChannel;\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long create_channel(void) {\n")
+    set ok to append_list(lines and "    EpChannel* chan = malloc(sizeof(EpChannel));\n")
+    set ok to append_list(lines and "    if (!chan) return 0;\n")
+    set ok to append_list(lines and "    chan->capacity = 1024;\n")
+    set ok to append_list(lines and "    chan->data = malloc(chan->capacity * sizeof(long long));\n")
+    set ok to append_list(lines and "    chan->head = 0;\n")
+    set ok to append_list(lines and "    chan->tail = 0;\n")
+    set ok to append_list(lines and "    chan->size = 0;\n")
+    set ok to append_list(lines and "    ep_mutex_init(&chan->mutex);\n")
+    set ok to append_list(lines and "    ep_cond_init(&chan->cond_recv);\n")
+    set ok to append_list(lines and "    ep_cond_init(&chan->cond_send);\n")
+    set ok to append_list(lines and "    return (long long)chan;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long send_channel(long long chan_ptr, long long value) {\n")
+    set ok to append_list(lines and "    EpChannel* chan = (EpChannel*)chan_ptr;\n")
+    set ok to append_list(lines and "    if (!chan) return 0;\n")
+    set ok to append_list(lines and "    ep_mutex_lock(&chan->mutex);\n")
+    set ok to append_list(lines and "    while (chan->size >= chan->capacity) {\n")
+    set ok to append_list(lines and "        ep_cond_wait(&chan->cond_send, &chan->mutex);\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    chan->data[chan->tail] = value;\n")
+    set ok to append_list(lines and "    chan->tail = (chan->tail + 1) % chan->capacity;\n")
+    set ok to append_list(lines and "    chan->size += 1;\n")
+    set ok to append_list(lines and "    ep_cond_signal(&chan->cond_recv);\n")
+    set ok to append_list(lines and "    ep_mutex_unlock(&chan->mutex);\n")
+    set ok to append_list(lines and "    return value;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long receive_channel(long long chan_ptr) {\n")
+    set ok to append_list(lines and "    EpChannel* chan = (EpChannel*)chan_ptr;\n")
+    set ok to append_list(lines and "    if (!chan) return 0;\n")
+    set ok to append_list(lines and "    ep_mutex_lock(&chan->mutex);\n")
+    set ok to append_list(lines and "    while (chan->size <= 0) {\n")
+    set ok to append_list(lines and "        ep_cond_wait(&chan->cond_recv, &chan->mutex);\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    long long value = chan->data[chan->head];\n")
+    set ok to append_list(lines and "    chan->head = (chan->head + 1) % chan->capacity;\n")
+    set ok to append_list(lines and "    chan->size -= 1;\n")
+    set ok to append_list(lines and "    ep_cond_signal(&chan->cond_send);\n")
+    set ok to append_list(lines and "    ep_mutex_unlock(&chan->mutex);\n")
+    set ok to append_list(lines and "    return value;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long ep_net_connect(const char* host, long long port) {\n")
     set ok to append_list(lines and "    int sockfd = socket(AF_INET, SOCK_STREAM, 0);\n")
     set ok to append_list(lines and "    if (sockfd < 0) return -1;\n")
@@ -741,8 +1485,8 @@ define get_c_runtime_source:
     set ok to append_list(lines and "        return -1;\n")
     set ok to append_list(lines and "    }\n")
     set ok to append_list(lines and "    return sockfd;\n")
-    set ok to append_list(lines and "}\n\n")
-
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long ep_net_listen(long long port) {\n")
     set ok to append_list(lines and "    int sockfd = socket(AF_INET, SOCK_STREAM, 0);\n")
     set ok to append_list(lines and "    if (sockfd < 0) return -1;\n")
@@ -762,20 +1506,20 @@ define get_c_runtime_source:
     set ok to append_list(lines and "        return -1;\n")
     set ok to append_list(lines and "    }\n")
     set ok to append_list(lines and "    return sockfd;\n")
-    set ok to append_list(lines and "}\n\n")
-
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long ep_net_accept(long long server_fd) {\n")
     set ok to append_list(lines and "    struct sockaddr_in cli_addr;\n")
     set ok to append_list(lines and "    socklen_t clilen = sizeof(cli_addr);\n")
     set ok to append_list(lines and "    int newsockfd = accept((int)server_fd, (struct sockaddr*)&cli_addr, &clilen);\n")
     set ok to append_list(lines and "    return newsockfd;\n")
-    set ok to append_list(lines and "}\n\n")
-
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long ep_net_send(long long fd, const char* data) {\n")
     set ok to append_list(lines and "    if (!data) return 0;\n")
     set ok to append_list(lines and "    return send((int)fd, data, strlen(data), 0);\n")
-    set ok to append_list(lines and "}\n\n")
-
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "char* ep_net_recv(long long fd, long long max_len) {\n")
     set ok to append_list(lines and "    char* buf = malloc(max_len + 1);\n")
     set ok to append_list(lines and "    if (!buf) {\n")
@@ -787,28 +1531,463 @@ define get_c_runtime_source:
     set ok to append_list(lines and "    if (n < 0) n = 0;\n")
     set ok to append_list(lines and "    buf[n] = '\\0';\n")
     set ok to append_list(lines and "    return buf;\n")
-    set ok to append_list(lines and "}\n\n")
-
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long ep_net_close(long long fd) {\n")
     set ok to append_list(lines and "    return close((int)fd);\n")
-    set ok to append_list(lines and "}\n\n")
-
-    # SHA256 standard library implementation
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long ep_sleep_ms(long long ms) {\n")
+    set ok to append_list(lines and "    usleep((useconds_t)(ms * 1000));\n")
+    set ok to append_list(lines and "    return 0;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "unsigned long hash_string(const char* str) {\n")
+    set ok to append_list(lines and "    unsigned long hash = 5381;\n")
+    set ok to append_list(lines and "    int c;\n")
+    set ok to append_list(lines and "    while ((c = *str++)) {\n")
+    set ok to append_list(lines and "        hash = ((hash << 5) + hash) + c;\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    return hash;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "typedef struct {\n")
+    set ok to append_list(lines and "    char* key;\n")
+    set ok to append_list(lines and "    long long value;\n")
+    set ok to append_list(lines and "    int used;\n")
+    set ok to append_list(lines and "} EpMapEntry;\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "typedef struct {\n")
+    set ok to append_list(lines and "    EpMapEntry* entries;\n")
+    set ok to append_list(lines and "    long long capacity;\n")
+    set ok to append_list(lines and "    long long size;\n")
+    set ok to append_list(lines and "} EpMap;\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long create_map(void) {\n")
+    set ok to append_list(lines and "    EpMap* map = malloc(sizeof(EpMap));\n")
+    set ok to append_list(lines and "    if (!map) return 0;\n")
+    set ok to append_list(lines and "    map->capacity = 16;\n")
+    set ok to append_list(lines and "    map->size = 0;\n")
+    set ok to append_list(lines and "    map->entries = calloc(map->capacity, sizeof(EpMapEntry));\n")
+    set ok to append_list(lines and "    if (!map->entries) {\n")
+    set ok to append_list(lines and "        free(map);\n")
+    set ok to append_list(lines and "        return 0;\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    return (long long)map;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "static void map_resize(EpMap* map, long long new_capacity) {\n")
+    set ok to append_list(lines and "    EpMapEntry* old_entries = map->entries;\n")
+    set ok to append_list(lines and "    long long old_capacity = map->capacity;\n")
+    set ok to append_list(lines and "    map->capacity = new_capacity;\n")
+    set ok to append_list(lines and "    map->entries = calloc(new_capacity, sizeof(EpMapEntry));\n")
+    set ok to append_list(lines and "    map->size = 0;\n")
+    set ok to append_list(lines and "    for (long long i = 0; i < old_capacity; i++) {\n")
+    set ok to append_list(lines and "        if (old_entries[i].used && old_entries[i].key != NULL) {\n")
+    set ok to append_list(lines and "            char* key = old_entries[i].key;\n")
+    set ok to append_list(lines and "            long long value = old_entries[i].value;\n")
+    set ok to append_list(lines and "            unsigned long h = hash_string(key) % new_capacity;\n")
+    set ok to append_list(lines and "            while (map->entries[h].used) {\n")
+    set ok to append_list(lines and "                h = (h + 1) % new_capacity;\n")
+    set ok to append_list(lines and "            }\n")
+    set ok to append_list(lines and "            map->entries[h].key = key;\n")
+    set ok to append_list(lines and "            map->entries[h].value = value;\n")
+    set ok to append_list(lines and "            map->entries[h].used = 1;\n")
+    set ok to append_list(lines and "            map->size++;\n")
+    set ok to append_list(lines and "        }\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    free(old_entries);\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long map_insert(long long map_ptr, long long key_val, long long value) {\n")
+    set ok to append_list(lines and "    EpMap* map = (EpMap*)map_ptr;\n")
+    set ok to append_list(lines and "    const char* key = (const char*)key_val;\n")
+    set ok to append_list(lines and "    if (!map || !key) return 0;\n")
+    set ok to append_list(lines and "    if (map->size * 2 >= map->capacity) {\n")
+    set ok to append_list(lines and "        map_resize(map, map->capacity * 2);\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    unsigned long h = hash_string(key) % map->capacity;\n")
+    set ok to append_list(lines and "    while (map->entries[h].used) {\n")
+    set ok to append_list(lines and "        if (strcmp(map->entries[h].key, key) == 0) {\n")
+    set ok to append_list(lines and "            map->entries[h].value = value;\n")
+    set ok to append_list(lines and "            return value;\n")
+    set ok to append_list(lines and "        }\n")
+    set ok to append_list(lines and "        h = (h + 1) % map->capacity;\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    map->entries[h].key = strdup(key);\n")
+    set ok to append_list(lines and "    map->entries[h].value = value;\n")
+    set ok to append_list(lines and "    map->entries[h].used = 1;\n")
+    set ok to append_list(lines and "    map->size++;\n")
+    set ok to append_list(lines and "    return value;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long map_get_val(long long map_ptr, long long key_val) {\n")
+    set ok to append_list(lines and "    EpMap* map = (EpMap*)map_ptr;\n")
+    set ok to append_list(lines and "    const char* key = (const char*)key_val;\n")
+    set ok to append_list(lines and "    if (!map || !key) return 0;\n")
+    set ok to append_list(lines and "    unsigned long h = hash_string(key) % map->capacity;\n")
+    set ok to append_list(lines and "    long long start_h = h;\n")
+    set ok to append_list(lines and "    while (map->entries[h].used) {\n")
+    set ok to append_list(lines and "        if (map->entries[h].key && strcmp(map->entries[h].key, key) == 0) {\n")
+    set ok to append_list(lines and "            return map->entries[h].value;\n")
+    set ok to append_list(lines and "        }\n")
+    set ok to append_list(lines and "        h = (h + 1) % map->capacity;\n")
+    set ok to append_list(lines and "        if (h == start_h) break;\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    return 0;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long map_contains(long long map_ptr, long long key_val) {\n")
+    set ok to append_list(lines and "    EpMap* map = (EpMap*)map_ptr;\n")
+    set ok to append_list(lines and "    const char* key = (const char*)key_val;\n")
+    set ok to append_list(lines and "    if (!map || !key) return 0;\n")
+    set ok to append_list(lines and "    unsigned long h = hash_string(key) % map->capacity;\n")
+    set ok to append_list(lines and "    long long start_h = h;\n")
+    set ok to append_list(lines and "    while (map->entries[h].used) {\n")
+    set ok to append_list(lines and "        if (map->entries[h].key && strcmp(map->entries[h].key, key) == 0) {\n")
+    set ok to append_list(lines and "            return 1;\n")
+    set ok to append_list(lines and "        }\n")
+    set ok to append_list(lines and "        h = (h + 1) % map->capacity;\n")
+    set ok to append_list(lines and "        if (h == start_h) break;\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    return 0;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long map_delete(long long map_ptr, long long key_val) {\n")
+    set ok to append_list(lines and "    EpMap* map = (EpMap*)map_ptr;\n")
+    set ok to append_list(lines and "    const char* key = (const char*)key_val;\n")
+    set ok to append_list(lines and "    if (!map || !key) return 0;\n")
+    set ok to append_list(lines and "    unsigned long h = hash_string(key) % map->capacity;\n")
+    set ok to append_list(lines and "    long long start_h = h;\n")
+    set ok to append_list(lines and "    while (map->entries[h].used) {\n")
+    set ok to append_list(lines and "        if (map->entries[h].key && strcmp(map->entries[h].key, key) == 0) {\n")
+    set ok to append_list(lines and "            free(map->entries[h].key);\n")
+    set ok to append_list(lines and "            map->entries[h].key = NULL;\n")
+    set ok to append_list(lines and "            map->entries[h].value = 0;\n")
+    set ok to append_list(lines and "            map->entries[h].used = 0;\n")
+    set ok to append_list(lines and "            map->size--;\n")
+    set ok to append_list(lines and "            long long next_h = (h + 1) % map->capacity;\n")
+    set ok to append_list(lines and "            while (map->entries[next_h].used) {\n")
+    set ok to append_list(lines and "                char* k = map->entries[next_h].key;\n")
+    set ok to append_list(lines and "                long long v = map->entries[next_h].value;\n")
+    set ok to append_list(lines and "                map->entries[next_h].key = NULL;\n")
+    set ok to append_list(lines and "                map->entries[next_h].value = 0;\n")
+    set ok to append_list(lines and "                map->entries[next_h].used = 0;\n")
+    set ok to append_list(lines and "                map->size--;\n")
+    set ok to append_list(lines and "                map_insert(map_ptr, (long long)k, v);\n")
+    set ok to append_list(lines and "                free(k);\n")
+    set ok to append_list(lines and "                next_h = (next_h + 1) % map->capacity;\n")
+    set ok to append_list(lines and "            }\n")
+    set ok to append_list(lines and "            return 1;\n")
+    set ok to append_list(lines and "        }\n")
+    set ok to append_list(lines and "        h = (h + 1) % map->capacity;\n")
+    set ok to append_list(lines and "        if (h == start_h) break;\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    return 0;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long free_map(long long map_ptr) {\n")
+    set ok to append_list(lines and "    EpMap* map = (EpMap*)map_ptr;\n")
+    set ok to append_list(lines and "    if (!map) return 0;\n")
+    set ok to append_list(lines and "    for (long long i = 0; i < map->capacity; i++) {\n")
+    set ok to append_list(lines and "        if (map->entries[i].used && map->entries[i].key != NULL) {\n")
+    set ok to append_list(lines and "            free(map->entries[i].key);\n")
+    set ok to append_list(lines and "        }\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    free(map->entries);\n")
+    set ok to append_list(lines and "    free(map);\n")
+    set ok to append_list(lines and "    return 0;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "typedef struct {\n")
+    set ok to append_list(lines and "    long long* data;\n")
+    set ok to append_list(lines and "    long long capacity;\n")
+    set ok to append_list(lines and "    long long head;\n")
+    set ok to append_list(lines and "    long long tail;\n")
+    set ok to append_list(lines and "    long long size;\n")
+    set ok to append_list(lines and "} EpDeque;\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long create_deque(void) {\n")
+    set ok to append_list(lines and "    EpDeque* dq = malloc(sizeof(EpDeque));\n")
+    set ok to append_list(lines and "    if (!dq) return 0;\n")
+    set ok to append_list(lines and "    dq->capacity = 16;\n")
+    set ok to append_list(lines and "    dq->size = 0;\n")
+    set ok to append_list(lines and "    dq->head = 0;\n")
+    set ok to append_list(lines and "    dq->tail = 0;\n")
+    set ok to append_list(lines and "    dq->data = malloc(dq->capacity * sizeof(long long));\n")
+    set ok to append_list(lines and "    if (!dq->data) {\n")
+    set ok to append_list(lines and "        free(dq);\n")
+    set ok to append_list(lines and "        return 0;\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    return (long long)dq;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "static void deque_resize(EpDeque* dq, long long new_capacity) {\n")
+    set ok to append_list(lines and "    long long* new_data = malloc(new_capacity * sizeof(long long));\n")
+    set ok to append_list(lines and "    for (long long i = 0; i < dq->size; i++) {\n")
+    set ok to append_list(lines and "        new_data[i] = dq->data[(dq->head + i) % dq->capacity];\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    free(dq->data);\n")
+    set ok to append_list(lines and "    dq->data = new_data;\n")
+    set ok to append_list(lines and "    dq->capacity = new_capacity;\n")
+    set ok to append_list(lines and "    dq->head = 0;\n")
+    set ok to append_list(lines and "    dq->tail = dq->size;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long deque_push_back(long long dq_ptr, long long value) {\n")
+    set ok to append_list(lines and "    EpDeque* dq = (EpDeque*)dq_ptr;\n")
+    set ok to append_list(lines and "    if (!dq) return 0;\n")
+    set ok to append_list(lines and "    if (dq->size >= dq->capacity) {\n")
+    set ok to append_list(lines and "        deque_resize(dq, dq->capacity * 2);\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    dq->data[dq->tail] = value;\n")
+    set ok to append_list(lines and "    dq->tail = (dq->tail + 1) % dq->capacity;\n")
+    set ok to append_list(lines and "    dq->size++;\n")
+    set ok to append_list(lines and "    return value;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long deque_push_front(long long dq_ptr, long long value) {\n")
+    set ok to append_list(lines and "    EpDeque* dq = (EpDeque*)dq_ptr;\n")
+    set ok to append_list(lines and "    if (!dq) return 0;\n")
+    set ok to append_list(lines and "    if (dq->size >= dq->capacity) {\n")
+    set ok to append_list(lines and "        deque_resize(dq, dq->capacity * 2);\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    dq->head = (dq->head - 1 + dq->capacity) % dq->capacity;\n")
+    set ok to append_list(lines and "    dq->data[dq->head] = value;\n")
+    set ok to append_list(lines and "    dq->size++;\n")
+    set ok to append_list(lines and "    return value;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long deque_pop_back(long long dq_ptr) {\n")
+    set ok to append_list(lines and "    EpDeque* dq = (EpDeque*)dq_ptr;\n")
+    set ok to append_list(lines and "    if (!dq || dq->size == 0) return 0;\n")
+    set ok to append_list(lines and "    dq->tail = (dq->tail - 1 + dq->capacity) % dq->capacity;\n")
+    set ok to append_list(lines and "    long long value = dq->data[dq->tail];\n")
+    set ok to append_list(lines and "    dq->size--;\n")
+    set ok to append_list(lines and "    return value;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long deque_pop_front(long long dq_ptr) {\n")
+    set ok to append_list(lines and "    EpDeque* dq = (EpDeque*)dq_ptr;\n")
+    set ok to append_list(lines and "    if (!dq || dq->size == 0) return 0;\n")
+    set ok to append_list(lines and "    long long value = dq->data[dq->head];\n")
+    set ok to append_list(lines and "    dq->head = (dq->head + 1) % dq->capacity;\n")
+    set ok to append_list(lines and "    dq->size--;\n")
+    set ok to append_list(lines and "    return value;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long deque_length(long long dq_ptr) {\n")
+    set ok to append_list(lines and "    EpDeque* dq = (EpDeque*)dq_ptr;\n")
+    set ok to append_list(lines and "    if (!dq) return 0;\n")
+    set ok to append_list(lines and "    return dq->size;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long free_deque(long long dq_ptr) {\n")
+    set ok to append_list(lines and "    EpDeque* dq = (EpDeque*)dq_ptr;\n")
+    set ok to append_list(lines and "    if (!dq) return 0;\n")
+    set ok to append_list(lines and "    free(dq->data);\n")
+    set ok to append_list(lines and "    free(dq);\n")
+    set ok to append_list(lines and "    return 0;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "/* Filesystem Operations */\n")
+    set ok to append_list(lines and "#include <dirent.h>\n")
+    set ok to append_list(lines and "#include <sys/stat.h>\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long fs_scan_dir(long long path_val) {\n")
+    set ok to append_list(lines and "    const char* path = (const char*)path_val;\n")
+    set ok to append_list(lines and "    long long list_ptr = create_list();\n")
+    set ok to append_list(lines and "    if (!path) return list_ptr;\n")
+    set ok to append_list(lines and "    DIR* d = opendir(path);\n")
+    set ok to append_list(lines and "    if (!d) return list_ptr;\n")
+    set ok to append_list(lines and "    struct dirent* dir;\n")
+    set ok to append_list(lines and "    while ((dir = readdir(d)) != NULL) {\n")
+    set ok to append_list(lines and "        if (strcmp(dir->d_name, \".\") == 0 || strcmp(dir->d_name, \"..\") == 0) {\n")
+    set ok to append_list(lines and "            continue;\n")
+    set ok to append_list(lines and "        }\n")
+    set ok to append_list(lines and "        char* name = strdup(dir->d_name);\n")
+    set ok to append_list(lines and "        append_list(list_ptr, (long long)name);\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    closedir(d);\n")
+    set ok to append_list(lines and "    return list_ptr;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long fs_copy_file(long long src_val, long long dest_val) {\n")
+    set ok to append_list(lines and "    const char* src = (const char*)src_val;\n")
+    set ok to append_list(lines and "    const char* dest = (const char*)dest_val;\n")
+    set ok to append_list(lines and "    if (!src || !dest) return 0;\n")
+    set ok to append_list(lines and "    FILE* f_src = fopen(src, \"rb\");\n")
+    set ok to append_list(lines and "    if (!f_src) return 0;\n")
+    set ok to append_list(lines and "    FILE* f_dest = fopen(dest, \"wb\");\n")
+    set ok to append_list(lines and "    if (!f_dest) {\n")
+    set ok to append_list(lines and "        fclose(f_src);\n")
+    set ok to append_list(lines and "        return 0;\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    char buf[4096];\n")
+    set ok to append_list(lines and "    size_t n;\n")
+    set ok to append_list(lines and "    while ((n = fread(buf, 1, sizeof(buf), f_src)) > 0) {\n")
+    set ok to append_list(lines and "        fwrite(buf, 1, n, f_dest);\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    fclose(f_src);\n")
+    set ok to append_list(lines and "    fclose(f_dest);\n")
+    set ok to append_list(lines and "    return 1;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long fs_delete_file(long long path_val) {\n")
+    set ok to append_list(lines and "    const char* path = (const char*)path_val;\n")
+    set ok to append_list(lines and "    if (!path) return 0;\n")
+    set ok to append_list(lines and "    return remove(path) == 0 ? 1 : 0;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long fs_move_file(long long src_val, long long dest_val) {\n")
+    set ok to append_list(lines and "    const char* src = (const char*)src_val;\n")
+    set ok to append_list(lines and "    const char* dest = (const char*)dest_val;\n")
+    set ok to append_list(lines and "    if (!src || !dest) return 0;\n")
+    set ok to append_list(lines and "    return rename(src, dest) == 0 ? 1 : 0;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long fs_exists(long long path_val) {\n")
+    set ok to append_list(lines and "    const char* path = (const char*)path_val;\n")
+    set ok to append_list(lines and "    if (!path) return 0;\n")
+    set ok to append_list(lines and "    struct stat st;\n")
+    set ok to append_list(lines and "    return stat(path, &st) == 0 ? 1 : 0;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long fs_is_dir(long long path_val) {\n")
+    set ok to append_list(lines and "    const char* path = (const char*)path_val;\n")
+    set ok to append_list(lines and "    if (!path) return 0;\n")
+    set ok to append_list(lines and "    struct stat st;\n")
+    set ok to append_list(lines and "    if (stat(path, &st) != 0) return 0;\n")
+    set ok to append_list(lines and "    return S_ISDIR(st.st_mode) ? 1 : 0;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long fs_is_file(long long path_val) {\n")
+    set ok to append_list(lines and "    const char* path = (const char*)path_val;\n")
+    set ok to append_list(lines and "    if (!path) return 0;\n")
+    set ok to append_list(lines and "    struct stat st;\n")
+    set ok to append_list(lines and "    if (stat(path, &st) != 0) return 0;\n")
+    set ok to append_list(lines and "    return S_ISREG(st.st_mode) ? 1 : 0;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long fs_get_size(long long path_val) {\n")
+    set ok to append_list(lines and "    const char* path = (const char*)path_val;\n")
+    set ok to append_list(lines and "    if (!path) return 0;\n")
+    set ok to append_list(lines and "    struct stat st;\n")
+    set ok to append_list(lines and "    if (stat(path, &st) != 0) return 0;\n")
+    set ok to append_list(lines and "    return (long long)st.st_size;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "/* HTTP Client */\n")
+    set ok to append_list(lines and "long long ep_http_request(long long method_val, long long url_val, long long headers_val, long long body_val) {\n")
+    set ok to append_list(lines and "    const char* method = (const char*)method_val;\n")
+    set ok to append_list(lines and "    const char* url = (const char*)url_val;\n")
+    set ok to append_list(lines and "    const char* headers = (const char*)headers_val;\n")
+    set ok to append_list(lines and "    const char* body = (const char*)body_val;\n")
+    set ok to append_list(lines and "    if (!method || !url) return (long long)strdup(\"\");\n")
+    set ok to append_list(lines and "    if (strncmp(url, \"http://\", 7) != 0) {\n")
+    set ok to append_list(lines and "        return (long long)strdup(\"Error: only http:// protocol supported\");\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    const char* host_start = url + 7;\n")
+    set ok to append_list(lines and "    const char* path_start = strchr(host_start, '/');\n")
+    set ok to append_list(lines and "    char host[256];\n")
+    set ok to append_list(lines and "    char path[1024];\n")
+    set ok to append_list(lines and "    if (path_start) {\n")
+    set ok to append_list(lines and "        size_t host_len = path_start - host_start;\n")
+    set ok to append_list(lines and "        if (host_len >= sizeof(host)) host_len = sizeof(host) - 1;\n")
+    set ok to append_list(lines and "        strncpy(host, host_start, host_len);\n")
+    set ok to append_list(lines and "        host[host_len] = '\\0';\n")
+    set ok to append_list(lines and "        strncpy(path, path_start, sizeof(path) - 1);\n")
+    set ok to append_list(lines and "        path[sizeof(path) - 1] = '\\0';\n")
+    set ok to append_list(lines and "    } else {\n")
+    set ok to append_list(lines and "        strncpy(host, host_start, sizeof(host) - 1);\n")
+    set ok to append_list(lines and "        host[sizeof(host) - 1] = '\\0';\n")
+    set ok to append_list(lines and "        strcpy(path, \"/\");\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    int port = 80;\n")
+    set ok to append_list(lines and "    char* colon = strchr(host, ':');\n")
+    set ok to append_list(lines and "    if (colon) {\n")
+    set ok to append_list(lines and "        *colon = '\\0';\n")
+    set ok to append_list(lines and "        port = atoi(colon + 1);\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    int sockfd = socket(AF_INET, SOCK_STREAM, 0);\n")
+    set ok to append_list(lines and "    if (sockfd < 0) return (long long)strdup(\"Error: socket creation failed\");\n")
+    set ok to append_list(lines and "    struct hostent* server = gethostbyname(host);\n")
+    set ok to append_list(lines and "    if (!server) {\n")
+    set ok to append_list(lines and "        close(sockfd);\n")
+    set ok to append_list(lines and "        return (long long)strdup(\"Error: host resolution failed\");\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    struct sockaddr_in serv_addr;\n")
+    set ok to append_list(lines and "    memset(&serv_addr, 0, sizeof(serv_addr));\n")
+    set ok to append_list(lines and "    serv_addr.sin_family = AF_INET;\n")
+    set ok to append_list(lines and "    memcpy(&serv_addr.sin_addr.s_addr, server->h_addr_list[0], server->h_length);\n")
+    set ok to append_list(lines and "    serv_addr.sin_port = htons(port);\n")
+    set ok to append_list(lines and "    if (connect(sockfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {\n")
+    set ok to append_list(lines and "        close(sockfd);\n")
+    set ok to append_list(lines and "        return (long long)strdup(\"Error: connection failed\");\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    char req[4096];\n")
+    set ok to append_list(lines and "    size_t body_len = body ? strlen(body) : 0;\n")
+    set ok to append_list(lines and "    int req_len = snprintf(req, sizeof(req),\n")
+    set ok to append_list(lines and "        \"%s %s HTTP/1.1\\r\\n\"\n")
+    set ok to append_list(lines and "        \"Host: %s\\r\\n\"\n")
+    set ok to append_list(lines and "        \"Content-Length: %zu\\r\\n\"\n")
+    set ok to append_list(lines and "        \"Connection: close\\r\\n\"\n")
+    set ok to append_list(lines and "        \"%s%s\"\n")
+    set ok to append_list(lines and "        \"\\r\\n\",\n")
+    set ok to append_list(lines and "        method, path, host, body_len, headers ? headers : \"\", (headers && strlen(headers) > 0 && headers[strlen(headers)-1] != '\\n') ? \"\\r\\n\" : \"\");\n")
+    set ok to append_list(lines and "    if (send(sockfd, req, req_len, 0) < 0) {\n")
+    set ok to append_list(lines and "        close(sockfd);\n")
+    set ok to append_list(lines and "        return (long long)strdup(\"Error: send failed\");\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    if (body_len > 0) {\n")
+    set ok to append_list(lines and "        if (send(sockfd, body, body_len, 0) < 0) {\n")
+    set ok to append_list(lines and "            close(sockfd);\n")
+    set ok to append_list(lines and "            return (long long)strdup(\"Error: send body failed\");\n")
+    set ok to append_list(lines and "        }\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    size_t resp_cap = 4096;\n")
+    set ok to append_list(lines and "    size_t resp_len = 0;\n")
+    set ok to append_list(lines and "    char* resp = malloc(resp_cap);\n")
+    set ok to append_list(lines and "    if (!resp) {\n")
+    set ok to append_list(lines and "        close(sockfd);\n")
+    set ok to append_list(lines and "        return (long long)strdup(\"\");\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    char recv_buf[4096];\n")
+    set ok to append_list(lines and "    ssize_t n;\n")
+    set ok to append_list(lines and "    while ((n = recv(sockfd, recv_buf, sizeof(recv_buf), 0)) > 0) {\n")
+    set ok to append_list(lines and "        if (resp_len + n >= resp_cap) {\n")
+    set ok to append_list(lines and "            resp_cap *= 2;\n")
+    set ok to append_list(lines and "            char* new_resp = realloc(resp, resp_cap);\n")
+    set ok to append_list(lines and "            if (!new_resp) {\n")
+    set ok to append_list(lines and "                free(resp);\n")
+    set ok to append_list(lines and "                close(sockfd);\n")
+    set ok to append_list(lines and "                return (long long)strdup(\"Error: memory allocation failed\");\n")
+    set ok to append_list(lines and "            }\n")
+    set ok to append_list(lines and "            resp = new_resp;\n")
+    set ok to append_list(lines and "        }\n")
+    set ok to append_list(lines and "        memcpy(resp + resp_len, recv_buf, n);\n")
+    set ok to append_list(lines and "        resp_len += n;\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    resp[resp_len] = '\\0';\n")
+    set ok to append_list(lines and "    close(sockfd);\n")
+    set ok to append_list(lines and "    return (long long)resp;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "#define ROTRIGHT(word,bits) (((word) >> (bits)) | ((word) << (32-(bits))))\n")
     set ok to append_list(lines and "#define CH(x,y,z) (((x) & (y)) ^ (~(x) & (z)))\n")
     set ok to append_list(lines and "#define MAJ(x,y,z) (((x) & (y)) ^ ((x) & (z)) ^ ((y) & (z)))\n")
     set ok to append_list(lines and "#define EP0(x) (ROTRIGHT(x,2) ^ ROTRIGHT(x,13) ^ ROTRIGHT(x,22))\n")
     set ok to append_list(lines and "#define EP1(x) (ROTRIGHT(x,6) ^ ROTRIGHT(x,11) ^ ROTRIGHT(x,25))\n")
     set ok to append_list(lines and "#define SIG0(x) (ROTRIGHT(x,7) ^ ROTRIGHT(x,18) ^ ((x) >> 3))\n")
-    set ok to append_list(lines and "#define SIG1(x) (ROTRIGHT(x,17) ^ ROTRIGHT(x,19) ^ ((x) >> 10))\n\n")
-
+    set ok to append_list(lines and "#define SIG1(x) (ROTRIGHT(x,17) ^ ROTRIGHT(x,19) ^ ((x) >> 10))\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "typedef struct {\n")
     set ok to append_list(lines and "    unsigned char data[64];\n")
     set ok to append_list(lines and "    unsigned int datalen;\n")
     set ok to append_list(lines and "    unsigned long long bitlen;\n")
     set ok to append_list(lines and "    unsigned int state[8];\n")
-    set ok to append_list(lines and "} EP_SHA256_CTX;\n\n")
-
+    set ok to append_list(lines and "} EP_SHA256_CTX;\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "static const unsigned int sha256_k[64] = {\n")
     set ok to append_list(lines and "    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,\n")
     set ok to append_list(lines and "    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,\n")
@@ -818,8 +1997,8 @@ define get_c_runtime_source:
     set ok to append_list(lines and "    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,\n")
     set ok to append_list(lines and "    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,\n")
     set ok to append_list(lines and "    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2\n")
-    set ok to append_list(lines and "};\n\n")
-
+    set ok to append_list(lines and "};\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "void ep_sha256_transform(EP_SHA256_CTX *ctx, const unsigned char *data) {\n")
     set ok to append_list(lines and "    unsigned int a, b, c, d, e, f, g, h, i, j, t1, t2, m[64];\n")
     set ok to append_list(lines and "    for (i = 0, j = 0; i < 16; ++i, j += 4)\n")
@@ -835,14 +2014,14 @@ define get_c_runtime_source:
     set ok to append_list(lines and "    }\n")
     set ok to append_list(lines and "    ctx->state[0] += a; ctx->state[1] += b; ctx->state[2] += c; ctx->state[3] += d;\n")
     set ok to append_list(lines and "    ctx->state[4] += e; ctx->state[5] += f; ctx->state[6] += g; ctx->state[7] += h;\n")
-    set ok to append_list(lines and "}\n\n")
-
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "void ep_sha256_init(EP_SHA256_CTX *ctx) {\n")
     set ok to append_list(lines and "    ctx->datalen = 0; ctx->bitlen = 0;\n")
     set ok to append_list(lines and "    ctx->state[0] = 0x6a09e667; ctx->state[1] = 0xbb67ae85; ctx->state[2] = 0x3c6ef372; ctx->state[3] = 0xa54ff53a;\n")
     set ok to append_list(lines and "    ctx->state[4] = 0x510e527f; ctx->state[5] = 0x9b05688c; ctx->state[6] = 0x1f83d9ab; ctx->state[7] = 0x5be0cd19;\n")
-    set ok to append_list(lines and "}\n\n")
-
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "void ep_sha256_update(EP_SHA256_CTX *ctx, const unsigned char *data, size_t len) {\n")
     set ok to append_list(lines and "    for (size_t i = 0; i < len; ++i) {\n")
     set ok to append_list(lines and "        ctx->data[ctx->datalen] = data[i];\n")
@@ -853,8 +2032,8 @@ define get_c_runtime_source:
     set ok to append_list(lines and "            ctx->datalen = 0;\n")
     set ok to append_list(lines and "        }\n")
     set ok to append_list(lines and "    }\n")
-    set ok to append_list(lines and "}\n\n")
-
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "void ep_sha256_final(EP_SHA256_CTX *ctx, unsigned char *hash) {\n")
     set ok to append_list(lines and "    unsigned int i = ctx->datalen;\n")
     set ok to append_list(lines and "    if (ctx->datalen < 56) {\n")
@@ -882,8 +2061,8 @@ define get_c_runtime_source:
     set ok to append_list(lines and "        hash[i + 24] = (ctx->state[6] >> (24 - i * 8)) & 0x000000ff;\n")
     set ok to append_list(lines and "        hash[i + 28] = (ctx->state[7] >> (24 - i * 8)) & 0x000000ff;\n")
     set ok to append_list(lines and "    }\n")
-    set ok to append_list(lines and "}\n\n")
-
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "char* ep_sha256(const char* s) {\n")
     set ok to append_list(lines and "    if (!s) s = \"\";\n")
     set ok to append_list(lines and "    EP_SHA256_CTX ctx;\n")
@@ -899,57 +2078,77 @@ define get_c_runtime_source:
     set ok to append_list(lines and "        result[64] = '\\0';\n")
     set ok to append_list(lines and "    }\n")
     set ok to append_list(lines and "    return result;\n")
-    set ok to append_list(lines and "}\n\n")
-
-    # MD5 standard library implementation
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "typedef struct {\n")
     set ok to append_list(lines and "    unsigned int count[2];\n")
     set ok to append_list(lines and "    unsigned int state[4];\n")
     set ok to append_list(lines and "    unsigned char buffer[64];\n")
-    set ok to append_list(lines and "} EP_MD5_CTX;\n\n")
-
+    set ok to append_list(lines and "} EP_MD5_CTX;\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "#define F(x,y,z) (((x) & (y)) | (~(x) & (z)))\n")
     set ok to append_list(lines and "#define G(x,y,z) (((x) & (z)) | ((y) & ~(z)))\n")
     set ok to append_list(lines and "#define H(x,y,z) ((x) ^ (y) ^ (z))\n")
     set ok to append_list(lines and "#define I(x,y,z) ((y) ^ ((x) | ~(z)))\n")
-    set ok to append_list(lines and "#define ROTATE_LEFT(x,n) (((x) << (n)) | ((x) >> (32-(n))))\n\n")
-
-    set ok to append_list(lines and "#define FF(a,b,c,d,x,s,ac) { (a) += F((b),(c),(d)) + (x) + (ac); (a) = ROTATE_LEFT((a),(s)); (a) += (b); }\n")
-    set ok to append_list(lines and "#define GG(a,b,c,d,x,s,ac) { (a) += G((b),(c),(d)) + (x) + (ac); (a) = ROTATE_LEFT((a),(s)); (a) += (b); }\n")
-    set ok to append_list(lines and "#define HH(a,b,c,d,x,s,ac) { (a) += H((b),(c),(d)) + (x) + (ac); (a) = ROTATE_LEFT((a),(s)); (a) += (b); }\n")
-    set ok to append_list(lines and "#define II(a,b,c,d,x,s,ac) { (a) += I((b),(c),(d)) + (x) + (ac); (a) = ROTATE_LEFT((a),(s)); (a) += (b); }\n\n")
-
+    set ok to append_list(lines and "#define ROTATE_LEFT(x,n) (((x) << (n)) | ((x) >> (32-(n))))\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "#define FF(a,b,c,d,x,s,ac) { \\\n")
+    set ok to append_list(lines and "    (a) += F((b),(c),(d)) + (x) + (ac); \\\n")
+    set ok to append_list(lines and "    (a) = ROTATE_LEFT((a),(s)); \\\n")
+    set ok to append_list(lines and "    (a) += (b); \\\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "#define GG(a,b,c,d,x,s,ac) { \\\n")
+    set ok to append_list(lines and "    (a) += G((b),(c),(d)) + (x) + (ac); \\\n")
+    set ok to append_list(lines and "    (a) = ROTATE_LEFT((a),(s)); \\\n")
+    set ok to append_list(lines and "    (a) += (b); \\\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "#define HH(a,b,c,d,x,s,ac) { \\\n")
+    set ok to append_list(lines and "    (a) += H((b),(c),(d)) + (x) + (ac); \\\n")
+    set ok to append_list(lines and "    (a) = ROTATE_LEFT((a),(s)); \\\n")
+    set ok to append_list(lines and "    (a) += (b); \\\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "#define II(a,b,c,d,x,s,ac) { \\\n")
+    set ok to append_list(lines and "    (a) += I((b),(c),(d)) + (x) + (ac); \\\n")
+    set ok to append_list(lines and "    (a) = ROTATE_LEFT((a),(s)); \\\n")
+    set ok to append_list(lines and "    (a) += (b); \\\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "void ep_md5_init(EP_MD5_CTX *ctx) {\n")
     set ok to append_list(lines and "    ctx->count[0] = ctx->count[1] = 0;\n")
     set ok to append_list(lines and "    ctx->state[0] = 0x67452301;\n")
     set ok to append_list(lines and "    ctx->state[1] = 0xefcdab89;\n")
     set ok to append_list(lines and "    ctx->state[2] = 0x98badcfe;\n")
     set ok to append_list(lines and "    ctx->state[3] = 0x10325476;\n")
-    set ok to append_list(lines and "}\n\n")
-
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "void ep_md5_transform(unsigned int state[4], const unsigned char block[64]) {\n")
     set ok to append_list(lines and "    unsigned int a = state[0], b = state[1], c = state[2], d = state[3], x[16];\n")
     set ok to append_list(lines and "    for (int i = 0, j = 0; i < 16; i++, j += 4)\n")
     set ok to append_list(lines and "        x[i] = (block[j]) | (block[j+1] << 8) | (block[j+2] << 16) | (block[j+3] << 24);\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "    FF(a, b, c, d, x[0], 7, 0xd76aa478); FF(d, a, b, c, x[1], 12, 0xe8c7b756); FF(c, d, a, b, x[2], 17, 0x242070db); FF(b, c, d, a, x[3], 22, 0xc1bdceee);\n")
     set ok to append_list(lines and "    FF(a, b, c, d, x[4], 7, 0xf57c0faf); FF(d, a, b, c, x[5], 12, 0x4787c62a); FF(c, d, a, b, x[6], 17, 0xa8304613); FF(b, c, d, a, x[7], 22, 0xfd469501);\n")
     set ok to append_list(lines and "    FF(a, b, c, d, x[8], 7, 0x698098d8); FF(d, a, b, c, x[9], 12, 0x8b44f7af); FF(c, d, a, b, x[10], 17, 0xffff5bb1); FF(b, c, d, a, x[11], 22, 0x895cd7be);\n")
     set ok to append_list(lines and "    FF(a, b, c, d, x[12], 7, 0x6b901122); FF(d, a, b, c, x[13], 12, 0xfd987193); FF(c, d, a, b, x[14], 17, 0xa679438e); FF(b, c, d, a, x[15], 22, 0x49b40821);\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "    GG(a, b, c, d, x[1], 5, 0xf61e2562); GG(d, a, b, c, x[6], 9, 0xc040b340); GG(c, d, a, b, x[11], 14, 0x265e5a51); GG(b, c, d, a, x[0], 20, 0xe9b6c7aa);\n")
     set ok to append_list(lines and "    GG(a, b, c, d, x[5], 5, 0xd62f105d); GG(d, a, b, c, x[10], 9, 0x02441453); GG(c, d, a, b, x[15], 14, 0xd8a1e681); GG(b, c, d, a, x[4], 20, 0xe7d3fbc8);\n")
     set ok to append_list(lines and "    GG(a, b, c, d, x[9], 5, 0x21e1cde6); GG(d, a, b, c, x[14], 9, 0xc33707d6); GG(c, d, a, b, x[3], 14, 0xf4d50d87); GG(b, c, d, a, x[8], 20, 0x455a14ed);\n")
     set ok to append_list(lines and "    GG(a, b, c, d, x[13], 5, 0xa9e3e905); GG(d, a, b, c, x[2], 9, 0xfcefa3f8); GG(c, d, a, b, x[7], 14, 0x676f02d9); GG(b, c, d, a, x[12], 20, 0x8d2a4c8a);\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "    HH(a, b, c, d, x[5], 4, 0xfffa3942); HH(d, a, b, c, x[8], 11, 0x8771f681); HH(c, d, a, b, x[11], 16, 0x6d9d6122); HH(b, c, d, a, x[14], 23, 0xfde5380c);\n")
     set ok to append_list(lines and "    HH(a, b, c, d, x[1], 4, 0xa4beea44); HH(d, a, b, c, x[4], 11, 0x4bdecfa9); HH(c, d, a, b, x[7], 16, 0xf6bb4b60); HH(b, c, d, a, x[10], 23, 0xbebfbc70);\n")
     set ok to append_list(lines and "    HH(a, b, c, d, x[13], 4, 0x289b7ec6); HH(d, a, b, c, x[0], 11, 0xeaa127fa); HH(c, d, a, b, x[3], 16, 0xd4ef3085); HH(b, c, d, a, x[6], 23, 0x04881d05);\n")
     set ok to append_list(lines and "    HH(a, b, c, d, x[9], 4, 0xd9d4d039); HH(d, a, b, c, x[12], 11, 0xe6db99e5); HH(c, d, a, b, x[15], 16, 0x1fa27cf8); HH(b, c, d, a, x[2], 23, 0xc4ac5665);\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "    II(a, b, c, d, x[0], 6, 0xf4292244); II(d, a, b, c, x[7], 10, 0x432aff97); II(c, d, a, b, x[14], 15, 0xab9423a7); II(b, c, d, a, x[5], 21, 0xfc93a039);\n")
     set ok to append_list(lines and "    II(a, b, c, d, x[12], 6, 0x655b59c3); II(d, a, b, c, x[3], 10, 0x8f0ccc92); II(c, d, a, b, x[10], 15, 0xffeff47d); II(b, c, d, a, x[1], 21, 0x85845dd1);\n")
     set ok to append_list(lines and "    II(a, b, c, d, x[8], 6, 0x6fa87e4f); II(d, a, b, c, x[15], 10, 0xfe2ce6e0); II(c, d, a, b, x[6], 15, 0xa3014314); II(b, c, d, a, x[13], 21, 0x4e0811a1);\n")
     set ok to append_list(lines and "    II(a, b, c, d, x[4], 6, 0xf7537e82); II(d, a, b, c, x[11], 10, 0xbd3af235); II(c, d, a, b, x[2], 15, 0x2ad7d2bb); II(b, c, d, a, x[9], 21, 0xeb86d391);\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "    state[0] += a; state[1] += b; state[2] += c; state[3] += d;\n")
-    set ok to append_list(lines and "}\n\n")
-
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "void ep_md5_update(EP_MD5_CTX *ctx, const unsigned char *input, size_t input_len) {\n")
     set ok to append_list(lines and "    unsigned int i = 0, index = (ctx->count[0] >> 3) & 0x3F, part_len = 64 - index;\n")
     set ok to append_list(lines and "    ctx->count[0] += input_len << 3;\n")
@@ -963,8 +2162,8 @@ define get_c_runtime_source:
     set ok to append_list(lines and "        index = 0;\n")
     set ok to append_list(lines and "    }\n")
     set ok to append_list(lines and "    memcpy(&ctx->buffer[index], &input[i], input_len - i);\n")
-    set ok to append_list(lines and "}\n\n")
-
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "void ep_md5_final(EP_MD5_CTX *ctx, unsigned char digest[16]) {\n")
     set ok to append_list(lines and "    unsigned char bits[8];\n")
     set ok to append_list(lines and "    bits[0] = ctx->count[0]; bits[1] = ctx->count[0] >> 8; bits[2] = ctx->count[0] >> 16; bits[3] = ctx->count[0] >> 24;\n")
@@ -980,8 +2179,8 @@ define get_c_runtime_source:
     set ok to append_list(lines and "        digest[i*4 + 2] = ctx->state[i] >> 16;\n")
     set ok to append_list(lines and "        digest[i*4 + 3] = ctx->state[i] >> 24;\n")
     set ok to append_list(lines and "    }\n")
-    set ok to append_list(lines and "}\n\n")
-
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "char* ep_md5(const char* s) {\n")
     set ok to append_list(lines and "    if (!s) s = \"\";\n")
     set ok to append_list(lines and "    EP_MD5_CTX ctx;\n")
@@ -997,8 +2196,8 @@ define get_c_runtime_source:
     set ok to append_list(lines and "        result[32] = '\\0';\n")
     set ok to append_list(lines and "    }\n")
     set ok to append_list(lines and "    return result;\n")
-    set ok to append_list(lines and "}\n\n")
-
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "char* read_file_content(const char* filepath) {\n")
     set ok to append_list(lines and "    char mode[3];\n")
     set ok to append_list(lines and "    mode[0] = 'r';\n")
@@ -1008,6 +2207,7 @@ define get_c_runtime_source:
     set ok to append_list(lines and "    if (!f) {\n")
     set ok to append_list(lines and "        char* empty = malloc(1);\n")
     set ok to append_list(lines and "        if (empty) empty[0] = '\\0';\n")
+    set ok to append_list(lines and "        ep_gc_register(empty, EP_OBJ_STRING);\n")
     set ok to append_list(lines and "        return empty;\n")
     set ok to append_list(lines and "    }\n")
     set ok to append_list(lines and "    fseek(f, 0, SEEK_END);\n")
@@ -1018,41 +2218,44 @@ define get_c_runtime_source:
     set ok to append_list(lines and "        fclose(f);\n")
     set ok to append_list(lines and "        char* empty = malloc(1);\n")
     set ok to append_list(lines and "        if (empty) empty[0] = '\\0';\n")
+    set ok to append_list(lines and "        ep_gc_register(empty, EP_OBJ_STRING);\n")
     set ok to append_list(lines and "        return empty;\n")
     set ok to append_list(lines and "    }\n")
     set ok to append_list(lines and "    size_t read_bytes = fread(buf, 1, size, f);\n")
     set ok to append_list(lines and "    buf[read_bytes] = '\\0';\n")
     set ok to append_list(lines and "    fclose(f);\n")
+    set ok to append_list(lines and "    ep_gc_register(buf, EP_OBJ_STRING);\n")
     set ok to append_list(lines and "    return buf;\n")
-    set ok to append_list(lines and "}\n\n")
-    
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long string_length(const char* s) {\n")
     set ok to append_list(lines and "    if (!s) return 0;\n")
     set ok to append_list(lines and "    return strlen(s);\n")
-    set ok to append_list(lines and "}\n\n")
-    
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long get_character(const char* s, long long index) {\n")
     set ok to append_list(lines and "    if (!s) return 0;\n")
     set ok to append_list(lines and "    long long len = strlen(s);\n")
     set ok to append_list(lines and "    if (index < 0 || index >= len) return 0;\n")
     set ok to append_list(lines and "    return (unsigned char)s[index];\n")
-    set ok to append_list(lines and "}\n\n")
-    
-    set ok to append_list(lines and "typedef struct {\n")
-    set ok to append_list(lines and "    long long* data;\n")
-    set ok to append_list(lines and "    long long capacity;\n")
-    set ok to append_list(lines and "    long long length;\n")
-    set ok to append_list(lines and "} EpList;\n\n")
-    
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long create_list(void) {\n")
     set ok to append_list(lines and "    EpList* list = malloc(sizeof(EpList));\n")
     set ok to append_list(lines and "    if (!list) return 0;\n")
     set ok to append_list(lines and "    list->capacity = 4;\n")
     set ok to append_list(lines and "    list->length = 0;\n")
     set ok to append_list(lines and "    list->data = malloc(list->capacity * sizeof(long long));\n")
+    set ok to append_list(lines and "    ep_gc_register(list, EP_OBJ_LIST);\n")
     set ok to append_list(lines and "    return (long long)list;\n")
-    set ok to append_list(lines and "}\n\n")
-    
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long get_list_data_ptr(long long list_ptr) {\n")
+    set ok to append_list(lines and "    EpList* list = (EpList*)list_ptr;\n")
+    set ok to append_list(lines and "    if (!list) return 0;\n")
+    set ok to append_list(lines and "    return (long long)list->data;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long append_list(long long list_ptr, long long value) {\n")
     set ok to append_list(lines and "    EpList* list = (EpList*)list_ptr;\n")
     set ok to append_list(lines and "    if (!list) return 0;\n")
@@ -1063,46 +2266,64 @@ define get_c_runtime_source:
     set ok to append_list(lines and "    list->data[list->length] = value;\n")
     set ok to append_list(lines and "    list->length += 1;\n")
     set ok to append_list(lines and "    return value;\n")
-    set ok to append_list(lines and "}\n\n")
-    
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long get_list(long long list_ptr, long long index) {\n")
     set ok to append_list(lines and "    EpList* list = (EpList*)list_ptr;\n")
     set ok to append_list(lines and "    if (!list || index < 0 || index >= list->length) return 0;\n")
     set ok to append_list(lines and "    return list->data[index];\n")
-    set ok to append_list(lines and "}\n\n")
-    
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long set_list(long long list_ptr, long long index, long long value) {\n")
     set ok to append_list(lines and "    EpList* list = (EpList*)list_ptr;\n")
     set ok to append_list(lines and "    if (!list || index < 0 || index >= list->length) return 0;\n")
     set ok to append_list(lines and "    list->data[index] = value;\n")
     set ok to append_list(lines and "    return value;\n")
-    set ok to append_list(lines and "}\n\n")
-    
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long length_list(long long list_ptr) {\n")
     set ok to append_list(lines and "    EpList* list = (EpList*)list_ptr;\n")
     set ok to append_list(lines and "    if (!list) return 0;\n")
     set ok to append_list(lines and "    return list->length;\n")
-    set ok to append_list(lines and "}\n\n")
-    
-    set ok to append_list(lines and "void free_list(long long list_ptr) {\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long free_list(long long list_ptr) {\n")
     set ok to append_list(lines and "    EpList* list = (EpList*)list_ptr;\n")
-    set ok to append_list(lines and "    if (!list) return;\n")
+    set ok to append_list(lines and "    if (!list) return 0;\n")
+    set ok to append_list(lines and "    ep_gc_unregister(list);\n")
     set ok to append_list(lines and "    free(list->data);\n")
     set ok to append_list(lines and "    free(list);\n")
-    set ok to append_list(lines and "}\n\n")
-    
+    set ok to append_list(lines and "    return 0;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "static int sqlite_list_callback(void* arg, int argc, char** argv, char** col_names) {\n")
+    set ok to append_list(lines and "    EpList* rows = (EpList*)arg;\n")
+    set ok to append_list(lines and "    EpList* row = (EpList*)create_list();\n")
+    set ok to append_list(lines and "    for (int i = 0; i < argc; i++) {\n")
+    set ok to append_list(lines and "        char* val = argv[i] ? strdup(argv[i]) : strdup(\"\");\n")
+    set ok to append_list(lines and "        append_list((long long)row, (long long)val);\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    append_list((long long)rows, (long long)row);\n")
+    set ok to append_list(lines and "    return 0;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "long long sqlite_get_callback_ptr(long long dummy) {\n")
+    set ok to append_list(lines and "    return (long long)sqlite_list_callback;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "int ep_argc = 0;\n")
-    set ok to append_list(lines and "char** ep_argv = NULL;\n\n")
-    
+    set ok to append_list(lines and "char** ep_argv = NULL;\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "void init_ep_args(int argc, char** argv) {\n")
     set ok to append_list(lines and "    ep_argc = argc;\n")
     set ok to append_list(lines and "    ep_argv = argv;\n")
-    set ok to append_list(lines and "}\n\n")
-    
+    set ok to append_list(lines and "    ep_gc_register_thread((void*)&argc);\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long get_argument_count(void) {\n")
     set ok to append_list(lines and "    return ep_argc;\n")
-    set ok to append_list(lines and "}\n\n")
-    
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "const char* get_argument(long long index) {\n")
     set ok to append_list(lines and "    if (index < 0 || index >= ep_argc) {\n")
     set ok to append_list(lines and "        char* empty = malloc(1);\n")
@@ -1110,8 +2331,8 @@ define get_c_runtime_source:
     set ok to append_list(lines and "        return empty;\n")
     set ok to append_list(lines and "    }\n")
     set ok to append_list(lines and "    return ep_argv[index];\n")
-    set ok to append_list(lines and "}\n\n")
-    
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long write_file_content(const char* filepath, const char* content) {\n")
     set ok to append_list(lines and "    char mode[3];\n")
     set ok to append_list(lines and "    mode[0] = 'w';\n")
@@ -1123,23 +2344,25 @@ define get_c_runtime_source:
     set ok to append_list(lines and "    size_t written = fwrite(content, 1, len, f);\n")
     set ok to append_list(lines and "    fclose(f);\n")
     set ok to append_list(lines and "    return written == len ? 1 : 0;\n")
-    set ok to append_list(lines and "}\n\n")
-    
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long run_command(const char* command) {\n")
     set ok to append_list(lines and "    if (!command) return -1;\n")
     set ok to append_list(lines and "    return system(command);\n")
-    set ok to append_list(lines and "}\n\n")
-    
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "char* substring(const char* s, long long start, long long len) {\n")
     set ok to append_list(lines and "    if (!s) {\n")
     set ok to append_list(lines and "        char* empty = malloc(1);\n")
     set ok to append_list(lines and "        if (empty) empty[0] = '\\0';\n")
+    set ok to append_list(lines and "        ep_gc_register(empty, EP_OBJ_STRING);\n")
     set ok to append_list(lines and "        return empty;\n")
     set ok to append_list(lines and "    }\n")
     set ok to append_list(lines and "    long long total_len = strlen(s);\n")
     set ok to append_list(lines and "    if (start < 0 || start >= total_len || len <= 0) {\n")
     set ok to append_list(lines and "        char* empty = malloc(1);\n")
     set ok to append_list(lines and "        if (empty) empty[0] = '\\0';\n")
+    set ok to append_list(lines and "        ep_gc_register(empty, EP_OBJ_STRING);\n")
     set ok to append_list(lines and "        return empty;\n")
     set ok to append_list(lines and "    }\n")
     set ok to append_list(lines and "    if (start + len > total_len) {\n")
@@ -1149,45 +2372,49 @@ define get_c_runtime_source:
     set ok to append_list(lines and "    if (!sub) {\n")
     set ok to append_list(lines and "        char* empty = malloc(1);\n")
     set ok to append_list(lines and "        if (empty) empty[0] = '\\0';\n")
+    set ok to append_list(lines and "        ep_gc_register(empty, EP_OBJ_STRING);\n")
     set ok to append_list(lines and "        return empty;\n")
     set ok to append_list(lines and "    }\n")
     set ok to append_list(lines and "    strncpy(sub, s + start, len);\n")
     set ok to append_list(lines and "    sub[len] = '\\0';\n")
+    set ok to append_list(lines and "    ep_gc_register(sub, EP_OBJ_STRING);\n")
     set ok to append_list(lines and "    return sub;\n")
-    set ok to append_list(lines and "}\n\n")
-    
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "char* string_from_list(long long list_ptr) {\n")
     set ok to append_list(lines and "    EpList* list = (EpList*)list_ptr;\n")
     set ok to append_list(lines and "    if (!list) {\n")
     set ok to append_list(lines and "        char* empty = malloc(1);\n")
     set ok to append_list(lines and "        if (empty) empty[0] = '\\0';\n")
+    set ok to append_list(lines and "        ep_gc_register(empty, EP_OBJ_STRING);\n")
     set ok to append_list(lines and "        return empty;\n")
     set ok to append_list(lines and "    }\n")
     set ok to append_list(lines and "    char* s = malloc(list->length + 1);\n")
     set ok to append_list(lines and "    if (!s) {\n")
     set ok to append_list(lines and "        char* empty = malloc(1);\n")
     set ok to append_list(lines and "        if (empty) empty[0] = '\\0';\n")
+    set ok to append_list(lines and "        ep_gc_register(empty, EP_OBJ_STRING);\n")
     set ok to append_list(lines and "        return empty;\n")
     set ok to append_list(lines and "    }\n")
     set ok to append_list(lines and "    for (long long i = 0; i < list->length; i++) {\n")
     set ok to append_list(lines and "        s[i] = (char)list->data[i];\n")
     set ok to append_list(lines and "    }\n")
     set ok to append_list(lines and "    s[list->length] = '\\0';\n")
+    set ok to append_list(lines and "    ep_gc_register(s, EP_OBJ_STRING);\n")
     set ok to append_list(lines and "    return s;\n")
-    set ok to append_list(lines and "}\n\n")
-    
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long pop_list(long long list_ptr) {\n")
     set ok to append_list(lines and "    EpList* list = (EpList*)list_ptr;\n")
     set ok to append_list(lines and "    if (!list || list->length <= 0) return 0;\n")
     set ok to append_list(lines and "    list->length -= 1;\n")
     set ok to append_list(lines and "    return list->data[list->length];\n")
-    set ok to append_list(lines and "}\n\n")
-    
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long display_string(const char* s) {\n")
     set ok to append_list(lines and "    if (s) puts(s);\n")
     set ok to append_list(lines and "    return 0;\n")
-    set ok to append_list(lines and "}\n\n")
-    
+    set ok to append_list(lines and "}\n")
     return join_strings(lines)
 
 define get_c_main_source:
@@ -1195,36 +2422,600 @@ define get_c_main_source:
     set ok to append_list(lines and "\n/* Bootstrapper C main */\n")
     set ok to append_list(lines and "int main(int argc, char** argv) {\n")
     set ok to append_list(lines and "    init_ep_args(argc, argv);\n")
-    set ok to append_list(lines and "    _main();\n")
-    set ok to append_list(lines and "    return 0;\n")
+    set ok to append_list(lines and "    int result = (int)_main();\n")
+    set ok to append_list(lines and "    ep_gc_shutdown();\n")
+    set ok to append_list(lines and "    return result;\n")
     set ok to append_list(lines and "}\n")
     return join_strings(lines)
 
-define generate_c with program:
+define get_c_test_main_source with program:
+    set funcs to get_list(program and 3)
+    set funcs_len to length_list(funcs)
+    set test_cases to create_list()
+    
+    set idx to 0
+    repeat while idx < funcs_len:
+        set func to get_list(funcs and idx)
+        set name to get_list(func and 1)
+        set name_len to string_length(name)
+        if name_len > 4:
+            set prefix to substring(name and 0 and 5)
+            if "test_" equals prefix:
+                set ok to append_list(test_cases and name)
+        set idx to idx + 1
+        
+    set test_count to length_list(test_cases)
+    
+    set lines to create_list()
+    set ok to append_list(lines and "\n/* Test runner C main */\n")
+    set ok to append_list(lines and "#include <sys/types.h>\n")
+    set ok to append_list(lines and "#include <sys/wait.h>\n")
+    set ok to append_list(lines and "#include <unistd.h>\n")
+    set ok to append_list(lines and "#include <stdio.h>\n")
+    set ok to append_list(lines and "#include <stdlib.h>\n\n")
+    
+    set ok to append_list(lines and "int run_test(long long (*test_func)(void), const char* name) {\n")
+    set ok to append_list(lines and "    printf(\"test_%s ... \", name);\n")
+    set ok to append_list(lines and "    fflush(stdout);\n")
+    set ok to append_list(lines and "    pid_t pid = fork();\n")
+    set ok to append_list(lines and "    if (pid < 0) {\n")
+    set ok to append_list(lines and "        printf(\"FAILED (fork failed)\\n\");\n")
+    set ok to append_list(lines and "        return 0;\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    if (pid == 0) {\n")
+    set ok to append_list(lines and "        exit((int)test_func());\n")
+    set ok to append_list(lines and "    } else {\n")
+    set ok to append_list(lines and "        int status;\n")
+    set ok to append_list(lines and "        waitpid(pid, &status, 0);\n")
+    set ok to append_list(lines and "        if (WIFEXITED(status)) {\n")
+    set ok to append_list(lines and "            int exit_code = WEXITSTATUS(status);\n")
+    set ok to append_list(lines and "            if (exit_code == 0) {\n")
+    set ok to append_list(lines and "                printf(\"OK\\n\");\n")
+    set ok to append_list(lines and "                return 1;\n")
+    set ok to append_list(lines and "            } else {\n")
+    set ok to append_list(lines and "                printf(\"FAILED (exit code %d)\\n\", exit_code);\n")
+    set ok to append_list(lines and "                return 0;\n")
+    set ok to append_list(lines and "            }\n")
+    set ok to append_list(lines and "        } else if (WIFSIGNALED(status)) {\n")
+    set ok to append_list(lines and "            int sig = WTERMSIG(status);\n")
+    set ok to append_list(lines and "            printf(\"FAILED (crashed/signal %d)\\n\", sig);\n")
+    set ok to append_list(lines and "            return 0;\n")
+    set ok to append_list(lines and "        } else {\n")
+    set ok to append_list(lines and "            printf(\"FAILED\\n\");\n")
+    set ok to append_list(lines and "            return 0;\n")
+    set ok to append_list(lines and "        }\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "}\n\n")
+    
+    set ok to append_list(lines and "int main(int argc, char** argv) {\n")
+    set ok to append_list(lines and "    init_ep_args(argc, argv);\n")
+    
+    set ok to append_list(lines and "    printf(\"Running ")
+    set ok to append_list(lines and ep_int_to_str(test_count))
+    set ok to append_list(lines and " tests...\\n\");\n")
+    
+    set ok to append_list(lines and "    int passed = 0;\n")
+    set ok to append_list(lines and "    int failed = 0;\n")
+    set ok to append_list(lines and "    int total = 0;\n\n")
+    
+    set idx2 to 0
+    repeat while idx2 < test_count:
+        set tc_name to get_list(test_cases and idx2)
+        set ok to append_list(lines and "    total++;\n")
+        set ok to append_list(lines and "    if (run_test(")
+        set ok to append_list(lines and tc_name)
+        set ok to append_list(lines and ", \"")
+        set ok to append_list(lines and tc_name)
+        set ok to append_list(lines and "\")) passed++; else failed++;\n")
+        set idx2 to idx2 + 1
+        
+    set ok to append_list(lines and "\n    printf(\"\\nResult: %d passed; %d failed\\n\", passed, failed);\n")
+    set ok to append_list(lines and "    if (failed > 0) return 1;\n")
+    set ok to append_list(lines and "    return 0;\n")
+    set ok to append_list(lines and "}\n")
+    
+    return join_strings(lines)
+
+define collect_spawns_in_stmts with stmts and spawn_list:
+    set len to length_list(stmts)
+    set idx to 0
+    repeat while idx < len:
+        set stmt to get_list(stmts and idx)
+        set type to get_list(stmt and 0)
+        if type == 15: # NODE_SPAWN
+            set ok to append_list(spawn_list and stmt)
+        else:
+            if type == 10: # NODE_IF
+                set then_b to get_list(stmt and 2)
+                set else_b to get_list(stmt and 3)
+                set ok to collect_spawns_in_stmts(then_b and spawn_list)
+                if else_b != 0:
+                    set ok to collect_spawns_in_stmts(else_b and spawn_list)
+            else:
+                if type == 11: # NODE_REPEAT_WHILE
+                    set body to get_list(stmt and 2)
+                    set ok to collect_spawns_in_stmts(body and spawn_list)
+        set idx to idx + 1
+    return 0
+
+define collect_all_spawns with program:
+    set spawn_list to create_list()
+    set funcs to get_list(program and 3)
+    set len to length_list(funcs)
+    set idx to 0
+    repeat while idx < len:
+        set func to get_list(funcs and idx)
+        set body to get_list(func and 3)
+        set ok to collect_spawns_in_stmts(body and spawn_list)
+        set idx to idx + 1
+    return spawn_list
+
+define clone_list with lst:
+    set new_lst to create_list()
+    set len to length_list(lst)
+    set idx to 0
+    repeat while idx < len:
+        set item to get_list(lst and idx)
+        set ok to append_list(new_lst and item)
+        set idx to idx + 1
+    return new_lst
+
+define check_expr_reads with expr and var_keys and var_values and state_keys and state_values:
+    set type to get_list(expr and 0)
+    if type == 1 || type == 2 || type == 17: # NODE_INT, NODE_STR, NODE_CHANNEL
+        return 1
+        
+    if type == 3: # NODE_IDENT
+        set name to get_list(expr and 1)
+        set t to map_get(var_keys and var_values and name)
+        set is_tracked to 0
+        if t == 4 || t == 2 || t == 3 || t == 5 || t == 6: # TYPE_LIST, TYPE_STR, TYPE_DYNSTR, TYPE_REFLIST, TYPE_REFSTR
+            set is_tracked to 1
+        if is_tracked == 1:
+            set st to map_get(state_keys and state_values and name)
+            if st == 2: # OwnerState::Moved
+                display "Safety Error: Use of moved value:"
+                set ok to display_string(name)
+                return 0
+        return 1
+        
+    if type == 20: # NODE_BORROW
+        set inner to get_list(expr and 1)
+        return check_expr_reads(inner and var_keys and var_values and state_keys and state_values)
+        
+    if type == 21: # NODE_AWAIT
+        set inner to get_list(expr and 1)
+        return check_expr_reads(inner and var_keys and var_values and state_keys and state_values)
+        
+    if type == 4 || type == 5 || type == 14: # NODE_BINARY, NODE_COMP, NODE_LOGICAL
+        set left to get_list(expr and 1)
+        set right to get_list(expr and 3)
+        set ok to check_expr_reads(left and var_keys and var_values and state_keys and state_values)
+        if ok == 0:
+            return 0
+        set ok to check_expr_reads(right and var_keys and var_values and state_keys and state_values)
+        if ok == 0:
+            return 0
+        return 1
+        
+    if type == 6: # NODE_CALL
+        set name to get_list(expr and 1)
+        set args to get_list(expr and 2)
+        set args_len to length_list(args)
+        set idx to 0
+        repeat while idx < args_len:
+            set arg to get_list(args and idx)
+            set ok to check_expr_reads(arg and var_keys and var_values and state_keys and state_values)
+            if ok == 0:
+                return 0
+            set idx to idx + 1
+        return 1
+        
+    if type == 18: # NODE_RECEIVE
+        set chan to get_list(expr and 1)
+        return check_expr_reads(chan and var_keys and var_values and state_keys and state_values)
+        
+    return 1
+
+define dec_borrow_count with target and count_keys and count_values:
+    set val to map_get(count_keys and count_values and target)
+    if val != 0:
+        if val > 0:
+            set ok to map_put(count_keys and count_values and target and val - 1)
+    return 0
+
+define inc_borrow_count with target and count_keys and count_values:
+    set val to map_get(count_keys and count_values and target)
+    set ok to map_put(count_keys and count_values and target and val + 1)
+    return 0
+
+define check_safety_stmts with func and stmts and var_keys and var_values and state_keys and state_values and borrow_keys and borrow_values and count_keys and count_values:
+    set len to length_list(stmts)
+    set idx to 0
+    repeat while idx < len:
+        set stmt to get_list(stmts and idx)
+        set type to get_list(stmt and 0)
+        
+        if type == 7: # NODE_SET
+            set name to get_list(stmt and 1)
+            set expr to get_list(stmt and 2)
+            
+            set ok to check_expr_reads(expr and var_keys and var_values and state_keys and state_values)
+            if ok == 0:
+                return 0
+                
+            set old_target to map_get(borrow_keys and borrow_values and name)
+            if old_target != 0:
+                set ok to map_put(borrow_keys and borrow_values and name and 0)
+                set ok to dec_borrow_count(old_target and count_keys and count_values)
+                
+            set expr_type to get_list(expr and 0)
+            if expr_type == 20: # NODE_BORROW
+                set inner to get_list(expr and 1)
+                set inner_type to get_list(inner and 0)
+                if inner_type == 3: # NODE_IDENT
+                    set target to get_list(inner and 1)
+                    set st to map_get(state_keys and state_values and target)
+                    if st == 2:
+                        display "Safety Error: Cannot borrow moved variable:"
+                        set ok to display_string(target)
+                        return 0
+                    set ok to map_put(borrow_keys and borrow_values and name and target)
+                    set ok to inc_borrow_count(target and count_keys and count_values)
+                else:
+                    display "Safety Error: Expected identifier in borrow expression"
+                    return 0
+            else:
+                set bc to map_get(count_keys and count_values and name)
+                if bc > 0:
+                    display "Safety Error: Cannot modify variable because it is currently borrowed:"
+                    set ok to display_string(name)
+                    return 0
+                    
+                set t to map_get(var_keys and var_values and name)
+                set is_tracked to 0
+                if t == 4 || t == 2 || t == 3 || t == 5 || t == 6:
+                    set is_tracked to 1
+                    
+                if is_tracked == 1:
+                    if expr_type == 3: # NODE_IDENT
+                        set src to get_list(expr and 1)
+                        set src_t to map_get(var_keys and var_values and src)
+                        set src_tracked to 0
+                        if src_t == 4 || src_t == 2 || src_t == 3 || src_t == 5 || src_t == 6:
+                            set src_tracked to 1
+                        if src_tracked == 1:
+                            set st to map_get(state_keys and state_values and src)
+                            if st == 2:
+                                display "Safety Error: Use of moved value:"
+                                set ok to display_string(src)
+                                return 0
+                                
+                            set src_bc to map_get(count_keys and count_values and src)
+                            if src_bc > 0:
+                                display "Safety Error: Cannot move variable because it is currently borrowed:"
+                                set ok to display_string(src)
+                                return 0
+                                
+                            if src_t != 5 && src_t != 6:
+                                set ok to map_put(state_keys and state_values and src and 2)
+                    set ok to map_put(state_keys and state_values and name and 1)
+                
+        if type == 16: # NODE_SEND
+            set chan to get_list(stmt and 1)
+            set val to get_list(stmt and 2)
+            set ok to check_expr_reads(chan and var_keys and var_values and state_keys and state_values)
+            if ok == 0:
+                return 0
+            set val_type to get_list(val and 0)
+            if val_type == 3: # NODE_IDENT
+                set src to get_list(val and 1)
+                set src_t to map_get(var_keys and var_values and src)
+                set src_tracked to 0
+                if src_t == 4 || src_t == 2 || src_t == 3 || src_t == 5 || src_t == 6:
+                    set src_tracked to 1
+                if src_tracked == 1:
+                    set st to map_get(state_keys and state_values and src)
+                    if st == 2:
+                        display "Safety Error: Use of moved value:"
+                        set ok to display_string(src)
+                        return 0
+                    set src_bc to map_get(count_keys and count_values and src)
+                    if src_bc > 0:
+                        display "Safety Error: Cannot move variable because it is currently borrowed:"
+                        set ok to display_string(src)
+                        return 0
+                    if src_t != 5 && src_t != 6:
+                        set ok to map_put(state_keys and state_values and src and 2)
+                else:
+                    set ok to check_expr_reads(val and var_keys and var_values and state_keys and state_values)
+                    if ok == 0:
+                        return 0
+            else:
+                set ok to check_expr_reads(val and var_keys and var_values and state_keys and state_values)
+                if ok == 0:
+                    return 0
+                    
+        if type == 15: # NODE_SPAWN
+            set func_name to get_list(stmt and 1)
+            set args to get_list(stmt and 2)
+            set args_len to length_list(args)
+            set a_idx to 0
+            repeat while a_idx < args_len:
+                set arg to get_list(args and a_idx)
+                set arg_type to get_list(arg and 0)
+                if arg_type == 3: # NODE_IDENT
+                    set src to get_list(arg and 1)
+                    set src_t to map_get(var_keys and var_values and src)
+                    set src_tracked to 0
+                    if src_t == 4 || src_t == 2 || src_t == 3 || src_t == 5 || src_t == 6:
+                        set src_tracked to 1
+                    if src_tracked == 1:
+                        set st to map_get(state_keys and state_values and src)
+                        if st == 2:
+                            display "Safety Error: Use of moved value:"
+                            set ok to display_string(src)
+                            return 0
+                        set src_bc to map_get(count_keys and count_values and src)
+                        if src_bc > 0:
+                            display "Safety Error: Cannot move variable because it is currently borrowed:"
+                            set ok to display_string(src)
+                            return 0
+                        if src_t != 5 && src_t != 6:
+                            set ok to map_put(state_keys and state_values and src and 2)
+                    else:
+                        set ok to check_expr_reads(arg and var_keys and var_values and state_keys and state_values)
+                        if ok == 0:
+                            return 0
+                else:
+                    set ok to check_expr_reads(arg and var_keys and var_values and state_keys and state_values)
+                    if ok == 0:
+                        return 0
+                set a_idx to a_idx + 1
+                
+        if type == 9: # NODE_DISPLAY
+            set expr to get_list(stmt and 1)
+            set ok to check_expr_reads(expr and var_keys and var_values and state_keys and state_values)
+            if ok == 0:
+                return 0
+                
+        if type == 8: # NODE_RETURN
+            set expr to get_list(stmt and 1)
+            set ok to check_expr_reads(expr and var_keys and var_values and state_keys and state_values)
+            if ok == 0:
+                return 0
+            set expr_type to get_list(expr and 0)
+            if expr_type == 20: # NODE_BORROW
+                set inner to get_list(expr and 1)
+                set inner_type to get_list(inner and 0)
+                if inner_type == 3: # NODE_IDENT
+                    set target to get_list(inner and 1)
+                    set params to get_list(func and 2)
+                    set p_len to length_list(params)
+                    set p_idx to 0
+                    set is_borrowed_param to 0
+                    repeat while p_idx < p_len:
+                        set p_node to get_list(params and p_idx)
+                        set p_name to get_list(p_node and 0)
+                        set is_borrow to get_list(p_node and 1)
+                        if string_concat(p_name and "") equals string_concat(target and ""):
+                            if is_borrow == 1:
+                                set is_borrowed_param to 1
+                        set p_idx to p_idx + 1
+                    if is_borrowed_param == 0:
+                        display "Safety Error: Cannot return reference to local variable:"
+                        set ok to display_string(target)
+                        return 0
+            else:
+                if expr_type == 3: # NODE_IDENT
+                    set name to get_list(expr and 1)
+                    set t to map_get(var_keys and var_values and name)
+                    if t == 5 || t == 6: # RefList or RefStr
+                        set target to map_get(borrow_keys and borrow_values and name)
+                        if target == 0:
+                            set target to name
+                        set params to get_list(func and 2)
+                        set p_len to length_list(params)
+                        set p_idx to 0
+                        set is_borrowed_param to 0
+                        repeat while p_idx < p_len:
+                            set p_node to get_list(params and p_idx)
+                            set p_name to get_list(p_node and 0)
+                            set is_borrow to get_list(p_node and 1)
+                            if string_concat(p_name and "") equals string_concat(target and ""):
+                                if is_borrow == 1:
+                                    set is_borrowed_param to 1
+                            set p_idx to p_idx + 1
+                        if is_borrowed_param == 0:
+                            display "Safety Error: Cannot return reference to local variable:"
+                            set ok to display_string(target)
+                            return 0
+                
+        if type == 10: # NODE_IF
+            set cond to get_list(stmt and 1)
+            set then_b to get_list(stmt and 2)
+            set else_b to get_list(stmt and 3)
+            
+            set ok to check_expr_reads(cond and var_keys and var_values and state_keys and state_values)
+            if ok == 0:
+                return 0
+                
+            set then_state_keys to clone_list(state_keys)
+            set then_state_values to clone_list(state_values)
+            set then_borrow_keys to clone_list(borrow_keys)
+            set then_borrow_values to clone_list(borrow_values)
+            set then_count_keys to clone_list(count_keys)
+            set then_count_values to clone_list(count_values)
+            
+            set ok to check_safety_stmts(func and then_b and var_keys and var_values and then_state_keys and then_state_values and then_borrow_keys and then_borrow_values and then_count_keys and then_count_values)
+            if ok == 0:
+                return 0
+                
+            set else_state_keys to clone_list(state_keys)
+            set else_state_values to clone_list(state_values)
+            set else_borrow_keys to clone_list(borrow_keys)
+            set else_borrow_values to clone_list(borrow_values)
+            set else_count_keys to clone_list(count_keys)
+            set else_count_values to clone_list(count_values)
+            if else_b != 0:
+                set ok to check_safety_stmts(func and else_b and var_keys and var_values and else_state_keys and else_state_values and else_borrow_keys and else_borrow_values and else_count_keys and else_count_values)
+                if ok == 0:
+                    return 0
+                    
+            # Merge states
+            set st_len to length_list(state_keys)
+            set st_idx to 0
+            repeat while st_idx < st_len:
+                set var_name to get_list(state_keys and st_idx)
+                set then_val to map_get(then_state_keys and then_state_values and var_name)
+                set else_val to map_get(else_state_keys and else_state_values and var_name)
+                if then_val == 2 || else_val == 2:
+                    set ok to map_put(state_keys and state_values and var_name and 2)
+                set st_idx to st_idx + 1
+                
+            # Merge borrows & borrow counts
+            set b_len to length_list(then_borrow_keys)
+            set b_idx to 0
+            repeat while b_idx < b_len:
+                set b_k to get_list(then_borrow_keys and b_idx)
+                set b_v to get_list(then_borrow_values and b_idx)
+                set ok to map_put(borrow_keys and borrow_values and b_k and b_v)
+                set b_idx to b_idx + 1
+            set b_len to length_list(else_borrow_keys)
+            set b_idx to 0
+            repeat while b_idx < b_len:
+                set b_k to get_list(else_borrow_keys and b_idx)
+                set b_v to get_list(else_borrow_values and b_idx)
+                set ok to map_put(borrow_keys and borrow_values and b_k and b_v)
+                set b_idx to b_idx + 1
+                
+            set bc_len to length_list(then_count_keys)
+            set bc_idx to 0
+            repeat while bc_idx < bc_len:
+                set bc_k to get_list(then_count_keys and bc_idx)
+                set bc_v to get_list(then_count_values and bc_idx)
+                set cur_v to map_get(count_keys and count_values and bc_k)
+                if bc_v > cur_v:
+                    set ok to map_put(count_keys and count_values and bc_k and bc_v)
+                set bc_idx to bc_idx + 1
+            set bc_len to length_list(else_count_keys)
+            set bc_idx to 0
+            repeat while bc_idx < bc_len:
+                set bc_k to get_list(else_count_keys and bc_idx)
+                set bc_v to get_list(else_count_values and bc_idx)
+                set cur_v to map_get(count_keys and count_values and bc_k)
+                if bc_v > cur_v:
+                    set ok to map_put(count_keys and count_values and bc_k and bc_v)
+                set bc_idx to bc_idx + 1
+                
+        if type == 11: # NODE_REPEAT_WHILE
+            set cond to get_list(stmt and 1)
+            set body to get_list(stmt and 2)
+            
+            set ok to check_expr_reads(cond and var_keys and var_values and state_keys and state_values)
+            if ok == 0:
+                return 0
+                
+            set start_state_keys to clone_list(state_keys)
+            set start_state_values to clone_list(state_values)
+            
+            set ok to check_safety_stmts(func and body and var_keys and var_values and state_keys and state_values and borrow_keys and borrow_values and count_keys and count_values)
+            if ok == 0:
+                return 0
+                
+            set st_len to length_list(start_state_keys)
+            set st_idx to 0
+            repeat while st_idx < st_len:
+                set var_name to get_list(start_state_keys and st_idx)
+                set start_val to get_list(start_state_values and st_idx)
+                set end_val to map_get(state_keys and state_values and var_name)
+                if start_val == 1 && end_val == 2:
+                    display "Safety Error: Variable is moved inside a loop and not reinitialized:"
+                    set ok to display_string(var_name)
+                    return 0
+                set st_idx to st_idx + 1
+                
+            set ok to check_expr_reads(cond and var_keys and var_values and state_keys and state_values)
+            if ok == 0:
+                return 0
+                
+        set idx to idx + 1
+    return 1
+
+define analyze_safety with state and program:
+    set funcs to get_list(program and 3)
+    set funcs_len to length_list(funcs)
+    set idx to 0
+    repeat while idx < funcs_len:
+        set func to get_list(funcs and idx)
+        set name to get_list(func and 1)
+        set params to get_list(func and 2)
+        set body to get_list(func and 3)
+        
+        set var_keys to create_list() + 0
+        set var_values to create_list() + 0
+        
+        set p_len to length_list(params)
+        set p_idx to 0
+        repeat while p_idx < p_len:
+            set p_node to get_list(params and p_idx)
+            set p_name to get_list(p_node and 0)
+            set is_borrow to get_list(p_node and 1)
+            set param_type to 1
+            if is_borrow == 1:
+                set param_type to 5
+            set ok to map_put(var_keys and var_values and p_name and param_type)
+            set p_idx to p_idx + 1
+            
+        set ok to collect_var_types(state and body and var_keys and var_values)
+        
+        set state_keys to create_list() + 0
+        set state_values to create_list() + 0
+        
+        set p_idx to 0
+        repeat while p_idx < p_len:
+            set p_node to get_list(params and p_idx)
+            set p_name to get_list(p_node and 0)
+            set t to map_get(var_keys and var_values and p_name)
+            if t == 4 || t == 2 || t == 3 || t == 5 || t == 6:
+                set ok to map_put(state_keys and state_values and p_name and 1)
+            set p_idx to p_idx + 1
+            
+        set borrow_keys to create_list() + 0
+        set borrow_values to create_list() + 0
+        set count_keys to create_list() + 0
+        set count_values to create_list() + 0
+        
+        set ok to check_safety_stmts(func and body and var_keys and var_values and state_keys and state_values and borrow_keys and borrow_values and count_keys and count_values)
+        if ok == 0:
+            return 0
+            
+        set idx to idx + 1
+    return 1
+
+define generate_c with program and is_test_mode:
     set state to create_codegen_state()
     set ok to analyze_return_types(state and program)
+    set safety_ok to analyze_safety(state and program)
+    if safety_ok == 0:
+        return ""
     
     # Emit headers and runtime
     set ok to emit(state and get_c_runtime_source())
     
-    # Emit function prototypes
-    set funcs to get_list(program and 2)
-    set len to length_list(funcs)
-    
-    set ok to emit(state and "\n/* User Function Prototypes */\n")
+    # Emit FFI external prototypes
+    set externals to get_list(program and 2)
+    set ext_len to length_list(externals)
+    set ok to emit(state and "\n/* External Function Prototypes (FFI) */\n")
     set idx to 0
-    repeat while idx < len:
-        set func to get_list(funcs and idx)
-        set name to get_list(func and 1)
-        set params to get_list(func and 2)
+    repeat while idx < ext_len:
+        set ext to get_list(externals and idx)
+        set name to get_list(ext and 1)
+        set params to get_list(ext and 2)
         set p_len to length_list(params)
         
-        set c_name to name
-        if "main" equals name:
-            set c_name to "_main"
-            
         set proto to "long long "
-        set proto to string_concat(proto and c_name)
+        set proto to string_concat(proto and name)
         set proto to string_concat(proto and "(")
         
         set p_i to 0
@@ -1237,6 +3028,115 @@ define generate_c with program:
         set ok to emit(state and proto)
         set idx to idx + 1
     set ok to emit(state and "\n")
+        
+    # Emit function prototypes
+    set funcs to get_list(program and 3)
+    set len to length_list(funcs)
+    
+    set ok to emit(state and "\n/* User Function Prototypes */\n")
+    set idx to 0
+    repeat while idx < len:
+        set func to get_list(funcs and idx)
+        set name to get_list(func and 1)
+        set params to get_list(func and 2)
+        set p_len to length_list(params)
+        
+        set is_async to 0
+        if length_list(func) > 4:
+            set is_async to get_list(func and 4)
+            
+        set proto to "long long "
+        set proto to string_concat(proto and get_fn_c_name(func))
+        set proto to string_concat(proto and "(")
+        
+        set p_i to 0
+        repeat while p_i < p_len:
+            set proto to string_concat(proto and "long long")
+            if p_i < p_len - 1:
+                set proto to string_concat(proto and ", ")
+            set p_i to p_i + 1
+        set proto to string_concat(proto and ");\n")
+        set ok to emit(state and proto)
+        
+        if is_async == 1:
+            set proto2 to "long long "
+            set proto2 to string_concat(proto2 and get_fn_c_name(func))
+            set proto2 to string_concat(proto2 and "_impl(")
+            set p_i to 0
+            repeat while p_i < p_len:
+                set proto2 to string_concat(proto2 and "long long")
+                if p_i < p_len - 1:
+                    set proto2 to string_concat(proto2 and ", ")
+                set p_i to p_i + 1
+            set proto2 to string_concat(proto2 and ");\n")
+            set ok to emit(state and proto2)
+            
+            set proto3 to "void* "
+            set proto3 to string_concat(proto3 and get_fn_c_name(func))
+            set proto3 to string_concat(proto3 and "_async_wrapper(void* r);\n")
+            set ok to emit(state and proto3)
+            
+        set idx to idx + 1
+    set ok to emit(state and "\n")
+
+    # Collect and emit thread spawn wrappers
+    set spawn_list to collect_all_spawns(program)
+    set dummy to set_codegen_spawn_list(state and spawn_list)
+    set spawn_len to length_list(spawn_list)
+    set ok to emit(state and "\n/* Thread Spawn Wrappers */\n")
+    
+    set idx to 0
+    repeat while idx < spawn_len:
+        set spawn_node to get_list(spawn_list and idx)
+        set func_name to get_list(spawn_node and 1)
+        set args to get_list(spawn_node and 2)
+        set args_len to length_list(args)
+        
+        set struct_decl to "typedef struct {\n"
+        set j to 0
+        repeat while j < args_len:
+            set struct_decl to string_concat(struct_decl and "    long long arg")
+            set struct_decl to string_concat(struct_decl and ep_int_to_str(j))
+            set struct_decl to string_concat(struct_decl and ";\n")
+            set j to j + 1
+        if args_len == 0:
+            set struct_decl to string_concat(struct_decl and "    int dummy;\n")
+        set struct_decl to string_concat(struct_decl and "} spawn_args_")
+        set struct_decl to string_concat(struct_decl and ep_int_to_str(idx))
+        set struct_decl to string_concat(struct_decl and ";\n\n")
+        set ok to emit(state and struct_decl)
+        
+        set wrap_fn to "void* spawn_wrapper_"
+        set wrap_fn to string_concat(wrap_fn and ep_int_to_str(idx))
+        set wrap_fn to string_concat(wrap_fn and "(void* r) {\n")
+        set wrap_fn to string_concat(wrap_fn and "    spawn_args_")
+        set wrap_fn to string_concat(wrap_fn and ep_int_to_str(idx))
+        set wrap_fn to string_concat(wrap_fn and "* args = (spawn_args_")
+        set wrap_fn to string_concat(wrap_fn and ep_int_to_str(idx))
+        set wrap_fn to string_concat(wrap_fn and "*)r;\n")
+        set wrap_fn to string_concat(wrap_fn and "    ")
+        set c_name to func_name
+        if "main" equals func_name:
+            set c_name to "_main"
+        set wrap_fn to string_concat(wrap_fn and c_name)
+        set wrap_fn to string_concat(wrap_fn and "(")
+        set j to 0
+        repeat while j < args_len:
+            set wrap_fn to string_concat(wrap_fn and "args->arg")
+            set wrap_fn to string_concat(wrap_fn and ep_int_to_str(j))
+            if j < args_len - 1:
+                set wrap_fn to string_concat(wrap_fn and ", ")
+            set j to j + 1
+        set wrap_fn to string_concat(wrap_fn and ");\n")
+        set wrap_fn to string_concat(wrap_fn and "    free(args);\n")
+        set wrap_fn to string_concat(wrap_fn and "    return NULL;\n")
+        set wrap_fn to string_concat(wrap_fn and "}\n\n")
+        set ok to emit(state and wrap_fn)
+        set idx to idx + 1
+    set ok to emit(state and "\n")
+    
+    # Reset spawn index
+    set dummy to set_codegen_spawn_index(state and 0)
     
     # Emit functions
     set idx to 0
@@ -1246,7 +3146,10 @@ define generate_c with program:
         set idx to idx + 1
         
     # Emit main bootstrapper
-    set ok to emit(state and get_c_main_source())
+    if is_test_mode == 1:
+        set ok to emit(state and get_c_test_main_source(program))
+    else:
+        set ok to emit(state and get_c_main_source())
     
     set lines to get_list(state and 0)
     set c_code to join_strings(lines)

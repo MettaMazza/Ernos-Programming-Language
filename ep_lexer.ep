@@ -289,8 +289,6 @@ define tokenize_source with source:
                                         set tok_type to 8
                                     if "while" equals id_str:
                                         set tok_type to 9
-                                    if "import" equals id_str:
-                                        set tok_type to 32
                                     if "with" equals id_str:
                                         set tok_type to 10
                                     if "and" equals id_str:
@@ -301,6 +299,75 @@ define tokenize_source with source:
                                         set tok_type to 13
                                     if "equals" equals id_str:
                                         set tok_type to 18
+                                    if "import" equals id_str:
+                                        set tok_type to 32
+                                    if "spawn" equals id_str:
+                                        set tok_type to 33
+                                    if "channel" equals id_str:
+                                        set tok_type to 34
+                                    if "send" equals id_str:
+                                        set tok_type to 35
+                                    if "receive" equals id_str:
+                                        set tok_type to 36
+                                    if "from" equals id_str:
+                                        set tok_type to 37
+                                    if "external" equals id_str:
+                                        set tok_type to 38
+                                    if "borrow" equals id_str:
+                                        set tok_type to 39
+                                    # New tokens for full language support
+                                    if "structure" equals id_str:
+                                        set tok_type to 44
+                                    if "field" equals id_str:
+                                        set tok_type to 45
+                                    if "create" equals id_str:
+                                        set tok_type to 46
+                                    if "as" equals id_str:
+                                        set tok_type to 42
+                                    if "returning" equals id_str:
+                                        set tok_type to 43
+                                    if "for" equals id_str:
+                                        set tok_type to 53
+                                    if "each" equals id_str:
+                                        set tok_type to 54
+                                    if "in" equals id_str:
+                                        set tok_type to 55
+                                    if "range" equals id_str:
+                                        set tok_type to 60
+                                    if "choice" equals id_str:
+                                        set tok_type to 47
+                                    if "variant" equals id_str:
+                                        set tok_type to 48
+                                    if "check" equals id_str:
+                                        set tok_type to 49
+                                    if "on" equals id_str:
+                                        set tok_type to 56
+                                    if "trait" equals id_str:
+                                        set tok_type to 57
+                                    if "implement" equals id_str:
+                                        set tok_type to 58
+                                    if "not" equals id_str:
+                                        set tok_type to 52
+                                    if "break" equals id_str:
+                                        set tok_type to 61
+                                    if "continue" equals id_str:
+                                        set tok_type to 62
+                                    if "of" equals id_str:
+                                        set tok_type to 59
+                                    if "try" equals id_str:
+                                        set tok_type to 51
+                                    if "given" equals id_str:
+                                        set tok_type to 50
+                                    if "true" equals id_str:
+                                        set tok_type to 63
+                                    if "false" equals id_str:
+                                        set tok_type to 64
+                                    if "async" equals id_str:
+                                        set tok_type to 65
+                                    if "await" equals id_str:
+                                        set tok_type to 66
+                                    if "modulo" equals id_str:
+                                        set tok_type to 41
                                 
                                 set tok to create_token(tok_type and id_str and current_line and current_col - id_len) + 0
                                 set ok to append_list(tokens and tok)
@@ -418,6 +485,12 @@ define tokenize_source with source:
                                         if c == 62: # >
                                             set sym_type to 17
                                             set sym_val to ">"
+                                        if c == 46: # .
+                                            set sym_type to 40
+                                            set sym_val to "."
+                                        if c == 37: # %
+                                            set sym_type to 41
+                                            set sym_val to "%"
                                     
                                     if sym_type > 0:
                                         set tok to create_token(sym_type and sym_val and current_line and current_col) + 0

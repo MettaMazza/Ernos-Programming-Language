@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Span {
     pub line: usize,
     pub col: usize,
@@ -25,12 +25,47 @@ pub enum Token {
     Repeat,
     While,
     Import,
+    Spawn,
+    Channel,
+    Send,
+    Receive,
+    From,
+    External,
+    Borrow,
+    Structure,
+    Field,
+    As,
+    Is,
+    Create,
+    Dot,
+    Returning,
+    For,
+    Each,
+    In,
+    Range,
+    Choice,
+    Variant,
+    Check,
+    On,
+    Trait,
+    Implement,
+    Not,
+    Break,
+    Continue,
+    Of,
+    Try,
+    Given,
+    True,
+    False,
+    Async,
+    Await,
 
     // Operators
     Plus,
     Minus,
     Multiply,
     Divide,
+    Modulo,
 
     // Comparisons
     LessThan,
@@ -43,6 +78,7 @@ pub enum Token {
     // Literals & Identifiers
     Identifier(String),
     Integer(i64),
+    Float(f64),
     StringLiteral(String),
 
     // Punctuation

@@ -1,4 +1,7 @@
 # ErnosPlain Self-Hosted Compiler Driver
+import "ep_lexer"
+import "ep_parser"
+import "ep_codegen"
 
 define get_file_stem with path:
     set len to string_length(path)
@@ -48,7 +51,7 @@ define contains_string with list and s:
     return 0
 
 define resolve_import_path with current_file and import_path:
-    if "math" equals import_path || "hash" equals import_path || "net" equals import_path || "json" equals import_path || "string" equals import_path:
+    if "math" equals import_path || "hash" equals import_path || "net" equals import_path || "json" equals import_path || "string" equals import_path || "sql" equals import_path || "gui" equals import_path || "crypto" equals import_path || "fs" equals import_path || "http" equals import_path || "collections" equals import_path:
         set std_path to string_concat("stdlib/" and import_path)
         set std_path_ep to string_concat(std_path and ".ep")
         return std_path_ep
@@ -62,7 +65,7 @@ define resolve_import_path with current_file and import_path:
             return resolved
     return string_concat(resolved and ".ep")
 
-define parse_all_modules with current_file and parsed_files and all_functions:
+define parse_all_modules with current_file and parsed_files and all_functions and all_externals:
     set has_parsed to contains_string(parsed_files and current_file)
     if has_parsed == 1:
         return 0
@@ -79,8 +82,16 @@ define parse_all_modules with current_file and parsed_files and all_functions:
     set program_ast to parse_program(state)
     
     set imports to get_list(program_ast and 1)
-    set funcs to get_list(program_ast and 2)
+    set externals to get_list(program_ast and 2)
+    set funcs to get_list(program_ast and 3)
     
+    set externals_len to length_list(externals)
+    set e_idx to 0
+    repeat while e_idx < externals_len:
+        set ext to get_list(externals and e_idx)
+        set ok to append_list(all_externals and ext)
+        set e_idx to e_idx + 1
+        
     set funcs_len to length_list(funcs)
     set f_idx to 0
     repeat while f_idx < funcs_len:
@@ -93,7 +104,7 @@ define parse_all_modules with current_file and parsed_files and all_functions:
     repeat while i_idx < imp_len:
         set imp to get_list(imports and i_idx)
         set resolved_path to resolve_import_path(current_file and imp)
-        set status to parse_all_modules(resolved_path and parsed_files and all_functions)
+        set status to parse_all_modules(resolved_path and parsed_files and all_functions and all_externals)
         if status != 0:
             return status
         set i_idx to i_idx + 1
@@ -103,16 +114,27 @@ define parse_all_modules with current_file and parsed_files and all_functions:
 define main:
     set arg_count to get_argument_count()
     if arg_count < 2:
-        display "Usage: epc <filename.ep>"
+        display "Usage: epc <filename.ep> or epc test <filename.ep>"
         return 1
         
+    set first_arg to get_argument(1)
+    set is_test_mode to 0
     set input_path to get_argument(1)
+    
+    if "test" equals first_arg:
+        if arg_count < 3:
+            display "Usage: epc test <filename.ep>"
+            return 1
+        set is_test_mode to 1
+        set input_path to get_argument(2)
+        
     set stem to get_file_stem(input_path)
     
     display "[1/3] Tokenizing and Parsing..."
     set all_functions to create_list()
+    set all_externals to create_list()
     set parsed_files to create_list()
-    set status to parse_all_modules(input_path and parsed_files and all_functions)
+    set status to parse_all_modules(input_path and parsed_files and all_functions and all_externals)
     if status != 0:
         return 1
         
@@ -138,20 +160,54 @@ define main:
     set program_ast to create_list()
     set ok to append_list(program_ast and 13)
     set ok to append_list(program_ast and empty_imports)
+    set ok to append_list(program_ast and all_externals)
     set ok to append_list(program_ast and all_functions)
     
     display "[2/3] Generating C Source..."
-    set c_code to generate_c(program_ast)
+    set c_code to generate_c(program_ast and is_test_mode)
     
+    if string_length(c_code) == 0:
+        display "Compilation failed due to errors."
+        return 1
+        
     # Write temporary compiled C file
     set c_path to string_concat(stem and "_compiled.c")
     set ok to write_file_content(c_path and c_code)
     
     display "[3/3] Compiling and Linking via Clang..."
-    set cmd_half1 to string_concat("clang " and c_path)
-    set cmd_half2 to string_concat(cmd_half1 and " -o ")
-    set compile_cmd to string_concat(cmd_half2 and stem)
+    set compile_cmd to "clang "
+    set compile_cmd to string_concat(compile_cmd and c_path)
+    set compile_cmd to string_concat(compile_cmd and " -o ")
+    set compile_cmd to string_concat(compile_cmd and stem)
+    set compile_cmd to string_concat(compile_cmd and " -lpthread")
     
+    set pf_len to length_list(parsed_files)
+    set pf_idx to 0
+    repeat while pf_idx < pf_len:
+        set pf to get_list(parsed_files and pf_idx)
+        set pf_str to string_concat(pf and "")
+        set pf_len_str to string_length(pf_str)
+        
+        # Check for sql.ep
+        if pf_len_str > 5:
+            set ext_sql to substring(pf_str and pf_len_str - 6 and 6)
+            if "sql.ep" equals ext_sql:
+                set compile_cmd to string_concat(compile_cmd and " -lsqlite3")
+        
+        # Check for gui.ep
+        if pf_len_str > 5:
+            set ext_gui to substring(pf_str and pf_len_str - 6 and 6)
+            if "gui.ep" equals ext_gui:
+                set compile_cmd to string_concat(compile_cmd and " -lraylib")
+                
+        # Check for crypto.ep
+        if pf_len_str > 8:
+            set ext_cry to substring(pf_str and pf_len_str - 9 and 9)
+            if "crypto.ep" equals ext_cry:
+                set compile_cmd to string_concat(compile_cmd and " -L/opt/homebrew/opt/openssl/lib -lcrypto")
+                
+        set pf_idx to pf_idx + 1
+        
     set status to run_command(compile_cmd)
     
     if status == 0:

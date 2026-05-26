@@ -3,6 +3,13 @@ pub mod lexer;
 pub mod ast;
 pub mod parser;
 pub mod codegen;
+pub mod type_check;
+pub mod diagnostics;
+pub mod borrow_check;
+pub mod optimizer;
+pub mod arm64;
+pub mod native_codegen;
+pub mod x86_64_codegen;
 
 use std::env;
 use std::fs;
@@ -11,7 +18,8 @@ use std::path::{Path, PathBuf};
 use std::collections::HashSet;
 
 fn resolve_import_path(current_file: &Path, import_path: &str) -> PathBuf {
-    if import_path == "math" || import_path == "hash" || import_path == "net" || import_path == "json" || import_path == "string" {
+    let stdlib_modules = ["math", "hash", "net", "json", "string", "sql", "gui", "crypto", "fs", "http", "collections", "sort", "datetime", "os", "test", "log", "sync", "regex", "csv"];
+    if stdlib_modules.contains(&import_path) {
         let stdlib_path = Path::new("stdlib").join(format!("{}.ep", import_path));
         if stdlib_path.exists() {
             return stdlib_path;
@@ -24,10 +32,7 @@ fn resolve_import_path(current_file: &Path, import_path: &str) -> PathBuf {
                 }
             }
         }
-        let fallback_path = Path::new("/Users/mettamazza/Desktop/ErnosPlain Programing Language/stdlib").join(format!("{}.ep", import_path));
-        if fallback_path.exists() {
-            return fallback_path;
-        }
+        // No hardcoded fallback — stdlib must be in CWD or alongside the compiler binary
     }
 
     let mut resolved = current_file.parent().unwrap_or(Path::new("")).join(import_path);
@@ -41,6 +46,12 @@ fn parse_all_modules(
     entry_path: &Path,
     parsed_files: &mut HashSet<PathBuf>,
     all_functions: &mut Vec<ast::Function>,
+    all_externals: &mut Vec<ast::ExternalFunction>,
+    all_struct_defs: &mut Vec<ast::StructDef>,
+    all_enum_defs: &mut Vec<ast::EnumDef>,
+    all_method_defs: &mut Vec<ast::MethodDef>,
+    all_trait_defs: &mut Vec<ast::TraitDef>,
+    all_trait_impls: &mut Vec<ast::TraitImpl>,
 ) -> Result<(), String> {
     let canonical_path = entry_path.canonicalize().map_err(|e| format!("Could not canonicalize path '{}': {}", entry_path.display(), e))?;
     
@@ -70,13 +81,19 @@ fn parse_all_modules(
     };
 
     all_functions.extend(program.functions);
+    all_externals.extend(program.externals);
+    all_struct_defs.extend(program.struct_defs);
+    all_enum_defs.extend(program.enum_defs);
+    all_method_defs.extend(program.method_defs);
+    all_trait_defs.extend(program.trait_defs);
+    all_trait_impls.extend(program.trait_impls);
 
     for imp in program.imports {
         let resolved_path = resolve_import_path(&canonical_path, &imp);
         if !resolved_path.exists() {
             return Err(format!("Import error in '{}': module '{}' not found at '{}'", canonical_path.display(), imp, resolved_path.display()));
         }
-        parse_all_modules(&resolved_path, parsed_files, all_functions)?;
+        parse_all_modules(&resolved_path, parsed_files, all_functions, all_externals, all_struct_defs, all_enum_defs, all_method_defs, all_trait_defs, all_trait_impls)?;
     }
 
     Ok(())
@@ -85,11 +102,79 @@ fn parse_all_modules(
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: epc <filename.ep>");
+        print_usage();
         std::process::exit(1);
     }
 
-    let input_path_str = &args[1];
+    // Handle REPL mode
+    if args[1] == "--repl" || args[1] == "repl" {
+        run_repl();
+        return;
+    }
+
+    // Handle global flags
+    if args[1] == "--version" || args[1] == "-v" {
+        println!("Ernos Compiler v1.0.0");
+        println!("  Backend: C (Clang) / ARM64 native");
+        println!("  Target:  {}", std::env::consts::ARCH);
+        println!("  OS:      {}", std::env::consts::OS);
+        return;
+    }
+
+    if args[1] == "--help" || args[1] == "-h" {
+        print_usage();
+        return;
+    }
+
+    // Handle --check (syntax check only, no codegen)
+    if args[1] == "--check" || args[1] == "check" {
+        if args.len() < 3 {
+            eprintln!("Usage: epc --check <filename.ep>");
+            std::process::exit(1);
+        }
+        let input_path = Path::new(&args[2]);
+        if !input_path.exists() {
+            eprintln!("Error: File '{}' does not exist.", args[2]);
+            std::process::exit(1);
+        }
+        let mut all_functions = Vec::new();
+        let mut all_externals = Vec::new();
+        let mut all_struct_defs = Vec::new();
+        let mut all_enum_defs = Vec::new();
+        let mut all_method_defs = Vec::new();
+        let mut all_trait_defs = Vec::new();
+        let mut all_trait_impls = Vec::new();
+        let mut parsed_files = HashSet::new();
+        match parse_all_modules(input_path, &mut parsed_files, &mut all_functions, &mut all_externals, &mut all_struct_defs, &mut all_enum_defs, &mut all_method_defs, &mut all_trait_defs, &mut all_trait_impls) {
+            Ok(()) => {
+                println!("\x1b[1;32m✓\x1b[0m {} — no syntax errors ({} functions, {} structs, {} enums)", 
+                    args[2], all_functions.len(), all_struct_defs.len(), all_enum_defs.len());
+            }
+            Err(e) => {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    // Handle --format (code formatter)
+    if args[1] == "--format" || args[1] == "format" || args[1] == "fmt" {
+        if args.len() < 3 {
+            eprintln!("Usage: epc --format <filename.ep>");
+            std::process::exit(1);
+        }
+        let input_path = Path::new(&args[2]);
+        if !input_path.exists() {
+            eprintln!("Error: File '{}' does not exist.", args[2]);
+            std::process::exit(1);
+        }
+        format_file(input_path);
+        return;
+    }
+
+    let is_test_mode = args.len() >= 3 && args[1] == "test";
+    let input_path_str = if is_test_mode { &args[2] } else { &args[1] };
     let input_path = Path::new(input_path_str);
     
     if !input_path.exists() {
@@ -102,8 +187,14 @@ fn main() {
     println!("[1/3] Tokenizing and Parsing '{}'...", input_path_str);
 
     let mut all_functions = Vec::new();
+    let mut all_externals = Vec::new();
+    let mut all_struct_defs = Vec::new();
+    let mut all_enum_defs = Vec::new();
+    let mut all_method_defs = Vec::new();
+    let mut all_trait_defs = Vec::new();
+    let mut all_trait_impls = Vec::new();
     let mut parsed_files = HashSet::new();
-    if let Err(err_msg) = parse_all_modules(input_path, &mut parsed_files, &mut all_functions) {
+    if let Err(err_msg) = parse_all_modules(input_path, &mut parsed_files, &mut all_functions, &mut all_externals, &mut all_struct_defs, &mut all_enum_defs, &mut all_method_defs, &mut all_trait_defs, &mut all_trait_impls) {
         eprintln!("Compiler Error: {}", err_msg);
         std::process::exit(1);
     }
@@ -116,22 +207,160 @@ fn main() {
         }
     }
 
-    let program = ast::Program {
+    let mut program = ast::Program {
         imports: Vec::new(),
+        externals: all_externals,
         functions: all_functions,
+        struct_defs: all_struct_defs,
+        enum_defs: all_enum_defs,
+        method_defs: all_method_defs,
+        trait_defs: all_trait_defs,
+        trait_impls: all_trait_impls,
     };
 
     // Validate that main function exists
-    let has_main = program.functions.iter().any(|f| f.name == "main");
-    if !has_main {
-        eprintln!("Compiler Error: Every program must have a 'main' function.");
+    if !is_test_mode {
+        let has_main = program.functions.iter().any(|f| f.name == "main");
+        if !has_main {
+            eprintln!("Compiler Error: Every program must have a 'main' function.");
+            std::process::exit(1);
+        }
+    }
+
+    // Check if native backend is requested
+    let use_native = args.iter().any(|a| a == "--native");
+
+    if use_native {
+        let arch = std::env::consts::ARCH;
+        let os = std::env::consts::OS;
+        
+        let (asm, is_x86_64) = if arch == "x86_64" {
+            println!("[2/3] Generating Native x86_64 Assembly...");
+            let mut ncg = x86_64_codegen::X86_64Codegen::new(os == "macos");
+            (ncg.generate(&program), true)
+        } else {
+            println!("[2/3] Generating Native ARM64 Assembly...");
+            let mut ncg = native_codegen::NativeCodegen::new();
+            (ncg.generate(&program), false)
+        };
+
+        let asm = match asm {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("Native Code Generation Error: {}", e);
+                std::process::exit(1);
+            }
+        };
+
+        // Write assembly to temp file
+        let asm_path = format!("{}_native.s", stem);
+        if let Err(e) = fs::write(&asm_path, &asm) {
+            eprintln!("Error writing assembly: {}", e);
+            std::process::exit(1);
+        }
+
+        println!("[3/3] Assembling and Linking (no Clang)...");
+
+        // Assemble with system 'as'
+        let obj_path = format!("{}_native.o", stem);
+        let as_status = if os == "macos" {
+            let target_arch = if is_x86_64 { "x86_64" } else { "arm64" };
+            Command::new("as")
+                .arg("-arch").arg(target_arch)
+                .arg("-o").arg(&obj_path)
+                .arg(&asm_path)
+                .status()
+        } else {
+            Command::new("as")
+                .arg("-o").arg(&obj_path)
+                .arg(&asm_path)
+                .status()
+        };
+        match as_status {
+            Ok(s) if s.success() => {}
+            Ok(s) => {
+                eprintln!("Error: Assembler failed with exit code: {}", s);
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("Error invoking assembler: {}", e);
+                std::process::exit(1);
+            }
+        }
+
+        // Link with system 'ld' or 'gcc' depending on OS
+        let ld_status = if os == "macos" {
+            let target_arch = if is_x86_64 { "x86_64" } else { "arm64" };
+            Command::new("ld")
+                .arg("-o").arg(stem)
+                .arg(&obj_path)
+                .arg("-lSystem")
+                .arg("-syslibroot").arg("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk")
+                .arg("-arch").arg(target_arch)
+                .status()
+        } else {
+            // Linux and other Unix-like systems: use gcc or ld
+            Command::new("gcc")
+                .arg("-no-pie")
+                .arg("-o").arg(stem)
+                .arg(&obj_path)
+                .status()
+        };
+
+        match ld_status {
+            Ok(s) if s.success() => {
+                // Clean up temp files
+                let _ = fs::remove_file(&asm_path);
+                let _ = fs::remove_file(&obj_path);
+                println!("\nSuccessfully compiled into native binary: ./{}", stem);
+            }
+            Ok(s) => {
+                eprintln!("Error: Linker failed with exit code: {}", s);
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("Error invoking linker: {}", e);
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    // Type checking (Phase 1A) — HARD ERRORS: reject programs with type errors
+    let (type_errors, _type_warnings) = type_check::TypeChecker::check_full(&program);
+    if !type_errors.is_empty() {
+        eprintln!("\n\x1b[1;31m── Type Errors ({}) ──\x1b[0m", type_errors.len());
+        for err in &type_errors {
+            eprintln!("  \x1b[1;31merror\x1b[0m: {}", err);
+        }
+        eprintln!();
+        eprintln!("\x1b[1;31mCompilation failed:\x1b[0m {} type error(s) found. Fix all type errors before compiling.", type_errors.len());
         std::process::exit(1);
+    }
+
+    // Borrow checking (Phase 3) — HARD ERRORS: reject programs with ownership violations
+    let borrow_errors = borrow_check::BorrowChecker::check(&program);
+    if !borrow_errors.is_empty() {
+        eprintln!("\n\x1b[1;31m── Ownership Errors ({}) ──\x1b[0m", borrow_errors.len());
+        for err in &borrow_errors {
+            eprint!("{}", err);
+        }
+        eprintln!();
+        eprintln!("\x1b[1;31mCompilation failed:\x1b[0m {} ownership/borrowing error(s) found. Fix all safety violations before compiling.", borrow_errors.len());
+        std::process::exit(1);
+    }
+    // Optimization pass (Phase 4B)
+    let opt_stats = optimizer::Optimizer::run(&mut program);
+    if opt_stats.constants_folded > 0 || opt_stats.dead_stmts_eliminated > 0 {
+        eprintln!("\x1b[2m  optimizer: {} constants folded, {} dead statements eliminated\x1b[0m",
+            opt_stats.constants_folded, opt_stats.dead_stmts_eliminated);
     }
 
     println!("[2/3] Generating ARM64 Assembly...");
 
-    // Code generation
+    // Code generation (C backend)
     let mut codegen = codegen::Codegen::new();
+    codegen.is_test_mode = is_test_mode;
     let assembly = match codegen.generate(&program) {
         Ok(asm) => asm,
         Err(e) => {
@@ -152,17 +381,58 @@ fn main() {
 
     // Run clang to compile and link the transpiled C file
     let output_executable = format!("./{}", stem);
-    let clang_status = Command::new("clang")
-        .arg(&c_path_str)
-        .arg("-o")
-        .arg(&stem)
-        .status();
+    
+    let mut link_flags = Vec::new();
+    link_flags.push("-lpthread");
+    for path in &parsed_files {
+        let path_str = path.to_string_lossy();
+        if path_str.ends_with("sql.ep") {
+            link_flags.push("-lsqlite3");
+        }
+        if path_str.ends_with("gui.ep") {
+            link_flags.push("-lraylib");
+        }
+        if path_str.ends_with("crypto.ep") {
+            link_flags.push("-L/opt/homebrew/opt/openssl/lib");
+            link_flags.push("-lcrypto");
+        }
+    }
+
+    // Determine optimization level
+    let opt_level = if args.iter().any(|a| a == "--release") {
+        vec!["-O3", "-DNDEBUG", "-flto"]
+    } else if args.iter().any(|a| a == "--debug") {
+        vec!["-O0", "-g"]
+    } else {
+        vec!["-O2"]
+    };
+
+    let mut clang_cmd = Command::new("clang");
+    clang_cmd.arg(&c_path_str)
+             .arg("-o")
+             .arg(&stem);
+    for flag in &opt_level {
+        clang_cmd.arg(flag);
+    }
+    for flag in link_flags {
+        clang_cmd.arg(flag);
+    }
+    let clang_status = clang_cmd.status();
 
     // Clean up temporary files
     // let _ = fs::remove_file(c_path);
 
     match clang_status {
         Ok(status) if status.success() => {
+            #[cfg(target_os = "macos")]
+            {
+                let _ = Command::new("codesign")
+                    .arg("--force")
+                    .arg("-s")
+                    .arg("-")
+                    .arg(&stem)
+                    .status();
+            }
             println!("\nSuccessfully compiled into native binary: {}", output_executable);
         }
         Ok(status) => {
@@ -205,10 +475,263 @@ fn get_suggestion(message: &str) -> Option<&str> {
     } else if message.contains("repeate") {
         Some("Did you mean 'repeat'?")
     } else if message.contains("character: ','") {
-        Some("In ErnosPlain, function arguments are separated by 'and', not commas.")
+        Some("In Ernos, function arguments are separated by 'and', not commas.")
     } else if message.contains("Unexpected statement start: Identifier") {
         Some("Functions called as statements must be assigned to variables, e.g. 'set ok to func(...)'.")
     } else {
         None
+    }
+}
+
+fn print_usage() {
+    eprintln!("\x1b[1;36m┌──────────────────────────────────────────────────┐\x1b[0m");
+    eprintln!("\x1b[1;36m│\x1b[0m  \x1b[1mErnos Compiler\x1b[0m — v1.0.0                       \x1b[1;36m│\x1b[0m");
+    eprintln!("\x1b[1;36m└──────────────────────────────────────────────────┘\x1b[0m");
+    eprintln!();
+    eprintln!("\x1b[1mUSAGE:\x1b[0m");
+    eprintln!("  epc <filename.ep>               Compile to native binary");
+    eprintln!("  epc <filename.ep> --native      Compile via ARM64 (no Clang)");
+    eprintln!("  epc <filename.ep> --release     Compile with optimizations (O3+LTO)");
+    eprintln!("  epc test <filename.ep>          Run as test");
+    eprintln!();
+    eprintln!("\x1b[1mDEV TOOLS:\x1b[0m");
+    eprintln!("  epc --check <filename.ep>       Syntax check (no compilation)");
+    eprintln!("  epc --format <filename.ep>      Auto-format source file");
+    eprintln!("  epc --version                   Show version info");
+    eprintln!("  epc --help                      Show this message");
+}
+
+fn format_file(path: &Path) {
+    let source = match fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error reading file: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let mut output = String::new();
+    let mut prev_blank = false;
+
+    for line in source.lines() {
+        let trimmed = line.trim_end();
+
+        // Normalize blank lines (max 1 consecutive)
+        if trimmed.is_empty() {
+            if !prev_blank {
+                output.push('\n');
+                prev_blank = true;
+            }
+            continue;
+        }
+        prev_blank = false;
+
+        // Count leading spaces in original
+        let leading_spaces = line.len() - line.trim_start().len();
+
+        // Normalize indentation: each level = 4 spaces
+        // Detect the current indent level (assuming original uses at least 1 space per level)
+        let indent_level = if leading_spaces > 0 {
+            // If the original uses tabs, convert to 4 spaces
+            if line.starts_with('\t') {
+                line.chars().take_while(|c| *c == '\t').count()
+            } else {
+                // Try to detect indent width: common values are 2 or 4
+                // We'll just normalize to 4 spaces
+                (leading_spaces + 1) / 4
+            }
+        } else {
+            0
+        };
+
+        // Re-indent with 4 spaces per level
+        for _ in 0..indent_level {
+            output.push_str("    ");
+        }
+        output.push_str(trimmed.trim_start());
+        output.push('\n');
+    }
+
+    // Remove trailing newline if needed
+    while output.ends_with("\n\n") {
+        output.pop();
+    }
+    if !output.ends_with('\n') {
+        output.push('\n');
+    }
+
+    match fs::write(path, &output) {
+        Ok(()) => {
+            println!("\x1b[1;32m✓\x1b[0m Formatted: {}", path.display());
+        }
+        Err(e) => {
+            eprintln!("Error writing file: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_repl() {
+    use std::io::{self, Write, BufRead};
+
+    println!("\x1b[1;36m╔══════════════════════════════════════════╗\x1b[0m");
+    println!("\x1b[1;36m║   ErnosPlain REPL v1.0                   ║\x1b[0m");
+    println!("\x1b[1;36m║   Type ErnosPlain code and press Enter   ║\x1b[0m");
+    println!("\x1b[1;36m║   Type 'exit' or 'quit' to leave         ║\x1b[0m");
+    println!("\x1b[1;36m║   Type ':help' for commands               ║\x1b[0m");
+    println!("\x1b[1;36m╚══════════════════════════════════════════╝\x1b[0m");
+    println!();
+
+    let stdin = io::stdin();
+    let mut history: Vec<String> = Vec::new();
+    let mut line_buffer = String::new();
+    let in_block = false;
+
+    loop {
+        if in_block {
+            print!("\x1b[33m...  \x1b[0m");
+        } else {
+            print!("\x1b[1;32mep>\x1b[0m ");
+        }
+        io::stdout().flush().unwrap();
+
+        line_buffer.clear();
+        match stdin.lock().read_line(&mut line_buffer) {
+            Ok(0) => break, // EOF
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("Error reading input: {}", e);
+                break;
+            }
+        }
+
+        let trimmed = line_buffer.trim();
+
+        // Handle meta-commands
+        if trimmed == "exit" || trimmed == "quit" {
+            println!("\x1b[2mGoodbye!\x1b[0m");
+            break;
+        }
+
+        if trimmed == ":help" {
+            println!("\x1b[1mREPL Commands:\x1b[0m");
+            println!("  \x1b[36m:help\x1b[0m      Show this help");
+            println!("  \x1b[36m:history\x1b[0m   Show command history");
+            println!("  \x1b[36m:clear\x1b[0m     Clear history");
+            println!("  \x1b[36mexit\x1b[0m       Exit the REPL");
+            println!();
+            println!("\x1b[1mExamples:\x1b[0m");
+            println!("  \x1b[2mdisplay 42\x1b[0m");
+            println!("  \x1b[2mdisplay concat(\"hello\" and \" world\")\x1b[0m");
+            println!("  \x1b[2mdisplay 10 + 20 * 3\x1b[0m");
+            continue;
+        }
+
+        if trimmed == ":history" {
+            for (i, cmd) in history.iter().enumerate() {
+                println!("  \x1b[2m{}\x1b[0m  {}", i + 1, cmd);
+            }
+            continue;
+        }
+
+        if trimmed == ":clear" {
+            history.clear();
+            println!("History cleared.");
+            continue;
+        }
+
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // Save to history
+        history.push(trimmed.to_string());
+
+        // Wrap the input in a main function and compile
+        let source = format!("define main:\n    {}\n    return 0\n", trimmed);
+
+        // Try to parse and evaluate
+        let mut lexer_instance = lexer::Lexer::new(&source);
+        let tokens = match lexer_instance.tokenize() {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("\x1b[31mLexer error:\x1b[0m {:?}", e);
+                continue;
+            }
+        };
+
+        let mut parser_instance = parser::Parser::new(tokens);
+        let mut program = match parser_instance.parse_program() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("\x1b[31mParse error:\x1b[0m {}", e.message);
+                continue;
+            }
+        };
+
+        // Optimize
+        optimizer::Optimizer::run(&mut program);
+
+        // Generate C code
+        let mut cg = codegen::Codegen::new();
+        cg.is_test_mode = false;
+        let c_code = match cg.generate(&program) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("\x1b[31mCodegen error:\x1b[0m {}", e);
+                continue;
+            }
+        };
+
+        // Write temp C file
+        let tmp_c = "/tmp/ep_repl.c";
+        let tmp_bin = "/tmp/ep_repl";
+        if let Err(e) = fs::write(tmp_c, &c_code) {
+            eprintln!("\x1b[31mError writing temp file:\x1b[0m {}", e);
+            continue;
+        }
+
+        // Compile with cc
+        let compile = Command::new("cc")
+            .args(&[tmp_c, "-o", tmp_bin, "-lpthread", "-lm"])
+            .output();
+
+        match compile {
+            Ok(output) => {
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    eprintln!("\x1b[31mCompile error:\x1b[0m {}", stderr);
+                    continue;
+                }
+            }
+            Err(e) => {
+                eprintln!("\x1b[31mFailed to run compiler:\x1b[0m {}", e);
+                continue;
+            }
+        }
+
+        // Execute
+        let run = Command::new(tmp_bin).output();
+        match run {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if !stdout.is_empty() {
+                    print!("{}", stdout);
+                }
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    if !stderr.is_empty() {
+                        eprint!("\x1b[31m{}\x1b[0m", stderr);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("\x1b[31mExecution error:\x1b[0m {}", e);
+            }
+        }
+
+        // Cleanup
+        let _ = fs::remove_file(tmp_c);
+        let _ = fs::remove_file(tmp_bin);
     }
 }

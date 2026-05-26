@@ -10,6 +10,7 @@ pub struct LexError {
 enum RawToken {
     Word(String),
     Number(i64),
+    FloatNum(f64),
     StringVal(String),
     Symbol(char),
     Spaces(usize),
@@ -100,7 +101,7 @@ impl<'a> Lexer<'a> {
                 }
                 raw_tokens.push((RawToken::Comment, span));
             } else if c.is_ascii_digit() {
-                let mut val = 0;
+                let mut val = 0i64;
                 while let Some(ch) = self.peek() {
                     if ch.is_ascii_digit() {
                         val = val * 10 + (ch.to_digit(10).unwrap() as i64);
@@ -109,7 +110,31 @@ impl<'a> Lexer<'a> {
                         break;
                     }
                 }
-                raw_tokens.push((RawToken::Number(val), span));
+                // Check for float: digit(s) followed by '.' followed by digit(s)
+                if self.peek() == Some('.') {
+                    // Lookahead: is the char after '.' a digit?
+                    let next_pos = self.pos + 1;
+                    if next_pos < self.chars.len() && self.chars[next_pos].is_ascii_digit() {
+                        self.advance(); // consume '.'
+                        let mut frac = 0.0f64;
+                        let mut frac_div = 1.0f64;
+                        while let Some(ch) = self.peek() {
+                            if ch.is_ascii_digit() {
+                                frac = frac * 10.0 + (ch.to_digit(10).unwrap() as f64);
+                                frac_div *= 10.0;
+                                self.advance();
+                            } else {
+                                break;
+                            }
+                        }
+                        let float_val = (val as f64) + frac / frac_div;
+                        raw_tokens.push((RawToken::FloatNum(float_val), span));
+                    } else {
+                        raw_tokens.push((RawToken::Number(val), span));
+                    }
+                } else {
+                    raw_tokens.push((RawToken::Number(val), span));
+                }
             } else if c.is_alphabetic() || c == '_' {
                 let mut s = String::new();
                 while let Some(ch) = self.peek() {
@@ -183,7 +208,7 @@ impl<'a> Lexer<'a> {
                 }
                 raw_tokens.push((RawToken::StringVal(s), span));
             } else if c == ':' || c == '(' || c == ')' || c == '+' || c == '-' || c == '*' || c == '/'
-                   || c == '<' || c == '>' || c == '&' || c == '|' || c == '=' || c == '!' {
+                   || c == '<' || c == '>' || c == '&' || c == '|' || c == '=' || c == '!' || c == '.' {
                 self.advance();
                 raw_tokens.push((RawToken::Symbol(c), span));
             } else {
@@ -293,6 +318,10 @@ impl<'a> Lexer<'a> {
                     tokens.push((Token::Integer(*val), span.clone()));
                     i += 1;
                 }
+                RawToken::FloatNum(val) => {
+                    tokens.push((Token::Float(*val), span.clone()));
+                    i += 1;
+                }
                 RawToken::StringVal(s) => {
                     tokens.push((Token::StringLiteral(s.clone()), span.clone()));
                     i += 1;
@@ -337,6 +366,8 @@ impl<'a> Lexer<'a> {
                             '/' => Token::Divide,
                             '<' => Token::LessThan,
                             '>' => Token::GreaterThan,
+                            '.' => Token::Dot,
+                            '%' => Token::Modulo,
                             _ => {
                                 return Err(LexError {
                                     message: format!("Unexpected symbol character: '{}'", c),
@@ -418,6 +449,13 @@ impl<'a> Lexer<'a> {
                             i = next_idx;
                             continue;
                         }
+                    } else if w_lower == "for" {
+                        if let Some(next_idx) = match_phrase(i + 1, &["each"]) {
+                            tokens.push((Token::For, span.clone()));
+                            tokens.push((Token::Each, span.clone()));
+                            i = next_idx;
+                            continue;
+                        }
                     }
 
                     // Simple single-word keywords
@@ -434,6 +472,40 @@ impl<'a> Lexer<'a> {
                         "repeat" => Token::Repeat,
                         "while" => Token::While,
                         "import" => Token::Import,
+                        "spawn" => Token::Spawn,
+                        "channel" => Token::Channel,
+                        "send" => Token::Send,
+                        "receive" => Token::Receive,
+                        "from" => Token::From,
+                        "external" => Token::External,
+                        "borrow" => Token::Borrow,
+                        "structure" => Token::Structure,
+                        "field" => Token::Field,
+                        "as" => Token::As,
+                        "is" => Token::Is,
+                        "create" => Token::Create,
+                        "returning" => Token::Returning,
+                        "choice" => Token::Choice,
+                        "variant" => Token::Variant,
+                        "check" => Token::Check,
+                        "for" => Token::For,
+                        "each" => Token::Each,
+                        "in" => Token::In,
+                        "range" => Token::Range,
+                        "on" => Token::On,
+                        "trait" => Token::Trait,
+                        "implement" => Token::Implement,
+                        "not" => Token::Not,
+                        "modulo" => Token::Modulo,
+                        "break" => Token::Break,
+                        "continue" => Token::Continue,
+                        "of" => Token::Of,
+                        "try" => Token::Try,
+                        "given" => Token::Given,
+                        "true" => Token::True,
+                        "false" => Token::False,
+                        "async" => Token::Async,
+                        "await" => Token::Await,
                         "plus" => Token::Plus,
                         "minus" => Token::Minus,
                         "equals" => Token::Equals,

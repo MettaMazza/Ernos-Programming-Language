@@ -1,117 +1,181 @@
-import "string"
-import "json"
+# ErnosPlain Package Manager (epm)
+# Manages projects, dependencies, building, and testing
 
-# epm: ErnosPlain Package Manager
+import "stdlib/fs"
+import "stdlib/string"
+import "stdlib/json"
+import "stdlib/os"
 
-define get_repo_name with url:
-    set len to string_length(url)
-    set idx to len - 1
-    set found to 0
-    repeat while idx is greater than 0 && found == 0:
-        set c to get_character(url and idx)
-        if c == 47: # '/'
-            set found to 1
-        else:
-            set idx to idx - 1
-    if found == 1:
-        set start to idx + 1
-        set repo_len to len - start
-        set name to substring(url and start and repo_len)
-        set name_len to string_length(name)
-        if name_len > 4:
-            set ext to substring(name and name_len - 4 and 4)
-            if ".git" equals ext:
-                return substring(name and 0 and name_len - 4)
-        return name
-    return url
+# ---- Project Configuration ----
+
+define epm_init with project_name:
+    # Create ernos.toml
+    set config to concat("[package]\nname = \"" and concat(project_name and "\"\nversion = \"0.1.0\"\nauthor = \"\"\ndescription = \"\"\n\n[dependencies]\n\n[dev-dependencies]\n"))
+    set ok to write_file("ernos.toml" and config)
+    
+    # Create src/ directory
+    set ok to create_directory("src")
+    
+    # Create main.ep
+    set main_content to "# " 
+    set main_content to concat(main_content and project_name)
+    set main_content to concat(main_content and "\n\ndefine main:\n    display \"Hello from ")
+    set main_content to concat(main_content and project_name)
+    set main_content to concat(main_content and "!\"\n    return 0\n")
+    set ok to write_file("src/main.ep" and main_content)
+    
+    # Create .gitignore
+    set ok to write_file(".gitignore" and "*.o\n*.c\nbuild/\n*.dSYM/\n")
+    
+    display concat("Created new ErnosPlain project: " and project_name)
+    return 0
+
+# ---- Build ----
+
+define epm_build:
+    # Read ernos.toml
+    if file_exists("ernos.toml") == 0:
+        display "Error: ernos.toml not found. Run 'epm init <name>' first."
+        return 1
+    
+    set config to read_file("ernos.toml")
+    set name to toml_get_value(config and "name")
+    
+    # Find main source file
+    set main_file to "src/main.ep"
+    if file_exists(main_file) == 0:
+        set main_file to "main.ep"
+        if file_exists(main_file) == 0:
+            display "Error: No main.ep found in src/ or project root."
+            return 1
+    
+    # Compile
+    set cmd to concat("ernos " and main_file)
+    display concat("Building " and concat(name and "..."))
+    set result to run_command(cmd)
+    display result
+    return 0
+
+# ---- Run ----
+
+define epm_run:
+    set build_result to epm_build()
+    if build_result != 0:
+        return build_result
+    
+    set config to read_file("ernos.toml")
+    set name to toml_get_value(config and "name")
+    
+    # Find the compiled binary
+    set binary to concat("./" and name)
+    if file_exists(binary) == 0:
+        set binary to "./main"
+    
+    display concat("Running " and concat(name and "..."))
+    display ""
+    set result to run_command(binary)
+    display result
+    return 0
+
+# ---- Test ----
+
+define epm_test:
+    display "Running tests..."
+    set test_dir to "tests"
+    set passed to 0
+    set failed to 0
+    
+    if is_directory(test_dir) == 1:
+        set files to list_directory(test_dir)
+        set count to length_list(files)
+        set i to 0
+        repeat while i < count:
+            set f to get_list(files and i)
+            if ends_with(f and ".ep") == 1:
+                if starts_with(f and "test_") == 1:
+                    set path to concat(concat(test_dir and "/") and f)
+                    display concat("  Testing " and f)
+                    set cmd to concat("ernos " and path)
+                    set result to run_command(cmd)
+                    if result == 0:
+                        set passed to passed + 1
+                    else:
+                        set failed to failed + 1
+                        display concat("    FAILED: " and f)
+            set i to i + 1
+    
+    # Also look for test_*.ep in root
+    # ...
+    
+    display ""
+    display concat(ep_int_to_str(passed) and " tests passed")
+    if failed > 0:
+        display concat(ep_int_to_str(failed) and " tests FAILED")
+        return 1
+    display "All tests passed!"
+    return 0
+
+# ---- TOML parsing (minimal) ----
+
+define toml_get_value with content and key:
+    set lines to split(content and "\n")
+    set count to length_list(lines)
+    set search to concat(key and " = ")
+    set i to 0
+    repeat while i < count:
+        set line to get_list(lines and i)
+        set trimmed to trim_left(line)
+        if starts_with(trimmed and search) == 1:
+            set val_start to string_length(search)
+            set line_len to string_length(trimmed)
+            set raw_val to substring(trimmed and val_start and line_len - val_start)
+            # Remove quotes
+            if string_length(raw_val) > 1:
+                set first_ch to get_character(raw_val and 0)
+                if first_ch == 34:
+                    return substring(raw_val and 1 and string_length(raw_val) - 2)
+            return raw_val
+        set i to i + 1
+    return ""
+
+# ---- Main entry point ----
 
 define main:
-    set argc to get_argument_count()
-    if argc is less than 2:
-        display "Usage:"
-        display "  epm init"
-        display "  epm install <git-url>"
-        display "  epm build <file.ep>"
-        return 1
-
-    set cmd to get_argument(1)
+    set args to get_args()
+    set argc to length_list(args)
     
-    if cmd equals "init":
-        display "Initializing new ErnosPlain project..."
-        set default_json to "{\n  \"name\": \"my_ernosplain_project\",\n  \"version\": \"1.0.0\",\n  \"dependencies\": {}\n}\n"
-        set ok to write_file_content("Package.json" and default_json)
-        if ok == 1:
-            display "Created Package.json successfully!"
-        else:
-            display "Error: Failed to write Package.json"
+    if argc < 2:
+        display "ErnosPlain Package Manager (epm)"
+        display ""
+        display "Usage:"
+        display "  epm init <name>   Create a new project"
+        display "  epm build         Build the project"
+        display "  epm run           Build and run"
+        display "  epm test          Run tests"
+        display "  epm version       Show version"
         return 0
-
-    if cmd equals "install":
-        if argc is less than 3:
-            display "Error: Please specify a git URL to install."
-            display "Usage: epm install <git-url>"
+    
+    set command to get_list(args and 1)
+    
+    if string_equals(command and "init") == 1:
+        if argc < 3:
+            display "Usage: epm init <project-name>"
             return 1
-            
-        set url to get_argument(2)
-        set repo_name to get_repo_name(url)
-        display "Installing package from:"
-        set ok to display_string(url)
-        display "Package name:"
-        set ok to display_string(repo_name)
-        
-        # 1. Create ep_modules directory
-        set ok to run_command("mkdir -p ep_modules")
-        
-        # 2. Run git clone
-        set clone_cmd to string_concat("git clone " and url)
-        set clone_cmd to string_concat(clone_cmd and " ep_modules/")
-        set clone_cmd to string_concat(clone_cmd and repo_name)
-        
-        display "Cloning repository..."
-        set ok to display_string(clone_cmd)
-        set status to run_command(clone_cmd)
-        if status != 0:
-            display "Error: Git clone failed."
-            return 1
-            
-        display "Successfully cloned package!"
-        
-        # 3. Add to Package.json if it exists
-        set pkg_content to read_file_content("Package.json")
-        if string_length(pkg_content) is greater than 0:
-            set parsed to json_parse(pkg_content)
-            if parsed != 0:
-                set deps_node to get_json_object_value(parsed and "dependencies")
-                if deps_node != 0:
-                    set dep_keys to get_list(deps_node and 1)
-                    set dep_vals to get_list(deps_node and 2)
-                    
-                    # Append new dependency
-                    set ok to append_list(dep_keys and repo_name)
-                    set ok to append_list(dep_vals and create_json_string(url))
-                    
-                    set updated_json to json_stringify(parsed)
-                    set ok to write_file_content("Package.json" and updated_json)
-                    display "Updated Package.json dependencies."
+        set name to get_list(args and 2)
+        return epm_init(name)
+    
+    if string_equals(command and "build") == 1:
+        return epm_build()
+    
+    if string_equals(command and "run") == 1:
+        return epm_run()
+    
+    if string_equals(command and "test") == 1:
+        return epm_test()
+    
+    if string_equals(command and "version") == 1:
+        display "epm version 0.1.0"
         return 0
-
-    if cmd equals "build":
-        if argc is less than 3:
-            display "Error: Please specify the main entry file to build."
-            display "Usage: epm build <file.ep>"
-            return 1
-            
-        set file to get_argument(2)
-        display "Building project..."
-        set build_cmd to string_concat("epc " and file)
-        set ok to display_string(build_cmd)
-        set status to run_command(build_cmd)
-        if status == 0:
-            display "Build succeeded!"
-        else:
-            display "Build failed."
-        return status
-
-    display "Unknown command: "
-    set ok to display_string(cmd)
+    
+    display concat("Unknown command: " and command)
     return 1

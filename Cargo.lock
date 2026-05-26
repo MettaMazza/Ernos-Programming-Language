@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "ernosplain"
+name = "ernos"
 version = "0.1.0"
