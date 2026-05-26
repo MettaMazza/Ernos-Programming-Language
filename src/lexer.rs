@@ -208,7 +208,7 @@ impl<'a> Lexer<'a> {
                 }
                 raw_tokens.push((RawToken::StringVal(s), span));
             } else if c == ':' || c == '(' || c == ')' || c == '+' || c == '-' || c == '*' || c == '/'
-                   || c == '<' || c == '>' || c == '&' || c == '|' || c == '=' || c == '!' || c == '.' {
+                   || c == '<' || c == '>' || c == '&' || c == '|' || c == '=' || c == '!' || c == '.' || c == '%' {
                 self.advance();
                 raw_tokens.push((RawToken::Symbol(c), span));
             } else {

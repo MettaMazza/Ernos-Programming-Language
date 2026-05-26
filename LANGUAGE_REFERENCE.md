@@ -141,9 +141,9 @@ repeat while i < 100:
 ### Pattern Matching
 ```ernos
 check status:
-    on Success with value:
+    if Success with value:
         display value
-    on Error with msg:
+    if Error with msg:
         display msg
 ```
 
@@ -180,7 +180,7 @@ define main:
 
 ### Async Functions
 ```ernos
-define async fetch_data with url as Str returning Int:
+async define fetch_data with url as Str returning Int:
     set data to ep_net_connect(url)
     return data
 
@@ -246,9 +246,9 @@ define choice Result:
 define main:
     set r to Ok with 42
     check r:
-        on Ok with value:
+        if Ok with value:
             display value
-        on Error with msg:
+        if Error with msg:
             display msg
     return 0
 ```
