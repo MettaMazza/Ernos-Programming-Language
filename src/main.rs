@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::collections::HashSet;
 
 fn resolve_import_path(current_file: &Path, import_path: &str) -> PathBuf {
-    let stdlib_modules = ["math", "hash", "net", "json", "string", "sql", "gui", "crypto", "fs", "http", "collections", "sort", "datetime", "os", "test", "log", "sync", "regex", "csv"];
+    let stdlib_modules = ["math", "hash", "net", "json", "string", "sql", "gui", "crypto", "fs", "http", "collections", "sort", "datetime", "os", "test", "log", "sync", "regex", "csv", "websocket", "static_server", "toml", "select"];
     if stdlib_modules.contains(&import_path) {
         let stdlib_path = Path::new("stdlib").join(format!("{}.ep", import_path));
         if stdlib_path.exists() {
@@ -168,6 +168,11 @@ fn main() {
         println!("  receive from <channel> -> Int               Receive value from channel");
         println!("  spawn <function>(args...)                    Run function in new thread");
         println!("  ep_sleep_ms(ms: Int) -> Int                 Sleep for milliseconds");
+        println!("  channel_select(chans: List, ms: Int) -> Int  Wait on multiple channels");
+        println!("  channel_has_data(ch: Channel) -> Int         Check if channel has data");
+        println!();
+        println!("  ── String Interpolation ──");
+        println!("  f\"Hello {{name}}!\"                           F-string interpolation");
         println!();
         println!("  ── File I/O ──");
         println!("  file_read(path: Str) -> Str                 Read entire file");
@@ -453,7 +458,8 @@ fn main() {
         }
     }
 
-    // Determine optimization level
+    // Determine optimization level and sanitizer flags
+    let use_asan = args.iter().any(|a| a == "--asan" || a == "--sanitize");
     let opt_level = if args.iter().any(|a| a == "--release") {
         vec!["-O3", "-DNDEBUG", "-flto"]
     } else if args.iter().any(|a| a == "--debug") {
@@ -462,11 +468,20 @@ fn main() {
         vec!["-O2"]
     };
 
+    let sanitizer_flags: Vec<&str> = if use_asan {
+        vec!["-fsanitize=address", "-fsanitize=undefined", "-fno-omit-frame-pointer", "-g"]
+    } else {
+        vec![]
+    };
+
     let mut clang_cmd = Command::new("clang");
     clang_cmd.arg(&c_path_str)
              .arg("-o")
              .arg(&stem);
     for flag in &opt_level {
+        clang_cmd.arg(flag);
+    }
+    for flag in &sanitizer_flags {
         clang_cmd.arg(flag);
     }
     for flag in link_flags {
@@ -552,8 +567,13 @@ fn print_usage() {
     eprintln!("\x1b[1mDEV TOOLS:\x1b[0m");
     eprintln!("  epc --check <filename.ep>       Syntax check (no compilation)");
     eprintln!("  epc --format <filename.ep>      Auto-format source file");
+    eprintln!("  epc --list-builtins             List all built-in functions");
     eprintln!("  epc --version                   Show version info");
     eprintln!("  epc --help                      Show this message");
+    eprintln!();
+    eprintln!("\x1b[1mSAFETY:\x1b[0m");
+    eprintln!("  epc <filename.ep> --asan         Compile with AddressSanitizer");
+    eprintln!("  epc <filename.ep> --debug        Compile with debug symbols");
 }
 
 fn format_file(path: &Path) {

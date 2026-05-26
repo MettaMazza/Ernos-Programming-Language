@@ -3303,7 +3303,7 @@ char* ep_sha256(const char* s) {
     char* result = malloc(65);
     if (result) {
         for (int i = 0; i < 32; i++) {
-            sprintf(result + (i * 2), "%02x", hash[i]);
+            snprintf(result + (i * 2), 3, "%02x", hash[i]);
         }
         result[64] = '\0';
     }
@@ -3421,7 +3421,7 @@ char* ep_md5(const char* s) {
     char* result = malloc(33);
     if (result) {
         for (int i = 0; i < 16; i++) {
-            sprintf(result + (i * 2), "%02x", hash[i]);
+            snprintf(result + (i * 2), 3, "%02x", hash[i]);
         }
         result[32] = '\0';
     }
