@@ -1189,13 +1189,21 @@ impl Codegen {
             }
             ExprNode::TryExpr(inner) => {
                 let inner_str = self.gen_expr(inner, var_types)?;
-                let try_var = format!("_try_tmp_{}", self.spawn_index);
+                let try_id = self.spawn_index;
                 self.spawn_index += 1;
+                // Simple try: evaluate the inner expression directly. 
+                // If it causes a signal (SIGFPE, SIGSEGV), ep_try catches it via setjmp.
                 Ok(format!(
-                    "({{ long long {tv} = {inner}; void* {tv}_p = (void*){tv}; \
-                    if ({tv}_p && ((long long*){tv}_p)[0] != 0) {{ ret_val = {tv}; goto L_cleanup; }} \
-                    ({tv}_p ? ((long long*){tv}_p)[1] : 0); }})",
-                    tv = try_var,
+                    "({{ volatile long long _try_r_{id} = 0; \
+                    if (setjmp(ep_try_buf) == 0) {{ \
+                        ep_try_active = 1; \
+                        _try_r_{id} = {inner}; \
+                        ep_try_active = 0; \
+                    }} else {{ \
+                        _try_r_{id} = 0; \
+                    }} \
+                    _try_r_{id}; }})",
+                    id = try_id,
                     inner = inner_str
                 ))
             }
@@ -1576,6 +1584,11 @@ impl Codegen {
         self.out.push_str("    return (long long)buf;\n");
         self.out.push_str("}\n\n");
 
+        self.out.push_str("long long string_to_int(long long s) {\n");
+        self.out.push_str("    if (s == 0) return 0;\n");
+        self.out.push_str("    return atoll((const char*)s);\n");
+        self.out.push_str("}\n\n");
+
         // read_line: reads a line from stdin, returns dynamically allocated string
         self.out.push_str("long long read_line() {\n");
         self.out.push_str("    char buf[4096];\n");
@@ -1927,6 +1940,31 @@ impl Codegen {
 const RUNTIME_HEADER_AND_SRC: &str = r#"#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <setjmp.h>
+#include <signal.h>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+
+/* Try/catch infrastructure */
+static jmp_buf ep_try_buf;
+static volatile int ep_try_active = 0;
+
+static void ep_signal_handler(int sig) {
+    if (ep_try_active) {
+        ep_try_active = 0;
+        longjmp(ep_try_buf, sig);
+    }
+    /* If not inside a try, just exit */
+    _exit(128 + sig);
+}
+
+__attribute__((constructor))
+static void ep_install_signal_handlers(void) {
+    signal(SIGFPE, ep_signal_handler);
+    signal(SIGSEGV, ep_signal_handler);
+    signal(SIGABRT, ep_signal_handler);
+}
 
 #ifdef _WIN32
   #include <winsock2.h>
