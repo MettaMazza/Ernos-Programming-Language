@@ -372,6 +372,21 @@ impl Codegen {
                             self.list_element_types.insert(name.clone(), Type::Str);
                         }
                     }
+                    // Track element type when append_list(list_var, value) is called
+                    // This allows for-each loops to give the loop variable the correct type
+                    if let ExprNode::Call(func_name, args) = &expr.node {
+                        if func_name == "append_list" && args.len() == 2 {
+                            if let ExprNode::Identifier(list_name) = &args[0].node {
+                                let elem_type = self.infer_type(&args[1], var_types);
+                                match &elem_type {
+                                    Type::Struct(_) | Type::Enum(_) | Type::Str => {
+                                        self.list_element_types.insert(list_name.clone(), elem_type);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
                     // Pre-register closure variable → C function name mapping
                     if matches!(expr.node, ExprNode::Closure(_, _)) {
                         let c_name = format!("_ep_closure_{}", Self::sanitize_c_name(name));
@@ -1984,6 +1999,8 @@ impl Codegen {
 
                 self.out.push_str(&format!("void free_struct_{}(long long ptr) {{\n", sd.name));
                 self.out.push_str(&format!("    if (ptr == 0) return;\n"));
+                self.out.push_str("    /* Skip if already freed (idempotent — prevents double-free with shared refs) */\n");
+                self.out.push_str("    if (!ep_gc_find((void*)ptr)) return;\n");
                 self.out.push_str(&format!("    EpStruct_{}* s = (EpStruct_{}*)ptr;\n", sd.name, sd.name));
                 for (fname, ftype, _) in &sd.fields {
                     match ftype {
@@ -2027,6 +2044,9 @@ impl Codegen {
 
                 self.out.push_str(&format!("void free_enum_{}(long long ptr) {{\n", ed.name));
                 self.out.push_str("    if (ptr == 0) return;\n");
+                self.out.push_str("    /* Skip if already freed (idempotent — prevents double-free in recursive enums) */\n");
+                self.out.push_str("    if (!ep_gc_find((void*)ptr)) return;\n");
+                self.out.push_str("    ep_gc_unregister((void*)ptr);\n");
                 self.out.push_str(&format!("    EpEnum_{}* e = (EpEnum_{}*)ptr;\n", ed.name, ed.name));
                 for (_i, (vname, fields)) in ed.variants.iter().enumerate() {
                     if fields.iter().any(|(_, ft)| matches!(ft, TypeAnnotation::List | TypeAnnotation::DynStr | TypeAnnotation::UserDefined(_) | TypeAnnotation::Generic(_, _))) {
@@ -2075,6 +2095,7 @@ impl Codegen {
                     for (j, _) in fields.iter().enumerate() {
                         self.out.push_str(&format!("    e->data{} = arg{};\n", j, j));
                     }
+                    self.out.push_str("    ep_gc_register(e, EP_OBJ_CLOSURE);\n"); // reuse CLOSURE kind for enums
                     self.out.push_str("    return (long long)e;\n");
                     self.out.push_str("}\n\n");
                 }
