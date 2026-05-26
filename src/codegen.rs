@@ -3092,7 +3092,7 @@ static const char* ep_map_key_str(long long key_val, char* buf, int bufsize) {
     if (key_val > 0x100000) {
         const char* p = (const char*)(void*)key_val;
         unsigned char first = (unsigned char)*p;
-        if ((first >= 0x20 && first < 0x7F) || first == 0) {
+        if ((first >= 0x20 && first < 0x7F) || first >= 0xC0 || first == 0) {
             return p; /* valid string pointer */
         }
     }
@@ -4827,7 +4827,7 @@ long long ep_auto_to_string(long long val) {
         // Use a signal-safe approach: check if the pointer is page-aligned-ish
         const char* p = (const char*)(void*)val;
         unsigned char first = (unsigned char)*p;
-        if (first >= 0x20 && first < 0x7F || first == '\n' || first == '\t' || first == '\r' || first == 0) {
+        if (first >= 0x20 || first == '\n' || first == '\t' || first == '\r' || first == 0) {
             return val; // Looks like a valid string
         }
     }

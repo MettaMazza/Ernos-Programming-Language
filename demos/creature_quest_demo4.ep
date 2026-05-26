@@ -1154,7 +1154,7 @@ define check_evolution with c as Companion returning Companion:
 
 define gain_companion_xp with c as Companion and amount as Int returning Companion:
     set c.xp to c.xp + amount
-    set xp_needed to (c.level + 1) * 14
+    set xp_needed to (c.level + 1) * 8
     if c.xp >= xp_needed:
         set c.level to c.level + 1
         set c.xp to c.xp - xp_needed
@@ -2391,7 +2391,7 @@ define run_combat with p as Player and c as Companion and m as Monster and inv a
     display f"    +{m.gold_reward} gold, +{m.xp_reward} XP"
 
     if c.stage >= 1:
-        set c to gain_companion_xp(c and m.xp_reward / 2)
+        set c to gain_companion_xp(c and m.xp_reward)
         set c.bond to c.bond + 1
         if c.bond > 100:
             set c.bond to 100
@@ -3153,9 +3153,10 @@ define main:
         else if action == 1:
             # ── EXPLORE: Generate encounter ──
             set enc_roll to ep_random_int(1 and 100)
+            set did_boss to 0
 
             # Boss every 5 floors
-            if p.floor % 5 == 0 && enc_roll <= 80:
+            if p.floor % 5 == 0 and enc_roll <= 80:
                 set boss to create_boss(p.floor)
                 set ok to journal_add(f"Boss battle: {boss.name} on floor {p.floor}" and p.floor and p.turns_total)
                 set result to run_combat(p and c and boss and inv and quests and achievements and memory and llm_on)
@@ -3192,52 +3193,56 @@ define main:
                     display f"  You descend to Floor {p.floor}..."
                     set new_biome to get_biome(p.floor)
                     set ok to show_biome_banner(new_biome)
+                set did_boss to 1
 
-            else if enc_roll <= 50:
-                # Normal combat
-                set monster to create_monster(p.floor)
-                set result to run_combat(p and c and monster and inv and quests and achievements and memory and llm_on)
-                if result == 0:
-                    set ok to show_game_over(p and c)
-                    set ok to journal_add("Fell in battle..." and p.floor and p.turns_total)
-                    set death_pick to string_to_int(read_line())
-                    if death_pick == 1:
-                        set p.health to p.max_health
-                        set p.gold to 30
-                        set p.floor to 1
-                        set p.xp to 0
-                        set p.level to 1
-                        set p.weapon_name to "Rusty Blade"
-                        set p.weapon_damage to 3
-                        set p.weapon_element to "physical"
-                        set p.armor_name to "Worn Leather"
-                        set p.armor_defense to 2
-                        set p.runs_completed to p.runs_completed + 1
-                        set c.health to c.max_health
-                        set inv to create_inventory()
-                        set quests to create_quests()
-                        display "  A new journey begins..."
-                        set ok to journal_add("Rose again." and 1 and p.turns_total)
-                    else:
-                        set game_running to 0
-
-            else if enc_roll <= 65:
-                set ok to encounter_treasure(p and inv)
-            else if enc_roll <= 75:
-                set ok to encounter_rest(p and c)
-            else if enc_roll <= 82:
-                set ok to encounter_trap(p)
-                if p.health <= 0:
-                    set p.health to 1
-            else if enc_roll <= 88:
-                set ok to encounter_npc(p and c and inv)
-            else if enc_roll <= 93:
-                set ok to encounter_shrine(p and c)
-            else:
-                set ok to encounter_mystery(p and c)
+            # Normal encounters (always triggers on non-boss turns)
+            if did_boss == 0:
+                # Re-roll for normal encounter distribution
+                set enc_roll to ep_random_int(1 and 100)
+                if enc_roll <= 60:
+                    # Normal combat (60%)
+                    set monster to create_monster(p.floor)
+                    set result to run_combat(p and c and monster and inv and quests and achievements and memory and llm_on)
+                    if result == 0:
+                        set ok to show_game_over(p and c)
+                        set ok to journal_add("Fell in battle..." and p.floor and p.turns_total)
+                        set death_pick to string_to_int(read_line())
+                        if death_pick == 1:
+                            set p.health to p.max_health
+                            set p.gold to 30
+                            set p.floor to 1
+                            set p.xp to 0
+                            set p.level to 1
+                            set p.weapon_name to "Rusty Blade"
+                            set p.weapon_damage to 3
+                            set p.weapon_element to "physical"
+                            set p.armor_name to "Worn Leather"
+                            set p.armor_defense to 2
+                            set p.runs_completed to p.runs_completed + 1
+                            set c.health to c.max_health
+                            set inv to create_inventory()
+                            set quests to create_quests()
+                            display "  A new journey begins..."
+                            set ok to journal_add("Rose again." and 1 and p.turns_total)
+                        else:
+                            set game_running to 0
+                else if enc_roll <= 72:
+                    set ok to encounter_treasure(p and inv)
+                else if enc_roll <= 82:
+                    set ok to encounter_rest(p and c)
+                else if enc_roll <= 88:
+                    set ok to encounter_trap(p)
+                    if p.health <= 0:
+                        set p.health to 1
+                else if enc_roll <= 93:
+                    set ok to encounter_npc(p and c and inv)
+                else if enc_roll <= 97:
+                    set ok to encounter_shrine(p and c)
+                else:
+                    set ok to encounter_mystery(p and c)
 
             # ── Advance floor periodically ──
-            if p.turns_total % 4 == 0 && p.floor % 5 != 0:
+            if p.turns_total % 4 == 0 and p.floor % 5 != 0:
                 set p.floor to p.floor + 1
                 set ok to update_quest_progress(quests and 1 and 1)
                 set new_biome to get_biome(p.floor)
