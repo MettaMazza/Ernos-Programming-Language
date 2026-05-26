@@ -444,7 +444,15 @@ impl TypeChecker {
             self.struct_defs.insert(sd.name.clone(), fields);
         }
 
-        // Register enum definitions
+        // Register enum definitions — two passes to support recursive types
+        // Pass 1: register enum names so annotation_to_mono can see them
+        for ed in &program.enum_defs {
+            self.enum_defs.insert(ed.name.clone(), vec![]);
+            for (vname, _) in &ed.variants {
+                self.variant_to_enum.insert(vname.clone(), ed.name.clone());
+            }
+        }
+        // Pass 2: populate variant fields (now self-referential fields resolve correctly)
         for ed in &program.enum_defs {
             let variants: Vec<(String, Vec<(String, MonoType)>)> = ed.variants.iter()
                 .map(|(vname, fields)| {
@@ -454,10 +462,6 @@ impl TypeChecker {
                     (vname.clone(), mono_fields)
                 })
                 .collect();
-            
-            for (vname, _) in &variants {
-                self.variant_to_enum.insert(vname.clone(), ed.name.clone());
-            }
             
             self.enum_defs.insert(ed.name.clone(), variants);
         }
