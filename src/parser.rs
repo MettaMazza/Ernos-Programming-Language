@@ -22,11 +22,13 @@ enum Precedence {
 pub struct Parser {
     tokens: Vec<(Token, Span)>,
     pos: usize,
+    in_condition: bool,
+    call_depth: usize,
 }
 
 impl Parser {
     pub fn new(tokens: Vec<(Token, Span)>) -> Self {
-        Self { tokens, pos: 0 }
+        Self { tokens, pos: 0, in_condition: false, call_depth: 0 }
     }
 
     fn peek(&self) -> &Token {
@@ -92,6 +94,8 @@ impl Parser {
         match tok {
             Token::LogicalOr => Precedence::LogicalOr,
             Token::LogicalAnd => Precedence::LogicalAnd,
+            // Context-aware 'and': treat as logical AND in conditions when not inside a function call
+            Token::And if self.in_condition && self.call_depth == 0 => Precedence::LogicalAnd,
             Token::LessThan | Token::GreaterThan | Token::LessEqual | Token::GreaterEqual | Token::Equals | Token::NotEquals => Precedence::Comparison,
             Token::Plus | Token::Minus => Precedence::Sum,
             Token::Multiply | Token::Divide | Token::Modulo => Precedence::Product,
@@ -660,7 +664,11 @@ impl Parser {
                 Ok(Stmt::new(StmtNode::Set(var_name, expr, type_ann)))
             }
             Token::If => {
+                // Enable context-aware 'and' for the condition expression
+                let prev_in_condition = self.in_condition;
+                self.in_condition = true;
                 let cond = self.parse_expr(Precedence::Lowest)?;
+                self.in_condition = prev_in_condition;
                 self.expect(Token::Colon)?;
                 
                 if self.peek() == &Token::Newline {
@@ -672,20 +680,29 @@ impl Parser {
                 let mut else_branch = None;
                 if self.peek() == &Token::Else {
                     self.advance(); // consume "else"
-                    self.expect(Token::Colon)?;
-                    
-                    if self.peek() == &Token::Newline {
-                        self.advance();
+                    // Support 'else if' chains — if next token is If, parse as nested if
+                    if self.peek() == &Token::If {
+                        let elif_stmt = self.parse_statement()?;
+                        else_branch = Some(vec![elif_stmt]);
+                    } else {
+                        self.expect(Token::Colon)?;
+                        
+                        if self.peek() == &Token::Newline {
+                            self.advance();
+                        }
+                        
+                        else_branch = Some(self.parse_block()?);
                     }
-                    
-                    else_branch = Some(self.parse_block()?);
                 }
                 
                 Ok(Stmt::new(StmtNode::If(cond, then_branch, else_branch)))
             }
             Token::Repeat => {
                 self.expect(Token::While)?;
+                let prev_in_condition = self.in_condition;
+                self.in_condition = true;
                 let cond = self.parse_expr(Precedence::Lowest)?;
+                self.in_condition = prev_in_condition;
                 self.expect(Token::Colon)?;
                 
                 if self.peek() == &Token::Newline {
@@ -696,7 +713,10 @@ impl Parser {
                 Ok(Stmt::new(StmtNode::RepeatWhile(cond, body)))
             }
             Token::While => {
+                let prev_in_condition = self.in_condition;
+                self.in_condition = true;
                 let cond = self.parse_expr(Precedence::Lowest)?;
+                self.in_condition = prev_in_condition;
                 self.expect(Token::Colon)?;
                 
                 if self.peek() == &Token::Newline {
@@ -968,6 +988,7 @@ impl Parser {
                     }
                 } else if self.peek() == &Token::LeftParen {
                     self.advance(); // consume "("
+                    self.call_depth += 1;
                     let mut args = Vec::new();
                     if self.peek() != &Token::RightParen {
                         args.push(self.parse_expr(Precedence::Lowest)?);
@@ -980,6 +1001,7 @@ impl Parser {
                             args.push(self.parse_expr(Precedence::Lowest)?);
                         }
                     }
+                    self.call_depth -= 1;
                     self.expect(Token::RightParen)?;
                     Expr::with_span(ExprNode::Call(name, args), span)
                 } else {
@@ -1036,6 +1058,7 @@ impl Parser {
                     // Check if this is a method call: obj.method(...)
                     if self.peek() == &Token::LeftParen {
                         self.advance(); // consume "("
+                        self.call_depth += 1;
                         let mut args = Vec::new();
                         if self.peek() != &Token::RightParen {
                             args.push(self.parse_expr(Precedence::Lowest)?);
@@ -1044,6 +1067,7 @@ impl Parser {
                                 args.push(self.parse_expr(Precedence::Lowest)?);
                             }
                         }
+                        self.call_depth -= 1;
                         self.expect(Token::RightParen)?;
                         left = Expr::with_span(ExprNode::MethodCall(Box::new(left), field_or_method, args), span);
                     } else {
@@ -1086,6 +1110,12 @@ impl Parser {
                     };
                     let right = self.parse_expr(self.token_precedence(&op_tok))?;
                     left = Expr::with_span(ExprNode::Logical(Box::new(left), op, Box::new(right)), span);
+                }
+                // Context-aware 'and' in conditions: treat as logical AND
+                Token::And if self.in_condition && self.call_depth == 0 => {
+                    self.advance(); // consume 'and'
+                    let right = self.parse_expr(Precedence::LogicalAnd)?;
+                    left = Expr::with_span(ExprNode::Logical(Box::new(left), LogicalOp::And, Box::new(right)), span);
                 }
                 _ => break,
             }

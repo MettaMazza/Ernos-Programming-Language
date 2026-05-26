@@ -168,6 +168,9 @@ impl Codegen {
         self.func_return_types.insert("string_contains".to_string(), Type::Int);
         self.func_return_types.insert("string_index_of".to_string(), Type::Int);
         self.func_return_types.insert("string_replace".to_string(), Type::DynStr);
+        self.func_return_types.insert("json_get_string".to_string(), Type::DynStr);
+        self.func_return_types.insert("json_get_int".to_string(), Type::Int);
+        self.func_return_types.insert("json_get_bool".to_string(), Type::Int);
 
         for ext in &program.externals {
             if let Some(ref rt) = ext.return_type {
@@ -398,10 +401,8 @@ impl Codegen {
             }
             ExprNode::UnaryNot(_) => Type::Int,
             ExprNode::TryExpr(inner) => {
-                let inner_type = self.infer_type(inner, var_types);
-                match inner_type {
-                    _ => Type::Int,
-                }
+                // Preserve the inner expression's type
+                self.infer_type(inner, var_types)
             }
             ExprNode::Closure(_, _) => Type::Int, // closure is a function pointer (long long)
             ExprNode::Await(inner) => self.infer_type(inner, var_types),
@@ -1202,20 +1203,25 @@ impl Codegen {
                 let inner_str = self.gen_expr(inner, var_types)?;
                 let try_id = self.spawn_index;
                 self.spawn_index += 1;
-                // Simple try: evaluate the inner expression directly. 
-                // If it causes a signal (SIGFPE, SIGSEGV), ep_try catches it via setjmp.
+                // Determine appropriate zero value based on inner expression type
+                let inner_type = self.infer_type(inner, var_types);
+                let zero_val = match inner_type {
+                    Type::Str | Type::DynStr | Type::RefStr => "(long long)\"\"",
+                    _ => "0",
+                };
                 Ok(format!(
-                    "({{ volatile long long _try_r_{id} = 0; \
+                    "({{ volatile long long _try_r_{id} = {zero}; \
                     if (setjmp(ep_try_buf) == 0) {{ \
                         ep_try_active = 1; \
                         _try_r_{id} = {inner}; \
                         ep_try_active = 0; \
                     }} else {{ \
-                        _try_r_{id} = 0; \
+                        _try_r_{id} = {zero}; \
                     }} \
                     _try_r_{id}; }})",
                     id = try_id,
-                    inner = inner_str
+                    inner = inner_str,
+                    zero = zero_val
                 ))
             }
             ExprNode::Await(inner) => {
@@ -2394,6 +2400,9 @@ long long file_exists(long long path_val);
 long long string_contains(long long s_val, long long sub_val);
 long long string_index_of(long long s_val, long long sub_val);
 long long string_replace(long long s_val, long long old_val, long long new_val);
+long long json_get_string(long long json_val, long long key_val);
+long long json_get_int(long long json_val, long long key_val);
+long long json_get_bool(long long json_val, long long key_val);
 
 typedef struct {
     long long* data;
@@ -2953,6 +2962,14 @@ long long ep_http_request(long long method_val, long long url_val, long long hea
     }
     resp[resp_len] = '\0';
     close(sockfd);
+    // Strip HTTP headers — return only the body after \r\n\r\n
+    char* http_body = strstr(resp, "\r\n\r\n");
+    if (http_body) {
+        http_body += 4;
+        char* result = strdup(http_body);
+        free(resp);
+        return (long long)result;
+    }
     return (long long)resp;
 }
 
@@ -4146,6 +4163,120 @@ long long string_replace(long long s_val, long long old_val, long long new_val) 
 long long ep_random_int(long long min, long long max) {
     if (max <= min) return min;
     return min + (rand() % (max - min + 1));
+}
+
+// JSON built-in functions
+static const char* json_skip_ws(const char* p) {
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    return p;
+}
+
+static const char* json_skip_value(const char* p) {
+    p = json_skip_ws(p);
+    if (*p == '"') {
+        p++;
+        while (*p && *p != '"') { if (*p == '\\') p++; p++; }
+        if (*p == '"') p++;
+    } else if (*p == '{') {
+        int depth = 1; p++;
+        while (*p && depth > 0) {
+            if (*p == '"') { p++; while (*p && *p != '"') { if (*p == '\\') p++; p++; } if (*p) p++; }
+            else if (*p == '{') { depth++; p++; }
+            else if (*p == '}') { depth--; p++; }
+            else p++;
+        }
+    } else if (*p == '[') {
+        int depth = 1; p++;
+        while (*p && depth > 0) {
+            if (*p == '"') { p++; while (*p && *p != '"') { if (*p == '\\') p++; p++; } if (*p) p++; }
+            else if (*p == '[') { depth++; p++; }
+            else if (*p == ']') { depth--; p++; }
+            else p++;
+        }
+    } else {
+        while (*p && *p != ',' && *p != '}' && *p != ']' && *p != ' ' && *p != '\n') p++;
+    }
+    return p;
+}
+
+static const char* json_find_key(const char* json, const char* key) {
+    const char* p = json_skip_ws(json);
+    if (*p != '{') return NULL;
+    p++;
+    while (*p) {
+        p = json_skip_ws(p);
+        if (*p == '}') return NULL;
+        if (*p != '"') return NULL;
+        p++;
+        const char* ks = p;
+        while (*p && *p != '"') { if (*p == '\\') p++; p++; }
+        size_t klen = p - ks;
+        if (*p == '"') p++;
+        p = json_skip_ws(p);
+        if (*p == ':') p++;
+        p = json_skip_ws(p);
+        if (klen == strlen(key) && strncmp(ks, key, klen) == 0) {
+            return p;
+        }
+        p = json_skip_value(p);
+        p = json_skip_ws(p);
+        if (*p == ',') p++;
+    }
+    return NULL;
+}
+
+long long json_get_string(long long json_val, long long key_val) {
+    const char* json = (const char*)json_val;
+    const char* key = (const char*)key_val;
+    if (!json || !key) return (long long)strdup("");
+    const char* val = json_find_key(json, key);
+    if (!val || *val != '"') return (long long)strdup("");
+    val++;
+    const char* end = val;
+    while (*end && *end != '"') { if (*end == '\\') end++; end++; }
+    size_t len = end - val;
+    char* result = (char*)malloc(len + 1);
+    // Handle escape sequences
+    size_t di = 0;
+    const char* si = val;
+    while (si < end) {
+        if (*si == '\\' && si + 1 < end) {
+            si++;
+            switch (*si) {
+                case 'n': result[di++] = '\n'; break;
+                case 't': result[di++] = '\t'; break;
+                case 'r': result[di++] = '\r'; break;
+                case '"': result[di++] = '"'; break;
+                case '\\': result[di++] = '\\'; break;
+                default: result[di++] = *si; break;
+            }
+        } else {
+            result[di++] = *si;
+        }
+        si++;
+    }
+    result[di] = '\0';
+    ep_gc_register(result, EP_OBJ_STRING);
+    return (long long)result;
+}
+
+long long json_get_int(long long json_val, long long key_val) {
+    const char* json = (const char*)json_val;
+    const char* key = (const char*)key_val;
+    if (!json || !key) return 0;
+    const char* val = json_find_key(json, key);
+    if (!val) return 0;
+    return atoll(val);
+}
+
+long long json_get_bool(long long json_val, long long key_val) {
+    const char* json = (const char*)json_val;
+    const char* key = (const char*)key_val;
+    if (!json || !key) return 0;
+    const char* val = json_find_key(json, key);
+    if (!val) return 0;
+    if (strncmp(val, "true", 4) == 0) return 1;
+    return 0;
 }
 
 "#;
