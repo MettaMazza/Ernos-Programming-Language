@@ -70,6 +70,8 @@ pub enum Token {
     // Comparisons
     LessThan,
     GreaterThan,
+    LessEqual,
+    GreaterEqual,
     Equals,
     NotEquals,
     LogicalAnd,

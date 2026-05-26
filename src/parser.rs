@@ -68,14 +68,23 @@ impl Parser {
     }
 
     fn expect_identifier(&mut self) -> Result<(String, Span), ParseError> {
-        let (actual, span) = self.advance();
-        if let Token::Identifier(name) = actual {
-            Ok((name, span))
-        } else {
-            Err(ParseError {
-                message: format!("Expected identifier, found {:?}", actual),
+        let (tok, span) = self.advance();
+        match tok {
+            Token::Identifier(name) => Ok((name, span)),
+            // Allow keywords to be used as variable names in expression contexts
+            Token::Choice => Ok(("choice".to_string(), span)),
+            Token::Field => Ok(("field".to_string(), span)),
+            Token::Variant => Ok(("variant".to_string(), span)),
+            Token::Range => Ok(("range".to_string(), span)),
+            Token::Trait => Ok(("trait".to_string(), span)),
+            Token::Implement => Ok(("implement".to_string(), span)),
+            Token::Structure => Ok(("structure".to_string(), span)),
+            Token::Channel => Ok(("channel".to_string(), span)),
+            Token::Check => Ok(("check".to_string(), span)),
+            _ => Err(ParseError {
+                message: format!("Expected identifier, found {:?}", tok),
                 span,
-            })
+            }),
         }
     }
 
@@ -83,7 +92,7 @@ impl Parser {
         match tok {
             Token::LogicalOr => Precedence::LogicalOr,
             Token::LogicalAnd => Precedence::LogicalAnd,
-            Token::LessThan | Token::GreaterThan | Token::Equals | Token::NotEquals => Precedence::Comparison,
+            Token::LessThan | Token::GreaterThan | Token::LessEqual | Token::GreaterEqual | Token::Equals | Token::NotEquals => Precedence::Comparison,
             Token::Plus | Token::Minus => Precedence::Sum,
             Token::Multiply | Token::Divide | Token::Modulo => Precedence::Product,
             Token::LeftParen => Precedence::Call,
@@ -996,6 +1005,18 @@ impl Parser {
                 self.expect(Token::RightParen)?;
                 Expr::with_span(ExprNode::Call("range".to_string(), args), span)
             }
+            // Allow keywords as variable names in expression position
+            ref kw @ (Token::Choice | Token::Field | Token::Variant | Token::Structure |
+            Token::Channel | Token::Check | Token::Trait | Token::Implement) => {
+                let name = match kw {
+                    Token::Choice => "choice", Token::Field => "field",
+                    Token::Variant => "variant", Token::Structure => "structure",
+                    Token::Channel => "channel", Token::Check => "check",
+                    Token::Trait => "trait", Token::Implement => "implement",
+                    _ => unreachable!(),
+                };
+                Expr::with_span(ExprNode::Identifier(name.to_string()), span)
+            }
             other => {
                 return Err(ParseError {
                     message: format!("Expected expression, found {:?}", other),
@@ -1042,11 +1063,13 @@ impl Parser {
                     let right = self.parse_expr(self.token_precedence(&op_tok))?;
                     left = Expr::with_span(ExprNode::Binary(Box::new(left), op, Box::new(right)), span);
                 }
-                Token::LessThan | Token::GreaterThan | Token::Equals | Token::NotEquals => {
+                Token::LessThan | Token::GreaterThan | Token::LessEqual | Token::GreaterEqual | Token::Equals | Token::NotEquals => {
                     let op_tok = self.advance().0;
                     let op = match op_tok {
                         Token::LessThan => CompOp::LessThan,
                         Token::GreaterThan => CompOp::GreaterThan,
+                        Token::LessEqual => CompOp::LessEqual,
+                        Token::GreaterEqual => CompOp::GreaterEqual,
                         Token::Equals => CompOp::Equals,
                         Token::NotEquals => CompOp::NotEquals,
                         _ => unreachable!(),

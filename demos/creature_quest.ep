@@ -117,7 +117,7 @@ define check_evolution with c as Companion returning Int:
         set c.max_health to 30
         set c.health to 30
         return 1
-    if c.stage == 1 && c.level > 4:
+    if c.stage == 1 && c.level >= 5:
         display ""
         display "✨ ═══════════════════════════════════ ✨"
         display concat("   " and concat(c.name and " evolved into a Juvenile! 🐾"))
@@ -126,7 +126,7 @@ define check_evolution with c as Companion returning Int:
         set c.max_health to 50
         set c.health to 50
         return 1
-    if c.stage == 2 && c.level > 11:
+    if c.stage == 2 && c.level >= 12:
         display ""
         display "✨ ═══════════════════════════════════ ✨"
         display concat("   " and concat(c.name and " evolved into an Adult! 🦊"))
@@ -135,7 +135,7 @@ define check_evolution with c as Companion returning Int:
         set c.max_health to 80
         set c.health to 80
         return 1
-    if c.stage == 3 && c.level > 24:
+    if c.stage == 3 && c.level >= 25:
         display ""
         display "✨ ═══════════════════════════════════ ✨"
         display concat("   " and concat(c.name and " has become an ELDER! 🐉"))
@@ -360,7 +360,7 @@ define run_combat with p as Player and c as Companion and m as Monster returning
             # Attack
             set crit_roll to ep_random_int(1 and 10)
             set player_dmg to p.attack + p.weapon_damage - m.defense + ep_random_int(0 and 3)
-            if crit_roll > 8:
+            if crit_roll >= 9:
                 set player_dmg to player_dmg * 2
                 display "  💥 CRITICAL HIT!"
             if player_dmg < 1:
@@ -387,7 +387,7 @@ define run_combat with p as Player and c as Companion and m as Monster returning
 
         if pick == 4:
             # Companion ability
-            if c.stage > 0 && c.health > 0:
+            if c.stage >= 1 && c.health > 0:
                 set comp_dmg to companion_bonus_damage(c)
                 set ability_roll to ep_random_int(1 and 3)
                 if ability_roll == 1:
@@ -429,7 +429,7 @@ define run_combat with p as Player and c as Companion and m as Monster returning
             display concat("  " and concat(m.name and concat(" attacks you for " and concat(int_to_string(enemy_dmg) and " damage!"))))
 
             # Companion takes splash damage sometimes
-            if c.health > 0 && c.stage > 0:
+            if c.health > 0 && c.stage >= 1:
                 set splash to ep_random_int(1 and 4)
                 if splash == 1:
                     set comp_hit to m.attack / 3
@@ -437,14 +437,14 @@ define run_combat with p as Player and c as Companion and m as Monster returning
                         set comp_hit to 1
                     set c.health to c.health - comp_hit
                     display concat("  " and concat(m.name and concat(" lashes at " and concat(c.name and concat(" for " and concat(int_to_string(comp_hit) and "!"))))))
-                    if c.health < 1:
+                    if c.health <= 0:
                         set c.health to 0
                         display concat("  😢 " and concat(c.name and " collapses! They need rest!"))
 
         display ""
 
     # Combat result
-    if p.health < 1:
+    if p.health <= 0:
         set p.health to 0
         return 0
 
@@ -460,7 +460,7 @@ define run_combat with p as Player and c as Companion and m as Monster returning
     # XP and level up
     set c.xp to c.xp + m.xp_reward
     set xp_needed to c.level * 20 + 20
-    if c.xp > xp_needed - 1:
+    if c.xp >= xp_needed:
         set c.level to c.level + 1
         set c.xp to c.xp - xp_needed
         display ""
@@ -558,7 +558,7 @@ define encounter_npc with p as Player and c as Companion:
     if npc == 2:
         display "🧙 An old wizard blocks your path."
         display "  \"I'll heal you... for a price.\""
-        if p.gold > 9:
+        if p.gold >= 10:
             display "  💰 Paid 10 gold. Fully healed!"
             set p.gold to p.gold - 10
             set p.health to p.max_health
@@ -568,7 +568,7 @@ define encounter_npc with p as Player and c as Companion:
     if npc == 3:
         display "🤡 A travelling merchant appears!"
         display "  \"Potion for 15 gold?\""
-        if p.gold > 14:
+        if p.gold >= 15:
             set p.gold to p.gold - 15
             set p.potions to p.potions + 2
             display "  💰 Bought 2 potions!"
@@ -593,14 +593,14 @@ define encounter_trap with p as Player and c as Companion:
         display concat("  Took " and concat(int_to_string(dmg) and " damage!"))
     if trap_type == 2:
         set lost to ep_random_int(3 and 10)
-        if p.gold > lost - 1:
+        if p.gold >= lost:
             set p.gold to p.gold - lost
             display concat("🕳️ You fall into a pit! Lost " and concat(int_to_string(lost) and " gold!"))
         else:
             display "🕳️ You fall into a pit! Luckily you're broke."
     if trap_type == 3:
         display "☁️ A cloud of sleeping gas!"
-        if c.stage > 1:
+        if c.stage >= 2:
             display concat("  " and concat(c.name and " alerts you just in time! Dodged!"))
             set c.bond to c.bond + 3
         else:
@@ -804,9 +804,9 @@ define main:
         display generate_room_text(hero.floor)
 
         # Companion comment
-        if pet.hunger < 20 && pet.stage > 0:
+        if pet.hunger < 20 && pet.stage >= 1:
             display concat("  " and concat(get_stage_emoji(pet.stage) and concat(" " and concat(pet.name and " whimpers... they're hungry 🍖"))))
-        if pet.happiness > 80 && pet.stage > 0:
+        if pet.happiness > 80 && pet.stage >= 1:
             display concat("  " and concat(get_stage_emoji(pet.stage) and concat(" " and concat(pet.name and " bounces along happily!"))))
 
         display ""
@@ -836,7 +836,7 @@ define main:
                     display ""
                     display "💀 ════════════════════════════════════"
                     display "  You have fallen..."
-                    if pet.stage > 0:
+                    if pet.stage >= 1:
                         display concat("  " and concat(pet.name and " nudges you gently, tears in their eyes."))
                     display ""
                     set legacy_runs to legacy_runs + 1
@@ -878,7 +878,7 @@ define main:
             else:
                 # Normal encounter
                 set encounter to ep_random_int(1 and 10)
-                if encounter < 5:
+                if encounter <= 4:
                     # Combat (40%)
                     set monster to create_monster(hero.floor)
                     set result to run_combat(hero and pet and monster)
@@ -887,7 +887,7 @@ define main:
                         display ""
                         display "💀 ════════════════════════════════════"
                         display "  You have fallen..."
-                        if pet.stage > 0:
+                        if pet.stage >= 1:
                             display concat("  " and concat(pet.name and " nudges you gently..."))
                         display ""
                         set legacy_runs to legacy_runs + 1
@@ -938,7 +938,7 @@ define main:
                     # Trap (10%)
                     set ok to encounter_trap(hero and pet)
                     set hero.floor to hero.floor + 1
-                    if hero.health < 1:
+                    if hero.health <= 0:
                         set hero.health to 1
                         display "  You barely survive..."
 

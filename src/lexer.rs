@@ -349,6 +349,14 @@ impl<'a> Lexer<'a> {
                                     tok = Some(Token::LogicalOr);
                                     i += 2;
                                 }
+                                ('>', '=') => {
+                                    tok = Some(Token::GreaterEqual);
+                                    i += 2;
+                                }
+                                ('<', '=') => {
+                                    tok = Some(Token::LessEqual);
+                                    i += 2;
+                                }
                                 _ => {}
                             }
                         }

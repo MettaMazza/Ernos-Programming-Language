@@ -126,6 +126,61 @@ fn main() {
         return;
     }
 
+    if args[1] == "--list-builtins" {
+        println!("Ernos Built-in Functions:");
+        println!();
+        println!("  ── Strings ──");
+        println!("  concat(a: Str, b: Str) -> Str              Concatenate two strings");
+        println!("  string_length(s: Str) -> Int                Get string length");
+        println!("  substring(s: Str, start: Int, len: Int) -> Str  Extract substring");
+        println!("  string_to_int(s: Str) -> Int                Parse string to integer");
+        println!("  int_to_string(n: Int) -> Str                Convert integer to string");
+        println!("  char_at(s: Str, index: Int) -> Int          Get character code at index");
+        println!("  char_from_code(code: Int) -> Str            Create string from character code");
+        println!("  string_contains(s: Str, sub: Str) -> Int    Check if string contains substring");
+        println!("  string_index_of(s: Str, sub: Str) -> Int    Find first index of substring");
+        println!("  string_replace(s: Str, old: Str, new: Str) -> Str  Replace occurrences");
+        println!("  string_split(s: Str, delim: Str) -> List    Split string into list");
+        println!("  string_upper(s: Str) -> Str                 Convert to uppercase");
+        println!("  string_lower(s: Str) -> Str                 Convert to lowercase");
+        println!("  string_trim(s: Str) -> Str                  Trim whitespace");
+        println!();
+        println!("  ── Lists ──");
+        println!("  create_list() -> List                       Create empty list");
+        println!("  append_list(list: List, item: Int) -> Int   Append item to list");
+        println!("  get_list(list: List, index: Int) -> Int     Get item at index");
+        println!("  set_list(list: List, index: Int, val: Int) -> Int  Set item at index");
+        println!("  list_length(list: List) -> Int              Get list length");
+        println!("  remove_list(list: List, index: Int) -> Int  Remove item at index");
+        println!();
+        println!("  ── I/O ──");
+        println!("  read_line() -> Str                          Read line from stdin");
+        println!("  read_int() -> Int                           Read integer from stdin");
+        println!("  display <expr>                              Print value to stdout");
+        println!();
+        println!("  ── Math & Random ──");
+        println!("  ep_random_int(min: Int, max: Int) -> Int    Random integer in range [min, max]");
+        println!("  ep_abs(n: Int) -> Int                       Absolute value");
+        println!();
+        println!("  ── Concurrency ──");
+        println!("  create_channel() -> Channel                 Create a message channel");
+        println!("  send <value> to <channel>                   Send value to channel");
+        println!("  receive from <channel> -> Int               Receive value from channel");
+        println!("  spawn <function>(args...)                    Run function in new thread");
+        println!("  ep_sleep_ms(ms: Int) -> Int                 Sleep for milliseconds");
+        println!();
+        println!("  ── File I/O ──");
+        println!("  file_read(path: Str) -> Str                 Read entire file");
+        println!("  file_write(path: Str, content: Str) -> Int  Write to file");
+        println!("  file_append(path: Str, content: Str) -> Int Append to file");
+        println!("  file_exists(path: Str) -> Int               Check if file exists");
+        println!();
+        println!("  ── Time ──");
+        println!("  ep_time_ms() -> Int                         Current time in milliseconds");
+        println!();
+        return;
+    }
+
     // Handle --check (syntax check only, no codegen)
     if args[1] == "--check" || args[1] == "check" {
         if args.len() < 3 {

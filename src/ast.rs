@@ -15,6 +15,8 @@ pub enum Op {
 pub enum CompOp {
     LessThan,
     GreaterThan,
+    LessEqual,
+    GreaterEqual,
     Equals,
     NotEquals,
 }

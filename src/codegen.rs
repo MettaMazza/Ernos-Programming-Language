@@ -1053,6 +1053,8 @@ impl Codegen {
                     let cmp_op = match op {
                         CompOp::LessThan => "< 0",
                         CompOp::GreaterThan => "> 0",
+                        CompOp::LessEqual => "<= 0",
+                        CompOp::GreaterEqual => ">= 0",
                         CompOp::Equals => "== 0",
                         CompOp::NotEquals => "!= 0",
                     };
@@ -1061,6 +1063,8 @@ impl Codegen {
                     let op_str = match op {
                         CompOp::LessThan => "<",
                         CompOp::GreaterThan => ">",
+                        CompOp::LessEqual => "<=",
+                        CompOp::GreaterEqual => ">=",
                         CompOp::Equals => "==",
                         CompOp::NotEquals => "!=",
                     };
@@ -1955,7 +1959,12 @@ static void ep_signal_handler(int sig) {
         ep_try_active = 0;
         longjmp(ep_try_buf, sig);
     }
-    /* If not inside a try, just exit */
+    /* Outside try: print error and exit */
+    const char* name = sig == SIGSEGV ? "segmentation fault (null pointer or invalid memory access)"
+                     : sig == SIGFPE  ? "arithmetic error (division by zero)"
+                     : sig == SIGABRT ? "aborted"
+                     : "unknown signal";
+    fprintf(stderr, "\nRuntime Error: %s (signal %d)\n", name, sig);
     _exit(128 + sig);
 }
 

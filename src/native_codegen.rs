@@ -343,6 +343,8 @@ impl NativeCodegen {
                     CompOp::NotEquals => "ne",
                     CompOp::LessThan => "lt",
                     CompOp::GreaterThan => "gt",
+                    CompOp::LessEqual => "le",
+                    CompOp::GreaterEqual => "ge",
                 };
                 // Set dest to 1 if condition true, 0 otherwise
                 self.emit(&format!("    cset {}, {}", dest, cond));

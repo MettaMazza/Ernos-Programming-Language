@@ -370,6 +370,8 @@ impl X86_64Codegen {
                     CompOp::NotEquals => "ne",
                     CompOp::LessThan => "l",
                     CompOp::GreaterThan => "g",
+                    CompOp::LessEqual => "le",
+                    CompOp::GreaterEqual => "ge",
                 };
                 self.emit(&format!("    set{} al", cond));
                 self.emit("    movzx rax, al");
