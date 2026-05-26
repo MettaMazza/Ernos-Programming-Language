@@ -1,9 +1,14 @@
-# Math and Utility Test
+# Math and Utility Test — Full Coverage
 
 define main:
-    display "=== Math ==="
+    display "=== Random ==="
     set r to ep_random_int(0 and 100)
     display f"random (0-100): {r}"
+
+    display "=== Abs ==="
+    display f"abs(-42): {ep_abs(-42)}"
+    display f"abs(42): {ep_abs(42)}"
+    display f"abs(0): {ep_abs(0)}"
 
     display "=== Time ==="
     set t1 to ep_time_now_ms()

@@ -139,6 +139,12 @@ fn main() {
         println!("  string_index_of(s: Str, sub: Str) -> Int    Find first index of substring (-1 if not found)");
         println!("  string_replace(s: Str, old: Str, new: Str) -> Str  Replace occurrences");
         println!("  string_from_list(list: List) -> Str         Build string from list of char codes");
+        println!("  string_upper(s: Str) -> Str                  Convert to uppercase");
+        println!("  string_lower(s: Str) -> Str                  Convert to lowercase");
+        println!("  string_trim(s: Str) -> Str                   Strip leading/trailing whitespace");
+        println!("  string_split(s: Str, delim: Str) -> List     Split string into list of parts");
+        println!("  char_at(s: Str, index: Int) -> Int           Get character code at index");
+        println!("  char_from_code(code: Int) -> Str             Create single-char string from code");
         println!("  f\"Hello {{name}}!\"                           F-string interpolation");
         println!();
         println!("  ── Lists ──");
@@ -152,7 +158,7 @@ fn main() {
         println!();
         println!("  ── Maps (Key-Value) ──");
         println!("  create_map() -> Map                         Create empty hashmap");
-        println!("  map_insert(map: Map, key: Str, val) -> Int  Insert/update key-value pair");
+        println!("  map_insert(map: Map, key, val) -> Int       Insert/update key-value pair (key: Str or Int)");
         println!("  map_get_val(map: Map, key: Str) -> Int      Get value by key (0 if not found)");
         println!("  map_contains(map: Map, key: Str) -> Int     Check if key exists (1/0)");
         println!("  map_delete(map: Map, key: Str) -> Int       Remove a key");
@@ -167,6 +173,7 @@ fn main() {
         println!();
         println!("  ── Math & Random ──");
         println!("  ep_random_int(min: Int, max: Int) -> Int    Random integer in range [min, max]");
+        println!("  ep_abs(n: Int) -> Int                       Absolute value");
         println!();
         println!("  ── Concurrency ──");
         println!("  create_channel() -> Channel                 Create a message channel");

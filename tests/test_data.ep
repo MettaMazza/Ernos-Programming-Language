@@ -1,4 +1,4 @@
-# Data Structures Test
+# Data Structures Test — Full Coverage
 
 define main:
     # === Lists ===
@@ -40,8 +40,8 @@ define main:
         set sum to sum + n
     display f"sum: {sum}"
 
-    # === Maps (string keys) ===
-    display "=== Maps ==="
+    # === Maps with STRING keys ===
+    display "=== Maps (string keys) ==="
     set m to create_map()
     map_insert(m and "one" and 100)
     map_insert(m and "two" and 200)
@@ -53,6 +53,23 @@ define main:
 
     map_delete(m and "one")
     display f"after delete, size: {map_size(m)}"
+    free_map(m)
+
+    # === Maps with INTEGER keys ===
+    display "=== Maps (integer keys) ==="
+    set im to create_map()
+    map_insert(im and 1 and 100)
+    map_insert(im and 42 and 999)
+    map_insert(im and 0 and 50)
+    display f"int key 1: {map_get_val(im and 1)}"
+    display f"int key 42: {map_get_val(im and 42)}"
+    display f"int key 0: {map_get_val(im and 0)}"
+    display f"contains 42: {map_contains(im and 42)}"
+    display f"contains 99: {map_contains(im and 99)}"
+    display f"int map size: {map_size(im)}"
+    map_delete(im and 1)
+    display f"after delete 1, size: {map_size(im)}"
+    free_map(im)
 
     # === Map String Values ===
     display "=== Map String Values ==="
@@ -63,10 +80,7 @@ define main:
     set v to map_get_str(config and "version")
     display f"name: {n}"
     display f"version: {v}"
-
-    free_map(m)
     free_map(config)
-    display "maps freed ok"
 
     display "ALL DATA TESTS PASSED"
     return 0

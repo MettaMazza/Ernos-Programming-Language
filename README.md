@@ -312,14 +312,10 @@ cat ep_lexer.ep ep_parser.ep ep_codegen.ep epc.ep > self_hosted_compiler.ep
 
 ## Known Limitations
 
-- **Maps require string keys** — integer keys cause a segfault (the internal implementation uses `strcmp`)
-- **Some string functions are type-checked but not implemented** — `string_upper`, `string_lower`, `string_trim`, `string_split`, `char_at`, `char_from_code` pass the type checker but produce linker errors
-- **No `ep_abs` function** — despite being referenced in some docs
-- **Native backends (ARM64/x86_64)** support basic programs only — structs, enums, channels etc. produce explicit errors
+- **Native backends (ARM64/x86_64)** support basic programs only — structs, enums, channels etc. produce explicit errors (use the default C backend)
 - **Windows** — C runtime has `#ifdef _WIN32` polyfills but is not tested
 - **No package registry** — `epm` is a local project manager, not a package registry
 - **No debugger integration** — `--debug` compiles with `-g` but there's no Ernos-aware debugger
-- **GC may abort on exit** — programs using maps sometimes trigger an abort during GC cleanup at process exit (the program logic runs correctly)
 
 ---
 

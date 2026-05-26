@@ -183,6 +183,13 @@ impl Codegen {
         self.func_return_types.insert("channel_has_data".to_string(), Type::Int);
         self.func_return_types.insert("channel_select".to_string(), Type::Int);
         self.func_return_types.insert("ep_auto_to_string".to_string(), Type::DynStr);
+        self.func_return_types.insert("string_upper".to_string(), Type::DynStr);
+        self.func_return_types.insert("string_lower".to_string(), Type::DynStr);
+        self.func_return_types.insert("string_trim".to_string(), Type::DynStr);
+        self.func_return_types.insert("string_split".to_string(), Type::List);
+        self.func_return_types.insert("char_at".to_string(), Type::Int);
+        self.func_return_types.insert("char_from_code".to_string(), Type::DynStr);
+        self.func_return_types.insert("ep_abs".to_string(), Type::Int);
 
         for ext in &program.externals {
             if let Some(ref rt) = ext.return_type {
@@ -2120,16 +2127,20 @@ impl Codegen {
                 }
                 if t == Some(&Type::List) {
                     self.out.push_str(&format!("    free_list({});\n", var_name));
+                    self.out.push_str(&format!("    {} = 0;\n", var_name));
                 } else if let Some(Type::Struct(sname)) = t {
                     if sname == "Map" {
                         self.out.push_str(&format!("    free_map({});\n", var_name));
+                        self.out.push_str(&format!("    {} = 0;\n", var_name));
                     } else if sname == "Deque" {
                         // Deque is a built-in, skip struct free
                     } else {
                         self.out.push_str(&format!("    free_struct_{}({});\n", sname, var_name));
+                        self.out.push_str(&format!("    {} = 0;\n", var_name));
                     }
                 } else if let Some(Type::Enum(ename)) = t {
                     self.out.push_str(&format!("    free_enum_{}({});\n", ename, var_name));
+                    self.out.push_str(&format!("    {} = 0;\n", var_name));
                 }
             }
         }
@@ -2622,6 +2633,13 @@ long long file_exists(long long path_val);
 long long string_contains(long long s_val, long long sub_val);
 long long string_index_of(long long s_val, long long sub_val);
 long long string_replace(long long s_val, long long old_val, long long new_val);
+long long string_upper(long long s_val);
+long long string_lower(long long s_val);
+long long string_trim(long long s_val);
+long long string_split(long long s_val, long long delim_val);
+long long char_at(long long s_val, long long index);
+long long char_from_code(long long code);
+long long ep_abs(long long n);
 long long json_get_string(long long json_val, long long key_val);
 long long json_get_int(long long json_val, long long key_val);
 long long json_get_bool(long long json_val, long long key_val);
@@ -2885,10 +2903,26 @@ static void map_resize(EpMap* map, long long new_capacity) {
     free(old_entries);
 }
 
+/* Convert a key value to a string — handles both string pointers and integers */
+static const char* ep_map_key_str(long long key_val, char* buf, int bufsize) {
+    if (key_val == 0) { buf[0] = '0'; buf[1] = '\0'; return buf; }
+    /* Check if value is in plausible pointer range for a string */
+    if (key_val > 0x100000) {
+        const char* p = (const char*)(void*)key_val;
+        unsigned char first = (unsigned char)*p;
+        if ((first >= 0x20 && first < 0x7F) || first == 0) {
+            return p; /* valid string pointer */
+        }
+    }
+    snprintf(buf, bufsize, "%lld", key_val);
+    return buf;
+}
+
 long long map_insert(long long map_ptr, long long key_val, long long value) {
     EpMap* map = (EpMap*)map_ptr;
-    const char* key = (const char*)key_val;
-    if (!map || !key) return 0;
+    char keybuf[32];
+    const char* key = ep_map_key_str(key_val, keybuf, sizeof(keybuf));
+    if (!map) return 0;
     if (map->size * 2 >= map->capacity) {
         map_resize(map, map->capacity * 2);
     }
@@ -2909,8 +2943,9 @@ long long map_insert(long long map_ptr, long long key_val, long long value) {
 
 long long map_get_val(long long map_ptr, long long key_val) {
     EpMap* map = (EpMap*)map_ptr;
-    const char* key = (const char*)key_val;
-    if (!map || !key) return 0;
+    char keybuf[32];
+    const char* key = ep_map_key_str(key_val, keybuf, sizeof(keybuf));
+    if (!map) return 0;
     unsigned long h = hash_string(key) % map->capacity;
     long long start_h = h;
     while (map->entries[h].used) {
@@ -2937,8 +2972,9 @@ long long map_get_str(long long map_ptr, long long key_val) {
 
 long long map_contains(long long map_ptr, long long key_val) {
     EpMap* map = (EpMap*)map_ptr;
-    const char* key = (const char*)key_val;
-    if (!map || !key) return 0;
+    char keybuf[32];
+    const char* key = ep_map_key_str(key_val, keybuf, sizeof(keybuf));
+    if (!map) return 0;
     unsigned long h = hash_string(key) % map->capacity;
     long long start_h = h;
     while (map->entries[h].used) {
@@ -2953,8 +2989,9 @@ long long map_contains(long long map_ptr, long long key_val) {
 
 long long map_delete(long long map_ptr, long long key_val) {
     EpMap* map = (EpMap*)map_ptr;
-    const char* key = (const char*)key_val;
-    if (!map || !key) return 0;
+    char keybuf[32];
+    const char* key = ep_map_key_str(key_val, keybuf, sizeof(keybuf));
+    if (!map) return 0;
     unsigned long h = hash_string(key) % map->capacity;
     long long start_h = h;
     while (map->entries[h].used) {
@@ -3017,6 +3054,9 @@ long long map_size(long long map_ptr) {
 long long free_map(long long map_ptr) {
     EpMap* map = (EpMap*)map_ptr;
     if (!map) return 0;
+    /* Skip if already freed (idempotent) */
+    if (!ep_gc_find(map)) return 0;
+    ep_gc_unregister(map);
     for (long long i = 0; i < map->capacity; i++) {
         if (map->entries[i].used && map->entries[i].key != NULL) {
             free(map->entries[i].key);
@@ -3626,6 +3666,8 @@ long long length_list(long long list_ptr) {
 long long free_list(long long list_ptr) {
     EpList* list = (EpList*)list_ptr;
     if (!list) return 0;
+    /* Skip if already freed (idempotent) */
+    if (!ep_gc_find(list)) return 0;
     ep_gc_unregister(list);
     free(list->data);
     free(list);
@@ -4505,6 +4547,84 @@ long long string_replace(long long s_val, long long old_val, long long new_val) 
     *dst = '\0';
     ep_gc_register(result, EP_OBJ_STRING);
     return (long long)result;
+}
+
+/* ========== Additional String Functions ========== */
+#include <ctype.h>
+
+long long string_upper(long long s_val) {
+    const char* s = (const char*)s_val;
+    if (!s) return (long long)strdup("");
+    long long len = strlen(s);
+    char* result = malloc(len + 1);
+    for (long long i = 0; i < len; i++) result[i] = toupper((unsigned char)s[i]);
+    result[len] = '\0';
+    ep_gc_register(result, EP_OBJ_STRING);
+    return (long long)result;
+}
+
+long long string_lower(long long s_val) {
+    const char* s = (const char*)s_val;
+    if (!s) return (long long)strdup("");
+    long long len = strlen(s);
+    char* result = malloc(len + 1);
+    for (long long i = 0; i < len; i++) result[i] = tolower((unsigned char)s[i]);
+    result[len] = '\0';
+    ep_gc_register(result, EP_OBJ_STRING);
+    return (long long)result;
+}
+
+long long string_trim(long long s_val) {
+    const char* s = (const char*)s_val;
+    if (!s) return (long long)strdup("");
+    while (*s && isspace((unsigned char)*s)) s++;
+    long long len = strlen(s);
+    while (len > 0 && isspace((unsigned char)s[len - 1])) len--;
+    char* result = malloc(len + 1);
+    memcpy(result, s, len);
+    result[len] = '\0';
+    ep_gc_register(result, EP_OBJ_STRING);
+    return (long long)result;
+}
+
+long long string_split(long long s_val, long long delim_val) {
+    const char* s = (const char*)s_val;
+    const char* delim = (const char*)delim_val;
+    if (!s || !delim) return create_list();
+    long long list = create_list();
+    long long dlen = strlen(delim);
+    if (dlen == 0) { append_list(list, s_val); return list; }
+    const char* p = s;
+    while (1) {
+        const char* found = strstr(p, delim);
+        long long partlen = found ? (found - p) : (long long)strlen(p);
+        char* part = malloc(partlen + 1);
+        memcpy(part, p, partlen);
+        part[partlen] = '\0';
+        ep_gc_register(part, EP_OBJ_STRING);
+        append_list(list, (long long)part);
+        if (!found) break;
+        p = found + dlen;
+    }
+    return list;
+}
+
+long long char_at(long long s_val, long long index) {
+    const char* s = (const char*)s_val;
+    if (!s || index < 0 || index >= (long long)strlen(s)) return 0;
+    return (unsigned char)s[index];
+}
+
+long long char_from_code(long long code) {
+    char* result = malloc(2);
+    result[0] = (char)code;
+    result[1] = '\0';
+    ep_gc_register(result, EP_OBJ_STRING);
+    return (long long)result;
+}
+
+long long ep_abs(long long n) {
+    return n < 0 ? -n : n;
 }
 
 // Auto-convert any value to string for string interpolation

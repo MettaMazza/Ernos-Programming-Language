@@ -1,4 +1,4 @@
-# String Operations Test (only verified builtins)
+# String Operations Test — Full Coverage
 
 define main:
     display "=== String Basics ==="
@@ -27,6 +27,28 @@ define main:
     display "=== Replace ==="
     set replaced to string_replace(hay and "fox" and "dog")
     display f"replaced: {replaced}"
+
+    display "=== Upper/Lower ==="
+    set upper to string_upper("hello world")
+    set lower to string_lower("HELLO WORLD")
+    display f"upper: {upper}"
+    display f"lower: {lower}"
+
+    display "=== Trim ==="
+    set trimmed to string_trim("  spaces  ")
+    display f"trimmed: '{trimmed}'"
+
+    display "=== Split ==="
+    set parts to string_split("a,b,c" and ",")
+    display f"split len: {length_list(parts)}"
+    for each p in parts:
+        display f"  part: {p}"
+
+    display "=== Char ==="
+    set ch to char_at("ABC" and 1)
+    display f"char_at 1: {ch}"
+    set from_code to char_from_code(65)
+    display f"char_from_code 65: {from_code}"
 
     display "ALL STRING TESTS PASSED"
     return 0
