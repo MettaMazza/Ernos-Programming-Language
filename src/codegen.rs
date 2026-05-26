@@ -140,6 +140,8 @@ impl Codegen {
         self.func_return_types.insert("map_size".to_string(), Type::Int);
         self.func_return_types.insert("map_values".to_string(), Type::List);
         self.func_return_types.insert("free_map".to_string(), Type::Int);
+        self.func_return_types.insert("map_set_str".to_string(), Type::Int);
+        self.func_return_types.insert("map_get_str".to_string(), Type::DynStr);
         self.func_return_types.insert("create_deque".to_string(), Type::Int);
         self.func_return_types.insert("deque_push_back".to_string(), Type::Int);
         self.func_return_types.insert("deque_push_front".to_string(), Type::Int);
@@ -530,6 +532,7 @@ impl Codegen {
             }
             ExprNode::Closure(_, _) => Type::Int, // closure is a function pointer (long long)
             ExprNode::Await(inner) => self.infer_type(inner, var_types),
+            ExprNode::ListLiteral(_) => Type::List,
         }
     }
 
@@ -598,6 +601,10 @@ impl Codegen {
                 Ok(())
             }
             ExprNode::Closure(_, _) => Ok(()), // closures don't read from outer scope at safety-check time
+            ExprNode::ListLiteral(elements) => {
+                for e in elements { self.check_expr_reads(e, var_types, owner_states)?; }
+                Ok(())
+            }
             ExprNode::Await(inner) => {
                 self.check_expr_reads(inner, var_types, owner_states)?;
                 Ok(())
@@ -1046,6 +1053,34 @@ impl Codegen {
                     }
 
                     self.out.push_str("    }\n");
+                } else if matches!(enum_type, Type::Str | Type::DynStr) {
+                    // String matching via strcmp
+                    self.out.push_str("    {\n");
+                    self.out.push_str(&format!("        const char* _match_val = (const char*){};\n", expr_str));
+                    for (arm_idx, (pattern, _bindings, body)) in arms.iter().enumerate() {
+                        let keyword = if arm_idx == 0 { "if" } else { "else if" };
+                        // Escape the pattern string for C
+                        let escaped = pattern.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+                        self.out.push_str(&format!("        {} (strcmp(_match_val, \"{}\") == 0) {{\n", keyword, escaped));
+                        for s in body {
+                            self.gen_statement(s, var_types)?;
+                        }
+                        self.out.push_str("        }\n");
+                    }
+                    self.out.push_str("    }\n");
+                } else if matches!(enum_type, Type::Int) {
+                    // Integer matching via ==
+                    self.out.push_str("    {\n");
+                    self.out.push_str(&format!("        long long _match_val = {};\n", expr_str));
+                    for (arm_idx, (pattern, _bindings, body)) in arms.iter().enumerate() {
+                        let keyword = if arm_idx == 0 { "if" } else { "else if" };
+                        self.out.push_str(&format!("        {} (_match_val == {}) {{\n", keyword, pattern));
+                        for s in body {
+                            self.gen_statement(s, var_types)?;
+                        }
+                        self.out.push_str("        }\n");
+                    }
+                    self.out.push_str("    }\n");
                 } else {
                     return Err("Match/check statement on non-enum type".to_string());
                 }
@@ -1427,6 +1462,22 @@ impl Codegen {
 
                 // Return the function pointer as a long long
                 Ok(format!("(long long){}", closure_name))
+            }
+            ExprNode::ListLiteral(elements) => {
+                // Generate: ({ long long _lit = create_list(); append_list(_lit, e1); ... _lit; })
+                let mut parts = Vec::new();
+                parts.push("({ long long _lit_list = create_list();".to_string());
+                for elem in elements {
+                    let elem_str = self.gen_expr(elem, var_types)?;
+                    let elem_type = self.infer_type(elem, var_types);
+                    let cast = match elem_type {
+                        Type::Str | Type::DynStr => format!("(long long){}", elem_str),
+                        _ => elem_str,
+                    };
+                    parts.push(format!(" append_list(_lit_list, {});", cast));
+                }
+                parts.push(" _lit_list; })".to_string());
+                Ok(parts.join(""))
             }
         }
     }
@@ -2866,6 +2917,18 @@ long long map_get_val(long long map_ptr, long long key_val) {
         if (h == start_h) break;
     }
     return 0;
+}
+
+/* map_set_str: store a string value (strdup'd copy) under a string key */
+long long map_set_str(long long map_ptr, long long key_val, long long str_val) {
+    /* Store the string pointer as a long long value — same as map_insert */
+    return map_insert(map_ptr, key_val, str_val);
+}
+
+/* map_get_str: retrieve a string value from a map (returns char* as long long) */
+long long map_get_str(long long map_ptr, long long key_val) {
+    /* Same as map_get_val — the stored long long IS a char* pointer */
+    return map_get_val(map_ptr, key_val);
 }
 
 long long map_contains(long long map_ptr, long long key_val) {
@@ -4433,15 +4496,22 @@ long long string_replace(long long s_val, long long old_val, long long new_val) 
 long long ep_auto_to_string(long long val) {
     // If the value is 0, return "0"
     if (val == 0) return (long long)strdup("0");
-    // Heuristic: if val looks like a valid heap pointer (> 4096), try to use it as a string
-    // This works because strings are heap-allocated char* in ErnosPlain
-    if (val > 4096) {
-        // Check if it looks like a readable string (first byte is printable ASCII or common escape)
+    // Check if val is a GC-tracked string (heap-allocated)
+    EpGCObject* obj = ep_gc_find((void*)val);
+    if (obj && obj->kind == EP_OBJ_STRING) {
+        return val; // It's a known string pointer
+    }
+    // Check if val looks like a valid pointer to a static/stack string
+    // Static string literals (in .rodata) aren't GC-tracked, but they are valid pointers
+    // On 64-bit systems, heap/stack/rodata pointers are typically > 0x100000 (1MB)
+    // Small integers (< 1MB) are definitely not pointers
+    if (val > 0x100000) {
+        // Try to validate it's a readable string using the first byte
+        // Use a signal-safe approach: check if the pointer is page-aligned-ish
         const char* p = (const char*)(void*)val;
-        // Simple validation: check first char is not obviously garbage
         unsigned char first = (unsigned char)*p;
         if (first >= 0x20 && first < 0x7F || first == '\n' || first == '\t' || first == '\r' || first == 0) {
-            return val; // Return the string pointer as-is
+            return val; // Looks like a valid string
         }
     }
     // Otherwise, convert integer to string

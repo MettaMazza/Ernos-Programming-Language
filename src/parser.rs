@@ -800,7 +800,21 @@ impl Parser {
                     }
 
                     self.expect(Token::If)?;
-                    let (variant_name, _) = self.expect_identifier()?;
+                    // Accept identifier (enum variant), string literal, or integer for the pattern
+                    let variant_name = match self.peek().clone() {
+                        Token::StringLiteral(s) => {
+                            self.advance();
+                            s
+                        }
+                        Token::Integer(n) => {
+                            self.advance();
+                            n.to_string()
+                        }
+                        _ => {
+                            let (name, _) = self.expect_identifier()?;
+                            name
+                        }
+                    };
 
                     let mut bindings = Vec::new();
                     if self.peek() == &Token::With {
@@ -881,6 +895,22 @@ impl Parser {
             Token::True => Expr::with_span(ExprNode::BoolLiteral(true), span),
             Token::False => Expr::with_span(ExprNode::BoolLiteral(false), span),
             Token::StringLiteral(s) => Expr::with_span(ExprNode::StringLiteral(s), span),
+            Token::LeftBracket => {
+                // List literal: [expr, expr, ...]
+                let mut elements = Vec::new();
+                if self.peek() != &Token::RightBracket {
+                    elements.push(self.parse_expr(Precedence::Lowest)?);
+                    while self.peek() == &Token::Comma {
+                        self.advance(); // consume ','
+                        if self.peek() == &Token::RightBracket {
+                            break; // Allow trailing comma
+                        }
+                        elements.push(self.parse_expr(Precedence::Lowest)?);
+                    }
+                }
+                self.expect(Token::RightBracket)?;
+                Expr::with_span(ExprNode::ListLiteral(elements), span)
+            }
             Token::InterpStringParts(parts) => {
                 // Desugar "hello {name}!" into concat(concat("hello " and name) and "!")
                 // Build a list of Expr nodes for each part

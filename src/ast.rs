@@ -75,6 +75,7 @@ pub enum ExprNode {
     TryExpr(Box<Expr>),
     Closure(Vec<String>, Vec<Stmt>),
     Await(Box<Expr>),
+    ListLiteral(Vec<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

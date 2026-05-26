@@ -784,6 +784,13 @@ impl TypeChecker {
                             self.pop_scope();
                         }
                     }
+                } else {
+                    // String or integer match — just type-check the body of each arm
+                    for (_pattern, _bindings, body) in arms {
+                        self.push_scope();
+                        for s in body { self.check_stmt(s); }
+                        self.pop_scope();
+                    }
                 }
             }
 
@@ -891,14 +898,21 @@ impl TypeChecker {
                 let arg_types: Vec<MonoType> = args.iter().map(|a| self.check_expr(a)).collect();
                 
                 if let Some((param_types, ret_type)) = self.func_types.get(name).cloned() {
+                    // Polymorphic builtins that accept any value type — skip arg type checking
+                    // because the C runtime stores all values as long long (ints or pointers)
+                    let skip_type_check = matches!(name.as_str(),
+                        "concat" | "append_list" | "get_list" | "set_list" |
+                        "map_insert" | "map_set_str" | "map_get_val" | "map_get_str" |
+                        "ep_auto_to_string" | "display"
+                    );
                     // Check argument count (some builtins like concat are variadic)
-                    if name != "concat" && arg_types.len() != param_types.len() {
+                    if !skip_type_check && arg_types.len() != param_types.len() {
                         self.error(
                             format!("Function '{}' expects {} arguments, got {}",
                                 name, param_types.len(), arg_types.len()),
                             expr.span,
                         );
-                    } else if name != "concat" {
+                    } else if !skip_type_check {
                         // Check argument types
                         for (i, (arg_t, param_t)) in arg_types.iter().zip(param_types.iter()).enumerate() {
                             if let Err(_) = unify(&mut self.subst, arg_t, param_t, expr.span) {
@@ -1043,6 +1057,14 @@ impl TypeChecker {
                     // Await on a non-future — it's still valid in current ErnosPlain
                     inner_type
                 }
+            }
+
+            ExprNode::ListLiteral(elements) => {
+                let elem_var = self.fresh_var();
+                for elem in elements {
+                    let _elem_type = self.check_expr(elem);
+                }
+                MonoType::List(Box::new(elem_var))
             }
         }
     }

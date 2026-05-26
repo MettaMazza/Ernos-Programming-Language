@@ -245,6 +245,24 @@ impl<'a> Lexer<'a> {
                         let mut expr_str = String::new();
                         let mut brace_depth = 1;
                         while let Some(ec) = self.peek() {
+                            if ec == '"' {
+                                // Nested string literal inside interpolation — scan through it
+                                expr_str.push(ec);
+                                self.advance();
+                                while let Some(sc) = self.peek() {
+                                    expr_str.push(sc);
+                                    self.advance();
+                                    if sc == '"' { break; }
+                                    if sc == '\\' {
+                                        // Handle escape sequence inside nested string
+                                        if let Some(esc) = self.peek() {
+                                            expr_str.push(esc);
+                                            self.advance();
+                                        }
+                                    }
+                                }
+                                continue;
+                            }
                             if ec == '}' {
                                 brace_depth -= 1;
                                 if brace_depth == 0 {
@@ -325,7 +343,7 @@ impl<'a> Lexer<'a> {
                 } else {
                     raw_tokens.push((RawToken::StringVal(s), span));
                 }
-            } else if c == ':' || c == '(' || c == ')' || c == '+' || c == '-' || c == '*' || c == '/'
+            } else if c == ':' || c == '(' || c == ')' || c == '[' || c == ']' || c == ',' || c == '+' || c == '-' || c == '*' || c == '/'
                    || c == '<' || c == '>' || c == '&' || c == '|' || c == '=' || c == '!' || c == '.' || c == '%' {
                 self.advance();
                 raw_tokens.push((RawToken::Symbol(c), span));
@@ -490,6 +508,9 @@ impl<'a> Lexer<'a> {
                             ':' => Token::Colon,
                             '(' => Token::LeftParen,
                             ')' => Token::RightParen,
+                            '[' => Token::LeftBracket,
+                            ']' => Token::RightBracket,
+                            ',' => Token::Comma,
                             '+' => Token::Plus,
                             '-' => Token::Minus,
                             '*' => Token::Multiply,

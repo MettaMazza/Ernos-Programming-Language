@@ -90,6 +90,9 @@ pub enum Token {
     Colon,
     LeftParen,
     RightParen,
+    LeftBracket,
+    RightBracket,
+    Comma,
 
     // Indentation & Layout
     Indent,
