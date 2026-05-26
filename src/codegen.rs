@@ -35,6 +35,12 @@ pub struct Codegen {
     enum_defs: HashMap<String, EnumDef>,
     /// Maps variant name -> enum name for quick lookup
     variant_to_enum: HashMap<String, String>,
+    /// Maps list variable name -> element type (for string list display)
+    list_element_types: HashMap<String, Type>,
+    /// Maps closure variable name -> generated C function name
+    closure_c_names: HashMap<String, String>,
+    /// Set by the Set handler to pass the variable name to Closure codegen
+    pending_closure_name: Option<String>,
 }
 
 impl Codegen {
@@ -48,6 +54,9 @@ impl Codegen {
             struct_defs: HashMap::new(),
             enum_defs: HashMap::new(),
             variant_to_enum: HashMap::new(),
+            list_element_types: HashMap::new(),
+            closure_c_names: HashMap::new(),
+            pending_closure_name: None,
         }
     }
 
@@ -342,7 +351,7 @@ impl Codegen {
         }
     }
 
-    fn collect_var_types(&self, stmts: &[Stmt], var_types: &mut HashMap<String, Type>) {
+    fn collect_var_types(&mut self, stmts: &[Stmt], var_types: &mut HashMap<String, Type>) {
         for stmt in stmts {
             match &stmt.node {
                 StmtNode::Set(name, expr, type_ann) => {
@@ -352,6 +361,17 @@ impl Codegen {
                         self.infer_type(expr, var_types)
                     };
                     var_types.insert(name.clone(), t);
+                    // Track element type for list literals with string elements
+                    if let ExprNode::ListLiteral(elements) = &expr.node {
+                        if elements.iter().any(|e| matches!(e.node, ExprNode::StringLiteral(_))) {
+                            self.list_element_types.insert(name.clone(), Type::Str);
+                        }
+                    }
+                    // Pre-register closure variable → C function name mapping
+                    if matches!(expr.node, ExprNode::Closure(_, _)) {
+                        let c_name = format!("_ep_closure_{}", Self::sanitize_c_name(name));
+                        self.closure_c_names.insert(name.clone(), c_name);
+                    }
                 }
                 StmtNode::FieldSet(_, _, _) => {}
                 StmtNode::If(_, then_branch, else_branch) => {
@@ -363,15 +383,26 @@ impl Codegen {
                 StmtNode::RepeatWhile(_, body) => {
                     self.collect_var_types(body, var_types);
                 }
-                StmtNode::ForEach(loop_var, _iterable, body) => {
-                    // The loop variable is always an Int (element from list or range index)
-                    var_types.insert(loop_var.clone(), Type::Int);
+                StmtNode::ForEach(loop_var, iterable, body) => {
+                    // Determine loop variable type from the list's element type
+                    let elem_type = if let ExprNode::Identifier(list_name) = &iterable.node {
+                        self.list_element_types.get(list_name).cloned().unwrap_or(Type::Int)
+                    } else if let ExprNode::ListLiteral(elements) = &iterable.node {
+                        if elements.iter().any(|e| matches!(e.node, ExprNode::StringLiteral(_))) {
+                            Type::Str
+                        } else {
+                            Type::Int
+                        }
+                    } else {
+                        Type::Int
+                    };
+                    var_types.insert(loop_var.clone(), elem_type);
                     self.collect_var_types(body, var_types);
                 }
                 StmtNode::Match(expr, arms) => {
                     let enum_type = self.infer_type(expr, var_types);
                     if let Type::Enum(enum_name) = &enum_type {
-                        if let Some(ed) = self.enum_defs.get(enum_name) {
+                         if let Some(ed) = self.enum_defs.get(enum_name).cloned() {
                             for (variant_name, bindings, body) in arms {
                                 if let Some((_, fields)) = ed.variants.iter().find(|(vn, _)| vn == variant_name) {
                                     for (i, binding) in bindings.iter().enumerate() {
@@ -905,23 +936,28 @@ impl Codegen {
     ) -> Result<(), String> {
         match &stmt.node {
             StmtNode::Set(name, expr, _type_ann) => {
+                let safe_name = Self::sanitize_c_name(name);
                 let t = var_types.get(name);
+                // If this is a closure assignment, pass the variable name to Closure codegen
+                if matches!(expr.node, ExprNode::Closure(_, _)) {
+                    self.pending_closure_name = Some(name.clone());
+                }
                 let expr_str = self.gen_expr(expr, var_types)?;
 
                 if t == Some(&Type::List) {
                     self.out.push_str("    {\n");
                     self.out.push_str(&format!("        long long tmp_val = {};\n", expr_str));
-                    self.out.push_str(&format!("        free_list({});\n", name));
-                    self.out.push_str(&format!("        {} = tmp_val;\n", name));
+                    self.out.push_str(&format!("        free_list({});\n", safe_name));
+                    self.out.push_str(&format!("        {} = tmp_val;\n", safe_name));
                     self.out.push_str("    }\n");
                 } else if let Some(Type::Enum(ename)) = t {
                     self.out.push_str("    {\n");
                     self.out.push_str(&format!("        long long tmp_val = {};\n", expr_str));
-                    self.out.push_str(&format!("        free_enum_{}({});\n", ename, name));
-                    self.out.push_str(&format!("        {} = tmp_val;\n", name));
+                    self.out.push_str(&format!("        free_enum_{}({});\n", ename, safe_name));
+                    self.out.push_str(&format!("        {} = tmp_val;\n", safe_name));
                     self.out.push_str("    }\n");
                 } else {
-                    self.out.push_str(&format!("    {} = {};\n", name, expr_str));
+                    self.out.push_str(&format!("    {} = {};\n", safe_name, expr_str));
                 }
             }
             StmtNode::Return(expr) => {
@@ -1289,11 +1325,14 @@ impl Codegen {
                 let call_str = format!("{}({})", safe_name, formatted_args.join(", "));
                 
                 // Check if this is a closure call (variable holding a function pointer)
-                if var_types.contains_key(name) && !self.func_return_types.contains_key(name) {
-                    // It's a variable, not a known function — treat as closure call
+                if let Some(c_func_name) = self.closure_c_names.get(name) {
+                    // Closure with a known C function name — call it directly
+                    Ok(format!("{}({})", c_func_name, formatted_args.join(", ")))
+                } else if var_types.contains_key(name) && !self.func_return_types.contains_key(name) {
+                    // It's a variable, not a known function — treat as closure call via pointer
                     let arg_types: Vec<&str> = args.iter().map(|_| "long long").collect();
                     let fn_type = format!("long long(*)({})", if arg_types.is_empty() { "void".to_string() } else { arg_types.join(", ") });
-                    Ok(format!("(({}){})({})", fn_type, name, formatted_args.join(", ")))
+                    Ok(format!("(({}){safe_name})({})", fn_type, formatted_args.join(", "), safe_name = safe_name))
                 } else {
                     match name.as_str() {
                         "read_file_content" | "get_argument" | "substring" | "string_from_list" | "ep_net_recv" | "ep_md5" | "ep_sha256" => {
@@ -1406,8 +1445,34 @@ impl Codegen {
                 let inner_str = self.gen_expr(inner, var_types)?;
                 let try_id = self.spawn_index;
                 self.spawn_index += 1;
-                // Determine appropriate zero value based on inner expression type
                 let inner_type = self.infer_type(inner, var_types);
+                
+                // If the inner expression returns an Enum (Result-style), do proper unwrapping
+                if let Type::Enum(ref enum_name) = inner_type {
+                    if let Some(ed) = self.enum_defs.get(enum_name).cloned() {
+                        // Convention: first variant is the "success" variant (Ok),
+                        // second variant is the "error" variant (Error) that gets propagated
+                        if ed.variants.len() >= 2 {
+                            return Ok(format!(
+                                "({{ \
+                                    long long _try_enum_{id} = {inner}; \
+                                    EpEnum_{ename}* _try_ptr_{id} = (EpEnum_{ename}*)_try_enum_{id}; \
+                                    if (_try_ptr_{id}->tag != EP_TAG_{ename}_{ok_variant}) {{ \
+                                        ret_val = _try_enum_{id}; \
+                                        goto L_cleanup; \
+                                    }} \
+                                    _try_ptr_{id}->data0; \
+                                }})",
+                                id = try_id,
+                                inner = inner_str,
+                                ename = enum_name,
+                                ok_variant = ed.variants[0].0,
+                            ));
+                        }
+                    }
+                }
+                
+                // Fallback: non-enum try — use setjmp/longjmp crash guard
                 let zero_val = match inner_type {
                     Type::Str | Type::DynStr | Type::RefStr => "(long long)\"\"",
                     _ => "0",
@@ -1433,8 +1498,20 @@ impl Codegen {
             }
             ExprNode::Closure(params, body) => {
                 // Generate a static closure function
-                let closure_name = format!("_ep_closure_{}", self.spawn_index);
-                self.spawn_index += 1;
+                // Use pre-registered name if this closure is being assigned to a named variable
+                let closure_name = if let Some(var_name) = self.pending_closure_name.take() {
+                    self.closure_c_names.get(&var_name)
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            let name = format!("_ep_closure_{}", self.spawn_index);
+                            self.spawn_index += 1;
+                            name
+                        })
+                } else {
+                    let name = format!("_ep_closure_{}", self.spawn_index);
+                    self.spawn_index += 1;
+                    name
+                };
 
                 // Build parameter list for the C function
                 let c_params: Vec<String> = params.iter()
@@ -1447,7 +1524,9 @@ impl Codegen {
                 };
 
                 // Generate the closure body using buffer swapping
-                let mut closure_var_types = HashMap::new();
+                // Start with a COPY of outer scope's var_types so closures can reference
+                // outer variables (including other closures)
+                let mut closure_var_types = var_types.clone();
                 for p in params {
                     closure_var_types.insert(p.clone(), Type::Int);
                 }
@@ -1494,7 +1573,7 @@ impl Codegen {
 // ========== analyze_safety, generate, gen_function ==========
 
 impl Codegen {
-    fn analyze_safety(&self, program: &Program) -> Result<(), String> {
+    fn analyze_safety(&mut self, program: &Program) -> Result<(), String> {
         for func in &program.functions {
             let mut var_types = HashMap::new();
             for param in &func.params {
@@ -1945,6 +2024,44 @@ impl Codegen {
 
         self.spawn_index = 0;
 
+        // Pre-scan all functions to collect closure names and emit forward declarations
+        self.closure_c_names.clear();
+        for func in &program.functions {
+            let mut var_types = HashMap::new();
+            for param in &func.params {
+                let t = if let Some(ann) = &param.2 {
+                    self.type_annotation_to_type(ann)
+                } else {
+                    Type::Int
+                };
+                var_types.insert(param.0.clone(), t);
+            }
+            self.collect_var_types(&func.body, &mut var_types);
+        }
+        
+        // Collect forward declarations for closures (to be prepended at the end)
+        let mut closure_fwd_decls = String::new();
+        if !self.closure_c_names.is_empty() {
+            closure_fwd_decls.push_str("\n/* Forward declarations for closures */\n");
+            for func in &program.functions {
+                for stmt in &func.body {
+                    if let StmtNode::Set(name, expr, _) = &stmt.node {
+                        if let ExprNode::Closure(params, _) = &expr.node {
+                            if let Some(c_name) = self.closure_c_names.get(name) {
+                                let param_str = if params.is_empty() {
+                                    "void".to_string()
+                                } else {
+                                    params.iter().map(|_| "long long").collect::<Vec<_>>().join(", ")
+                                };
+                                closure_fwd_decls.push_str(&format!("long long {}({});\n", c_name, param_str));
+                            }
+                        }
+                    }
+                }
+            }
+            closure_fwd_decls.push('\n');
+        }
+
         for func in &program.functions {
             self.gen_function(func)?;
         }
@@ -1970,6 +2087,11 @@ impl Codegen {
             self.out.push_str(&self.get_c_test_main_source(program));
         } else {
             self.out.push_str(C_MAIN_BOOTSTRAPPER);
+        }
+
+        // Prepend closure forward declarations so they appear before closure defs
+        if !closure_fwd_decls.is_empty() {
+            self.out = closure_fwd_decls + &self.out;
         }
 
         Ok(self.out.clone())
@@ -2064,7 +2186,8 @@ impl Codegen {
         for (var_name, _) in &var_types {
             let is_param = func.params.iter().any(|p| &p.0 == var_name);
             if !is_param {
-                self.out.push_str(&format!("    long long {} = 0;\n", var_name));
+                let safe_var = Self::sanitize_c_name(var_name);
+                self.out.push_str(&format!("    long long {} = 0;\n", safe_var));
             }
         }
         self.out.push_str("    long long ret_val = 0;\n\n");
@@ -2077,7 +2200,7 @@ impl Codegen {
                 let t = var_types.get(var_name);
                 let is_tracked = matches!(t, Some(Type::List) | Some(Type::DynStr) | Some(Type::Struct(_)) | Some(Type::Enum(_)));
                 if is_tracked {
-                    self.out.push_str(&format!("    ep_gc_push_root(&{});\n", var_name));
+                    self.out.push_str(&format!("    ep_gc_push_root(&{});\n", Self::sanitize_c_name(var_name)));
                     gc_root_count += 1;
                 }
             }

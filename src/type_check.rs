@@ -9,6 +9,23 @@
 use std::collections::HashMap;
 use crate::ast::*;
 
+/// Simple Levenshtein distance for fuzzy function name matching
+fn levenshtein_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let (m, n) = (a.len(), b.len());
+    let mut dp = vec![vec![0usize; n + 1]; m + 1];
+    for i in 0..=m { dp[i][0] = i; }
+    for j in 0..=n { dp[0][j] = j; }
+    for i in 1..=m {
+        for j in 1..=n {
+            let cost = if a[i-1] == b[j-1] { 0 } else { 1 };
+            dp[i][j] = (dp[i-1][j] + 1).min(dp[i][j-1] + 1).min(dp[i-1][j-1] + cost);
+        }
+    }
+    dp[m][n]
+}
+
 // ──────────────────────────────────────────────
 // Core type representations
 // ──────────────────────────────────────────────
@@ -318,6 +335,8 @@ pub struct TypeChecker {
     pub errors: Vec<TypeError>,
     /// Collected warnings
     pub warnings: Vec<TypeError>,
+    /// Variables bound to closures (for call resolution)
+    closure_names: std::collections::HashSet<String>,
 }
 
 impl TypeChecker {
@@ -333,6 +352,7 @@ impl TypeChecker {
             method_types: HashMap::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
+            closure_names: std::collections::HashSet::new(),
         }
     }
 
@@ -568,6 +588,133 @@ impl TypeChecker {
         self.func_types.insert("create_channel".into(), (vec![], MonoType::Int));
         self.func_types.insert("send_channel".into(), (vec![MonoType::Int, MonoType::Int], MonoType::Unit));
         self.func_types.insert("recv_channel".into(), (vec![MonoType::Int], MonoType::Int));
+
+        // List operations (continued)
+        let v9 = self.fresh_var();
+        self.func_types.insert("pop_list".into(), (vec![MonoType::List(Box::new(v9))], MonoType::Int));
+
+        // Map operations
+        let v10 = self.fresh_var();
+        self.func_types.insert("create_map".into(), (vec![], v10));
+        self.func_types.insert("map_insert".into(), (vec![MonoType::Int, MonoType::Int, MonoType::Int], MonoType::Int));
+        self.func_types.insert("map_set_str".into(), (vec![MonoType::Int, MonoType::Str, MonoType::Int], MonoType::Int));
+        self.func_types.insert("map_get_val".into(), (vec![MonoType::Int, MonoType::Int], MonoType::Int));
+        self.func_types.insert("map_get_str".into(), (vec![MonoType::Int, MonoType::Str], MonoType::Int));
+        let v11 = self.fresh_var();
+        self.func_types.insert("map_keys".into(), (vec![MonoType::Int], MonoType::List(Box::new(v11))));
+        self.func_types.insert("map_has_key".into(), (vec![MonoType::Int, MonoType::Int], MonoType::Int));
+
+        // String operations (continued)
+        self.func_types.insert("string_upper".into(), (vec![MonoType::Str], MonoType::DynStr));
+        self.func_types.insert("string_lower".into(), (vec![MonoType::Str], MonoType::DynStr));
+        self.func_types.insert("string_trim".into(), (vec![MonoType::Str], MonoType::DynStr));
+        let v_split = self.fresh_var();
+        self.func_types.insert("string_split".into(), (vec![MonoType::Str, MonoType::Str], MonoType::List(Box::new(v_split))));
+        self.func_types.insert("char_at".into(), (vec![MonoType::Str, MonoType::Int], MonoType::Int));
+        self.func_types.insert("char_from_code".into(), (vec![MonoType::Int], MonoType::DynStr));
+        self.func_types.insert("string_contains".into(), (vec![MonoType::Str, MonoType::Str], MonoType::Int));
+        self.func_types.insert("string_index_of".into(), (vec![MonoType::Str, MonoType::Str], MonoType::Int));
+        self.func_types.insert("string_replace".into(), (vec![MonoType::Str, MonoType::Str, MonoType::Str], MonoType::DynStr));
+
+        // File I/O
+        self.func_types.insert("file_read".into(), (vec![MonoType::Str], MonoType::DynStr));
+        self.func_types.insert("file_write".into(), (vec![MonoType::Str, MonoType::Str], MonoType::Int));
+        self.func_types.insert("file_append".into(), (vec![MonoType::Str, MonoType::Str], MonoType::Int));
+        self.func_types.insert("file_exists".into(), (vec![MonoType::Str], MonoType::Int));
+
+        // Math / random
+        self.func_types.insert("ep_abs".into(), (vec![MonoType::Int], MonoType::Int));
+        self.func_types.insert("ep_random_int".into(), (vec![MonoType::Int, MonoType::Int], MonoType::Int));
+        self.func_types.insert("ep_time_ms".into(), (vec![], MonoType::Int));
+        self.func_types.insert("ep_sleep_ms".into(), (vec![MonoType::Int], MonoType::Unit));
+
+        // Display helpers
+        self.func_types.insert("display".into(), (vec![MonoType::Int], MonoType::Unit));
+        self.func_types.insert("display_string".into(), (vec![MonoType::Str], MonoType::Unit));
+        self.func_types.insert("ep_auto_to_string".into(), (vec![MonoType::Int], MonoType::DynStr));
+
+        // Memory management
+        let v12 = self.fresh_var();
+        self.func_types.insert("free_list".into(), (vec![MonoType::List(Box::new(v12))], MonoType::Unit));
+        self.func_types.insert("free_map".into(), (vec![MonoType::Int], MonoType::Unit));
+        self.func_types.insert("free_deque".into(), (vec![MonoType::Int], MonoType::Unit));
+
+        // Map operations (continued)
+        self.func_types.insert("map_size".into(), (vec![MonoType::Int], MonoType::Int));
+        let vmc = self.fresh_var();
+        self.func_types.insert("map_contains".into(), (vec![MonoType::Int, vmc], MonoType::Int));
+        let vmd = self.fresh_var();
+        self.func_types.insert("map_delete".into(), (vec![MonoType::Int, vmd], MonoType::Unit));
+        let v13 = self.fresh_var();
+        self.func_types.insert("map_values".into(), (vec![MonoType::Int], MonoType::List(Box::new(v13))));
+
+        // Deque operations
+        self.func_types.insert("create_deque".into(), (vec![], MonoType::Int));
+        self.func_types.insert("deque_push_front".into(), (vec![MonoType::Int, MonoType::Int], MonoType::Unit));
+        self.func_types.insert("deque_push_back".into(), (vec![MonoType::Int, MonoType::Int], MonoType::Unit));
+        self.func_types.insert("deque_pop_front".into(), (vec![MonoType::Int], MonoType::Int));
+        self.func_types.insert("deque_pop_back".into(), (vec![MonoType::Int], MonoType::Int));
+        self.func_types.insert("deque_length".into(), (vec![MonoType::Int], MonoType::Int));
+
+        // Concurrency (continued)
+        self.func_types.insert("channel_has_data".into(), (vec![MonoType::Int], MonoType::Int));
+        self.func_types.insert("channel_try_recv".into(), (vec![MonoType::Int], MonoType::Int));
+        self.func_types.insert("channel_select".into(), (vec![MonoType::Int], MonoType::Int));
+
+        // File system
+        self.func_types.insert("read_file_content".into(), (vec![MonoType::Str], MonoType::DynStr));
+        self.func_types.insert("write_file_content".into(), (vec![MonoType::Str, MonoType::Str], MonoType::Int));
+        self.func_types.insert("run_command".into(), (vec![MonoType::Str], MonoType::DynStr));
+        self.func_types.insert("fs_exists".into(), (vec![MonoType::Str], MonoType::Int));
+        self.func_types.insert("fs_is_file".into(), (vec![MonoType::Str], MonoType::Int));
+        self.func_types.insert("fs_is_dir".into(), (vec![MonoType::Str], MonoType::Int));
+        self.func_types.insert("fs_get_size".into(), (vec![MonoType::Str], MonoType::Int));
+        self.func_types.insert("fs_copy_file".into(), (vec![MonoType::Str, MonoType::Str], MonoType::Int));
+        self.func_types.insert("fs_move_file".into(), (vec![MonoType::Str, MonoType::Str], MonoType::Int));
+        self.func_types.insert("fs_delete_file".into(), (vec![MonoType::Str], MonoType::Int));
+        let v14 = self.fresh_var();
+        self.func_types.insert("fs_scan_dir".into(), (vec![MonoType::Str], MonoType::List(Box::new(v14))));
+
+        // String utilities (continued)
+        self.func_types.insert("get_character".into(), (vec![MonoType::Str, MonoType::Int], MonoType::Int));
+        self.func_types.insert("string_from_list".into(), (vec![MonoType::Int], MonoType::DynStr));
+        self.func_types.insert("get_list_data_ptr".into(), (vec![MonoType::Int], MonoType::Int));
+
+        // CLI arguments
+        self.func_types.insert("get_argument".into(), (vec![MonoType::Int], MonoType::DynStr));
+        self.func_types.insert("get_argument_count".into(), (vec![], MonoType::Int));
+
+        // Networking
+        self.func_types.insert("ep_net_connect".into(), (vec![MonoType::Str, MonoType::Int], MonoType::Int));
+        self.func_types.insert("ep_net_listen".into(), (vec![MonoType::Int], MonoType::Int));
+        self.func_types.insert("ep_net_accept".into(), (vec![MonoType::Int], MonoType::Int));
+        self.func_types.insert("ep_net_send".into(), (vec![MonoType::Int, MonoType::Str], MonoType::Int));
+        self.func_types.insert("ep_net_recv".into(), (vec![MonoType::Int, MonoType::Int], MonoType::DynStr));
+        self.func_types.insert("ep_net_recv_bytes".into(), (vec![MonoType::Int, MonoType::Int], MonoType::DynStr));
+        self.func_types.insert("ep_net_close".into(), (vec![MonoType::Int], MonoType::Unit));
+
+        // HTTP
+        self.func_types.insert("ep_http_request".into(), (vec![MonoType::Str, MonoType::Str, MonoType::Str, MonoType::Str], MonoType::DynStr));
+
+        // Crypto
+        self.func_types.insert("ep_md5".into(), (vec![MonoType::Str], MonoType::DynStr));
+        self.func_types.insert("ep_sha256".into(), (vec![MonoType::Str], MonoType::DynStr));
+        self.func_types.insert("ep_sha1".into(), (vec![MonoType::Str], MonoType::DynStr));
+
+        // JSON
+        self.func_types.insert("json_get_string".into(), (vec![MonoType::Str, MonoType::Str], MonoType::DynStr));
+        self.func_types.insert("json_get_int".into(), (vec![MonoType::Str, MonoType::Str], MonoType::Int));
+        self.func_types.insert("json_get_bool".into(), (vec![MonoType::Str, MonoType::Str], MonoType::Int));
+
+        // SQLite
+        self.func_types.insert("sqlite_get_callback_ptr".into(), (vec![], MonoType::Int));
+
+        // Time (additional)
+        self.func_types.insert("ep_time_now_ms".into(), (vec![], MonoType::Int));
+        self.func_types.insert("ep_time_now_sec".into(), (vec![], MonoType::Int));
+        self.func_types.insert("ep_time_year".into(), (vec![MonoType::Int], MonoType::Int));
+        self.func_types.insert("ep_time_month".into(), (vec![MonoType::Int], MonoType::Int));
+        self.func_types.insert("ep_time_day".into(), (vec![MonoType::Int], MonoType::Int));
     }
 
     // ──────────────────────────────────────────
@@ -636,6 +783,11 @@ impl TypeChecker {
         match &stmt.node {
             StmtNode::Set(name, expr, type_ann) => {
                 let expr_type = self.check_expr(expr);
+                
+                // Track if this variable is bound to a closure
+                if matches!(expr.node, ExprNode::Closure(_, _)) {
+                    self.closure_names.insert(name.clone());
+                }
                 
                 if let Some(ann) = type_ann {
                     let declared_type = self.annotation_to_mono(ann);
@@ -903,6 +1055,8 @@ impl TypeChecker {
                     let skip_type_check = matches!(name.as_str(),
                         "concat" | "append_list" | "get_list" | "set_list" |
                         "map_insert" | "map_set_str" | "map_get_val" | "map_get_str" |
+                        "map_contains" | "map_delete" | "map_keys" | "map_size" |
+                        "map_values" | "map_has_key" | "free_list" | "free_map" |
                         "ep_auto_to_string" | "display"
                     );
                     // Check argument count (some builtins like concat are variadic)
@@ -928,8 +1082,47 @@ impl TypeChecker {
                         }
                     }
                     ret_type
+                } else if self.closure_names.contains(name) || self.lookup(name).is_some() {
+                    // It's a closure variable or in-scope variable — treat as valid call
+                    self.fresh_var()
                 } else {
-                    // Unknown function — might be defined later or in another module
+                    // Unknown function — emit error with suggestion
+                    let mut best_match: Option<(&str, usize)> = None;
+                    for known in self.func_types.keys() {
+                        // Check Levenshtein distance
+                        let dist = levenshtein_distance(name, known);
+                        if dist <= 3 {
+                            if best_match.is_none() || dist < best_match.unwrap().1 {
+                                best_match = Some((known, dist));
+                            }
+                        }
+                        // Also check if user's name is a suffix/substring of a known function
+                        // (handles to_upper → string_upper, index_of → string_index_of)
+                        if known.ends_with(name) || known.ends_with(&format!("_{}", name)) {
+                            best_match = Some((known, 0));
+                        }
+                        // Check if stripping common prefixes from user's name matches a suffix
+                        // e.g. to_upper → strip "to_" → upper → string_upper ends with upper
+                        for prefix in &["to_", "get_", "is_", "do_"] {
+                            if let Some(stripped) = name.strip_prefix(prefix) {
+                                if known.ends_with(stripped) && stripped.len() >= 3 {
+                                    best_match = Some((known, 0));
+                                }
+                            }
+                        }
+                    }
+                    if let Some((suggestion, _)) = best_match {
+                        self.error_with_hint(
+                            format!("Unknown function '{}'", name),
+                            expr.span,
+                            format!("Did you mean '{}'?", suggestion),
+                        );
+                    } else {
+                        self.error(
+                            format!("Unknown function '{}'. Use --list-builtins to see available functions.", name),
+                            expr.span,
+                        );
+                    }
                     self.fresh_var()
                 }
             }
