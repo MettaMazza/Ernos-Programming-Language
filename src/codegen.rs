@@ -161,6 +161,13 @@ impl Codegen {
         self.func_return_types.insert("read_float".to_string(), Type::Float);
         self.func_return_types.insert("int_to_float".to_string(), Type::Float);
         self.func_return_types.insert("float_to_int".to_string(), Type::Int);
+        self.func_return_types.insert("file_read".to_string(), Type::DynStr);
+        self.func_return_types.insert("file_write".to_string(), Type::Int);
+        self.func_return_types.insert("file_append".to_string(), Type::Int);
+        self.func_return_types.insert("file_exists".to_string(), Type::Int);
+        self.func_return_types.insert("string_contains".to_string(), Type::Int);
+        self.func_return_types.insert("string_index_of".to_string(), Type::Int);
+        self.func_return_types.insert("string_replace".to_string(), Type::DynStr);
 
         for ext in &program.externals {
             if let Some(ref rt) = ext.return_type {
@@ -1878,10 +1885,19 @@ impl Codegen {
         if gc_root_count > 0 {
             self.out.push_str(&format!("    ep_gc_pop_roots({});\n", gc_root_count));
         }
+        // Get the function's return type to avoid freeing the returned value
+        let func_ret_type = self.func_return_types.get(&func.name).cloned();
         for (var_name, _) in &var_types {
             let is_param = func.params.iter().any(|p| &p.0 == var_name);
             if !is_param {
                 let t = var_types.get(var_name);
+                // Skip freeing if this local has the same struct/enum type as the return type
+                // because it may hold the value being returned via ret_val
+                if let Some(ref frt) = func_ret_type {
+                    if t == Some(frt) {
+                        continue;
+                    }
+                }
                 if t == Some(&Type::List) {
                     self.out.push_str(&format!("    free_list({});\n", var_name));
                 } else if let Some(Type::Struct(sname)) = t {
@@ -2371,6 +2387,13 @@ long long pop_list(long long list_ptr);
 char* string_from_list(long long list_ptr);
 long long string_length(const char* s);
 long long display_string(const char* s);
+long long file_read(long long path_val);
+long long file_write(long long path_val, long long content_val);
+long long file_append(long long path_val, long long content_val);
+long long file_exists(long long path_val);
+long long string_contains(long long s_val, long long sub_val);
+long long string_index_of(long long s_val, long long sub_val);
+long long string_replace(long long s_val, long long old_val, long long new_val);
 
 typedef struct {
     long long* data;
@@ -4023,6 +4046,101 @@ long long ep_uuid_v4(void) {
         bytes[8], bytes[9], bytes[10], bytes[11],
         bytes[12], bytes[13], bytes[14], bytes[15]);
     return (long long)uuid;
+}
+
+long long file_read(long long path_val) {
+    const char* path = (const char*)path_val;
+    if (!path) return (long long)strdup("");
+    FILE* f = fopen(path, "rb");
+    if (!f) return (long long)strdup("");
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char* buf = malloc(size + 1);
+    if (!buf) { fclose(f); return (long long)strdup(""); }
+    fread(buf, 1, size, f);
+    buf[size] = '\0';
+    fclose(f);
+    ep_gc_register(buf, EP_OBJ_STRING);
+    return (long long)buf;
+}
+
+long long file_write(long long path_val, long long content_val) {
+    const char* path = (const char*)path_val;
+    const char* content = (const char*)content_val;
+    if (!path || !content) return 0;
+    FILE* f = fopen(path, "wb");
+    if (!f) return 0;
+    size_t len = strlen(content);
+    fwrite(content, 1, len, f);
+    fclose(f);
+    return 1;
+}
+
+long long file_append(long long path_val, long long content_val) {
+    const char* path = (const char*)path_val;
+    const char* content = (const char*)content_val;
+    if (!path || !content) return 0;
+    FILE* f = fopen(path, "ab");
+    if (!f) return 0;
+    size_t len = strlen(content);
+    fwrite(content, 1, len, f);
+    fclose(f);
+    return 1;
+}
+
+long long file_exists(long long path_val) {
+    const char* path = (const char*)path_val;
+    if (!path) return 0;
+    FILE* f = fopen(path, "r");
+    if (f) { fclose(f); return 1; }
+    return 0;
+}
+
+long long string_contains(long long s_val, long long sub_val) {
+    const char* s = (const char*)s_val;
+    const char* sub = (const char*)sub_val;
+    if (!s || !sub) return 0;
+    return strstr(s, sub) != NULL ? 1 : 0;
+}
+
+long long string_index_of(long long s_val, long long sub_val) {
+    const char* s = (const char*)s_val;
+    const char* sub = (const char*)sub_val;
+    if (!s || !sub) return -1;
+    const char* found = strstr(s, sub);
+    if (!found) return -1;
+    return (long long)(found - s);
+}
+
+long long string_replace(long long s_val, long long old_val, long long new_val) {
+    const char* s = (const char*)s_val;
+    const char* old_str = (const char*)old_val;
+    const char* new_str = (const char*)new_val;
+    if (!s || !old_str || !new_str) return (long long)strdup(s ? s : "");
+    size_t old_len = strlen(old_str);
+    size_t new_len = strlen(new_str);
+    if (old_len == 0) return (long long)strdup(s);
+    int count = 0;
+    const char* p = s;
+    while ((p = strstr(p, old_str)) != NULL) { count++; p += old_len; }
+    size_t result_len = strlen(s) + count * (new_len - old_len);
+    char* result = malloc(result_len + 1);
+    if (!result) return (long long)strdup(s);
+    char* dst = result;
+    p = s;
+    while (*p) {
+        if (strncmp(p, old_str, old_len) == 0) {
+            memcpy(dst, new_str, new_len);
+            dst += new_len;
+            p += old_len;
+        } else {
+            *dst++ = *p++;
+        }
+    }
+    *dst = '\0';
+    ep_gc_register(result, EP_OBJ_STRING);
+    return (long long)result;
 }
 
 long long ep_random_int(long long min, long long max) {
