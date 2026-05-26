@@ -308,14 +308,6 @@ cat ep_lexer.ep ep_parser.ep ep_codegen.ep epc.ep > self_hosted_compiler.ep
 | List literal | `[1, 2, 3]` or `["a", "b"]` |
 | Comment | `# this is a comment` |
 
----
-
-## Known Limitations
-
-- **Native backends (ARM64/x86_64)** support basic programs only — structs, enums, channels etc. produce explicit errors (use the default C backend)
-- **Windows** — C runtime has `#ifdef _WIN32` polyfills but is not tested
-- **No package registry** — `epm` is a local project manager, not a package registry
-- **No debugger integration** — `--debug` compiles with `-g` but there's no Ernos-aware debugger
 
 ---
 
