@@ -2913,74 +2913,80 @@ define show_title:
 # ───────────── 25. Companion Interaction Menu ─────────────
 
 define companion_menu with p as Player and c as Companion and inv as Map and memory as List and llm_on as Int:
-    display ""
-    set cemoji to get_species_emoji(c.species)
-    display f"  {cemoji} ====== {c.name} ======"
-    set ok to show_companion_art(c.species and c.stage and c.name)
-    display "  1) Feed (uses Raw Meat)"
-    display "  2) Play"
-    display "  3) Pet"
-    display "  4) Talk"
-    display "  5) Back"
+    set pick to 0
+    repeat while pick != 5:
+        display ""
+        set cemoji to get_species_emoji(c.species)
+        display f"  {cemoji} ====== {c.name} ======"
+        set ok to show_companion_art(c.species and c.stage and c.name)
+        display f"  Bond: {c.bond}/100  Trust: {c.trust}/100  Hunger: {c.hunger}/100"
+        display ""
+        display "  1) Feed (uses Raw Meat)"
+        display "  2) Play"
+        display "  3) Pet"
+        display "  4) Talk"
+        display "  5) Back"
 
-    set pick to string_to_int(read_line())
-    if pick == 1:
-        set meat to get_item_count(inv and "Raw Meat")
-        if meat > 0:
-            set ok to remove_item(inv and "Raw Meat" and 1)
-            set c.hunger to c.hunger + 25
-            if c.hunger > 100:
-                set c.hunger to 100
-            set c.happiness to c.happiness + 8
-            set c.bond to c.bond + 3
+        set pick to string_to_int(read_line())
+        if pick == 1:
+            set meat to get_item_count(inv and "Raw Meat")
+            if meat > 0:
+                set ok to remove_item(inv and "Raw Meat" and 1)
+                set c.hunger to c.hunger + 25
+                if c.hunger > 100:
+                    set c.hunger to 100
+                set c.happiness to c.happiness + 8
+                set c.bond to c.bond + 3
+                if c.bond > 100:
+                    set c.bond to 100
+                set journal_ctx to journal_get_recent(2)
+                set msg to companion_speak(c and "feed" and llm_on and memory and journal_ctx)
+                display msg
+                set c to check_evolution(c)
+            else:
+                display "  No Raw Meat!"
+        else if pick == 2:
+            set c.happiness to c.happiness + 12
+            if c.happiness > 100:
+                set c.happiness to 100
+            set c.bond to c.bond + 4
             if c.bond > 100:
                 set c.bond to 100
             set journal_ctx to journal_get_recent(2)
-            set msg to companion_speak(c and "feed" and llm_on and memory and journal_ctx)
+            set msg to companion_speak(c and "play" and llm_on and memory and journal_ctx)
             display msg
             set c to check_evolution(c)
-        else:
-            display "  No Raw Meat!"
-    else if pick == 2:
-        set c.happiness to c.happiness + 12
-        if c.happiness > 100:
-            set c.happiness to 100
-        set c.bond to c.bond + 4
-        if c.bond > 100:
-            set c.bond to 100
-        set journal_ctx to journal_get_recent(2)
-        set msg to companion_speak(c and "play" and llm_on and memory and journal_ctx)
-        display msg
-        set c to check_evolution(c)
-    else if pick == 3:
-        set c.happiness to c.happiness + 5
-        set c.bond to c.bond + 2
-        if c.bond > 100:
-            set c.bond to 100
-        if c.happiness > 100:
-            set c.happiness to 100
-        display f"  *{c.name} leans into your touch*"
-        set c to check_evolution(c)
-    else if pick == 4:
-        if llm_on == 1 && c.stage >= 1:
-            display "  What do you want to say?"
-            set user_msg to read_line()
-            set memory to memory_add(memory and "You" and user_msg)
-            set journal_ctx to journal_get_recent(4)
-            set response to companion_speak(c and f"player_said: {user_msg}" and llm_on and memory and journal_ctx)
-            display response
-            # Extract companion reply for memory
-            set memory to memory_add(memory and c.name and response)
-            set ok to save_memory(memory)
-            set c.bond to c.bond + 1
+        else if pick == 3:
+            set c.happiness to c.happiness + 5
+            set c.bond to c.bond + 2
             if c.bond > 100:
                 set c.bond to 100
-        else if c.stage == 0:
-            display f"  *{c.name} glows warmly but cannot speak yet*"
-        else:
-            set journal_ctx to journal_get_recent(3)
-            set msg to companion_speak(c and "talk" and 0 and memory and journal_ctx)
-            display msg
+            if c.happiness > 100:
+                set c.happiness to 100
+            display f"  *{c.name} leans into your touch*"
+            set c to check_evolution(c)
+        else if pick == 4:
+            if llm_on == 1 && c.stage >= 1:
+                display "  What do you want to say?"
+                set user_msg to read_line()
+                set memory to memory_add(memory and "You" and user_msg)
+                set journal_ctx to journal_get_recent(4)
+                set response to companion_speak(c and f"player_said: {user_msg}" and llm_on and memory and journal_ctx)
+                display response
+                # Extract companion reply for memory
+                set memory to memory_add(memory and c.name and response)
+                set ok to save_memory(memory)
+                set c.bond to c.bond + 1
+                if c.bond > 100:
+                    set c.bond to 100
+            else if c.stage == 0:
+                display f"  *{c.name} glows warmly but cannot speak yet*"
+            else:
+                set journal_ctx to journal_get_recent(3)
+                set msg to companion_speak(c and "talk" and 0 and memory and journal_ctx)
+                display msg
+        else if pick != 5:
+            display "  Invalid choice."
     # Bond checks happen in the main loop
 
 # ───────────── 26. Game Over & Death Screen ─────────────
