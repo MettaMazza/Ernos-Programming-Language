@@ -74,7 +74,24 @@ for TEST_FILE in tests/test_*.ep conformance/test_*.ep; do
     fi
 
     # ── Check expected output ──
-    # Extract "# expected: <line>" comments from the top of the file
+    # Priority 1: companion .expected file (for tests with many output lines)
+    EXPECTED_FILE="${TEST_FILE%.ep}.expected"
+    if [[ -f "$EXPECTED_FILE" ]]; then
+        EXPECTED_FROM_FILE=$(cat "$EXPECTED_FILE")
+        if [[ "$ACTUAL" == "$EXPECTED_FROM_FILE" ]]; then
+            echo "PASS  $NAME"
+            PASS=$((PASS + 1))
+        else
+            echo "FAIL  $NAME  (output mismatch vs .expected file)"
+            diff <(echo "$EXPECTED_FROM_FILE") <(echo "$ACTUAL") | head -10 | sed 's/^/      /'
+            FAIL=$((FAIL + 1))
+            FAILURES="$FAILURES  $NAME (output)\n"
+        fi
+        rm -f "$BINARY" "${NAME}_compiled.c"
+        continue
+    fi
+
+    # Priority 2: inline "# expected: <line>" comments from the source file
     EXPECTED=""
     while IFS= read -r line; do
         if [[ "$line" =~ ^#\ expected:\ (.+)$ ]]; then
