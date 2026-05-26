@@ -2068,7 +2068,13 @@ impl Codegen {
                 if t == Some(&Type::List) {
                     self.out.push_str(&format!("    free_list({});\n", var_name));
                 } else if let Some(Type::Struct(sname)) = t {
-                    self.out.push_str(&format!("    free_struct_{}({});\n", sname, var_name));
+                    if sname == "Map" {
+                        self.out.push_str(&format!("    free_map({});\n", var_name));
+                    } else if sname == "Deque" {
+                        // Deque is a built-in, skip struct free
+                    } else {
+                        self.out.push_str(&format!("    free_struct_{}({});\n", sname, var_name));
+                    }
                 } else if let Some(Type::Enum(ename)) = t {
                     self.out.push_str(&format!("    free_enum_{}({});\n", ename, var_name));
                 }
