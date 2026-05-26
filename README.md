@@ -1,13 +1,13 @@
 <p align="center">
   <h1 align="center">Ernos Programming Language</h1>
-  <p align="center">A production-grade compiled language with plain English syntax, Hindley-Milner type inference, ownership-based memory safety, and C-identical performance.</p>
+  <p align="center">A compiled language with plain English syntax, Hindley-Milner type inference, ownership-based memory safety, and C-level performance.</p>
 </p>
 
 <p align="center">
   <a href="#"><img src="https://img.shields.io/badge/Version-1.0.0-blue.svg" alt="Version"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Status-Production--Ready-brightgreen.svg" alt="Status"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Performance-C--Identical-orange.svg" alt="Performance"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-blueviolet.svg" alt="Platform"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tests-32%2F32-brightgreen.svg" alt="Tests"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Performance-C--Level-orange.svg" alt="Performance"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-blueviolet.svg" alt="Platform"></a>
   <a href="#"><img src="https://img.shields.io/badge/Compiler-Self--Hosted-success.svg" alt="Self-Hosted"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
 </p>
@@ -16,7 +16,7 @@
 
 ## What is Ernos?
 
-Ernos is a **compiled, statically-typed, memory-safe programming language** that reads like plain English. It compiles to optimized native binaries via C with performance identical to hand-written C code.
+Ernos is a **compiled, statically-typed, memory-safe programming language** that reads like plain English. It compiles to optimized native binaries via C with performance equivalent to hand-written C code.
 
 ```ernos
 define factorial with n as Int returning Int:
@@ -41,18 +41,13 @@ define main:
 | **Readability** | ✅ Plain English | ❌ Symbolic | ❌ Verbose | ✅ Clean |
 | **Type Safety** | ✅ HM Inference | ✅ Full | ✅ Full | ❌ Dynamic |
 | **Memory Safety** | ✅ Ownership + GC | ✅ Ownership | ⚠️ GC only | ❌ GC only |
-| **Performance** | ✅ C-identical | ✅ C-identical | ⚠️ JVM overhead | ❌ Interpreted |
+| **Performance** | ✅ C-level | ✅ C-level | ⚠️ JVM overhead | ❌ Interpreted |
 | **Compile Target** | Native binary | Native binary | JVM bytecode | Interpreted |
 | **Self-Hosting** | ✅ | ✅ | ❌ | ❌ |
 
-### Performance Proof
+### Performance
 
-```
-fib(40) benchmark:
-  Ernos:  0.28s  ← compiled with clang -O2
-  C:      0.29s  ← compiled with clang -O2
-  Ratio:  1.0x   ← identical performance
-```
+Ernos compiles to C, then to a native binary via `clang -O2`. The generated code has no interpreter overhead — it runs at the same speed as equivalent C.
 
 ---
 
@@ -60,7 +55,7 @@ fib(40) benchmark:
 
 ### 🛡️ Compile-Time Safety
 - **Hindley-Milner type inference** — types are inferred even without annotations
-- **Enforced type checking** — type errors stop compilation (not warnings)
+- **Enforced type checking** — type errors stop compilation
 - **Ownership & borrowing** — use-after-move, move-while-borrowed detection
 - **Send/Sync safety** — borrowed references cannot be sent to threads
 
@@ -70,29 +65,30 @@ define foo with x:
     return 0
 
 define main:
-    set ok to foo("hello")  # ✗ REJECTED: expected Int, found Str at line 5:15
+    set ok to foo("hello")  # ✗ REJECTED: type error
     return 0
 ```
 
 ### ⚡ Performance
-- Compiles to C, then to native binary via clang -O2
+- Compiles to C, then to native binary via `clang -O2`
 - Smart GC safepoints — pure functions skip garbage collection overhead
 - Constant folding and dead code elimination at AST level
+- Release mode: `clang -O3 -flto` (via `--release` flag)
 
-### 📦 Comprehensive Standard Library (19 modules)
+### 📦 Standard Library (23 modules)
 
 | Module | Description |
 |--------|-------------|
-| `string` | 40+ string functions, StringBuilder, formatting |
+| `string` | String functions, StringBuilder, formatting |
 | `collections` | HashMap, HashSet, Stack, Queue, PriorityQueue |
 | `fs` | File I/O, directories, path utilities |
-| `net` / `http` | TCP sockets, HTTP client |
+| `net` / `http` | TCP sockets, HTTP client/server |
 | `json` | JSON parsing and generation |
 | `csv` | CSV parsing and generation |
-| `datetime` | Timestamps, formatting, arithmetic, stopwatch |
-| `crypto` | SHA256, MD5, base64, UUID, random |
+| `datetime` | Timestamps, formatting, arithmetic |
+| `crypto` | SHA256, MD5, SHA1, base64, UUID, random |
 | `regex` | POSIX regex matching, find, replace, split |
-| `sync` | Mutex, RWLock, Atomic, Barrier, Semaphore, CondVar |
+| `sync` | Mutex, RWLock, Atomic, Barrier, Semaphore |
 | `os` | Environment, process info, system commands |
 | `test` | Assertions, test suites, test runner |
 | `log` | Structured logging with levels and timestamps |
@@ -101,21 +97,34 @@ define main:
 | `sql` | SQLite database bindings |
 | `gui` | GUI via raylib |
 | `hash` | Hashing utilities |
+| `toml` | TOML config file parsing |
+| `static_server` | Static file serving over HTTP |
+| `websocket` | WebSocket protocol implementation |
+| `select` | I/O multiplexing |
+
+> **Note:** Stdlib modules are written in ErnosPlain and call into the compiler's C runtime. They require the corresponding C runtime functions to be available.
 
 ### 🔧 Developer Tools
 
 | Tool | Command | Description |
 |------|---------|-------------|
-| **Compiler** | `ernos program.ep` | Compile to native binary |
-| **REPL** | `ernos --repl` | Interactive evaluation |
-| **Formatter** | `ernos --format file.ep` | Auto-format source code |
-| **Checker** | `ernos --check file.ep` | Syntax validation without compiling |
+| **Compiler** | `epc program.ep` | Compile to native binary |
+| **REPL** | `epc repl` | Interactive evaluation with session state |
+| **Formatter** | `epc format file.ep` | Auto-format source code |
+| **Checker** | `epc check file.ep` | Syntax/type validation without compiling |
+| **Test Runner** | `epc test file.ep` | Run tests |
+| **Builtins** | `epc --list-builtins` | Show all built-in functions |
+| **Debug** | `epc file.ep --debug` | Compile with `-O0 -g` |
+| **Release** | `epc file.ep --release` | Compile with `-O3 -flto` |
+| **ASAN** | `epc file.ep --asan` | Compile with AddressSanitizer |
+| **Native** | `epc file.ep --native` | Compile via native assembly (no Clang) |
 | **Package Manager** | `epm init/build/run/test` | Project management (written in Ernos) |
 
-### 🌍 Cross-Platform
-- **macOS** (ARM64 + x86_64) — primary platform
-- **Linux** (GCC/Clang) — full support
-- **Windows** (MSVC/MinGW) — C runtime polyfills included
+### 🌍 Platform Support
+- **macOS** (ARM64 + x86_64) — primary development platform
+- **Linux** (x86_64 + aarch64, GCC or Clang) — supported
+
+> **Note:** Windows has partial C runtime polyfills (`#ifdef _WIN32` blocks) but is not tested or officially supported yet.
 
 ---
 
@@ -125,10 +134,10 @@ define main:
 - A C compiler (`clang` or `gcc`)
 - Rust (for building the bootstrap compiler)
 
-### Install
+### Build
 ```bash
-git clone https://github.com/YOUR_USERNAME/ernos-programming-language.git
-cd ernos-programming-language
+git clone https://github.com/MettaMazza/Ernos-Programming-Language.git
+cd Ernos-Programming-Language
 cargo build --release
 ```
 
@@ -163,14 +172,18 @@ define main:
 
 ### Concurrency
 ```ernos
-define worker with id as Int:
-    display concat("Worker " and int_to_string(id))
+define worker with id as Int and ch:
+    send id * 10 to ch
     return 0
 
 define main:
-    spawn worker(1)
-    spawn worker(2)
-    spawn worker(3)
+    set ch to channel
+    spawn worker(1 and ch)
+    spawn worker(2 and ch)
+
+    set a to receive from ch
+    set b to receive from ch
+    display f"Total: {a + b}"
     return 0
 ```
 
@@ -189,6 +202,25 @@ define main:
         name is "Alice"
         age is 30
     set ok to user.greet()
+    return 0
+```
+
+### Enums & Pattern Matching
+```ernos
+define choice Shape:
+    variant Circle with radius as Int
+    variant Rect with width as Int and height as Int
+
+define area with s as Shape returning Int:
+    check s:
+        if Circle with r:
+            return r * r * 3
+        if Rect with w and h:
+            return w * h
+
+define main:
+    set c to Circle with 5
+    display f"Area: {area(c)}"
     return 0
 ```
 
@@ -218,13 +250,15 @@ Source (.ep)
 
 | File | Lines | Description |
 |------|-------|-------------|
-| `src/lexer.rs` | 700 | Tokenizer with indentation tracking |
-| `src/parser.rs` | 1,300 | Recursive descent parser with Pratt precedence |
-| `src/type_check.rs` | 1,100 | Hindley-Milner type inference with unification |
-| `src/borrow_check.rs` | 490 | Ownership, borrowing, Send/Sync analysis |
-| `src/optimizer.rs` | 200 | AST-level constant folding and DCE |
-| `src/codegen.rs` | 4,000 | C code generation with full runtime |
-| `src/diagnostics.rs` | 285 | Rich error reporting with ANSI colors |
+| `src/lexer.rs` | ~800 | Tokenizer with indentation tracking |
+| `src/parser.rs` | ~1,470 | Recursive descent parser with Pratt precedence |
+| `src/type_check.rs` | ~1,130 | Hindley-Milner type inference with unification |
+| `src/borrow_check.rs` | ~520 | Ownership, borrowing, Send/Sync analysis |
+| `src/optimizer.rs` | ~250 | AST-level constant folding and DCE |
+| `src/codegen.rs` | ~4,750 | C code generation with full runtime |
+| `src/diagnostics.rs` | ~380 | Rich error reporting with ANSI colors |
+| `src/native_codegen.rs` | ~425 | ARM64 native assembly backend |
+| `src/x86_64_codegen.rs` | ~465 | x86_64 native assembly backend |
 
 ---
 
@@ -232,10 +266,10 @@ Source (.ep)
 
 Ernos compiles its own compiler. The self-hosted compiler modules:
 
-- `ep_lexer.ep` — Lexer (30K)
-- `ep_parser.ep` — Parser (26K)  
-- `ep_codegen.ep` — Code generator (178K)
-- `epc.ep` — Compiler driver (8K)
+- `ep_lexer.ep` — Lexer (30KB)
+- `ep_parser.ep` — Parser (26KB)
+- `ep_codegen.ep` — Code generator (178KB)
+- `epc.ep` — Compiler driver (8KB)
 
 ### Bootstrap
 ```bash
@@ -244,6 +278,48 @@ cat ep_lexer.ep ep_parser.ep ep_codegen.ep epc.ep > self_hosted_compiler.ep
 ./self_hosted_compiler hello.ep
 ./hello
 ```
+
+---
+
+## Syntax Quick Reference
+
+| Concept | Syntax |
+|---------|--------|
+| Variable | `set x to 42` |
+| String | `"hello"` or `f"value: {x}"` |
+| Function | `define foo with a and b:` |
+| Typed param | `with a as Int and b as Str` |
+| Return type | `define foo returning Int:` |
+| If/else | `if cond:` ... `else:` |
+| While loop | `repeat while cond:` or `while cond:` |
+| For-each | `for each item in list:` |
+| Comparison | `equals`, `is not equal to`, `<`, `>`, `<=`, `>=`, `==`, `!=` |
+| Logical | `&&`, `\|\|`, `not`, `and also`, `or else` |
+| Struct | `define structure Name:` with `field x as Type` |
+| Enum | `define choice Name:` with `variant X` |
+| Match | `check expr:` with `if Pattern:` |
+| Method | `define foo on StructName:` |
+| Struct create | `create StructName:` (block with `field is value`) |
+| Channel | `set ch to channel` |
+| Send | `send value to ch` |
+| Receive | `set v to receive from ch` |
+| Spawn | `spawn function(args)` |
+| Try | `try expression` |
+| List literal | `[1, 2, 3]` or `["a", "b"]` |
+| Comment | `# this is a comment` |
+
+---
+
+## Known Limitations
+
+- **Maps require string keys** — integer keys cause a segfault (the internal implementation uses `strcmp`)
+- **Some string functions are type-checked but not implemented** — `string_upper`, `string_lower`, `string_trim`, `string_split`, `char_at`, `char_from_code` pass the type checker but produce linker errors
+- **No `ep_abs` function** — despite being referenced in some docs
+- **Native backends (ARM64/x86_64)** support basic programs only — structs, enums, channels etc. produce explicit errors
+- **Windows** — C runtime has `#ifdef _WIN32` polyfills but is not tested
+- **No package registry** — `epm` is a local project manager, not a package registry
+- **No debugger integration** — `--debug` compiles with `-g` but there's no Ernos-aware debugger
+- **GC may abort on exit** — programs using maps sometimes trigger an abort during GC cleanup at process exit (the program logic runs correctly)
 
 ---
 
