@@ -591,7 +591,7 @@ fn print_usage() {
     eprintln!();
     eprintln!("\x1b[1mUSAGE:\x1b[0m");
     eprintln!("  epc <filename.ep>               Compile to native binary");
-    eprintln!("  epc <filename.ep> --native      Compile via native assembly (no Clang)");
+    eprintln!("  epc <filename.ep> --native      Compile via native assembly (experimental, simple programs only)");
     eprintln!("  epc <filename.ep> --release     Compile with optimizations (O3+LTO)");
     eprintln!("  epc test <filename.ep>          Run as test");
     eprintln!();

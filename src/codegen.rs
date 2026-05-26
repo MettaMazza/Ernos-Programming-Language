@@ -993,7 +993,13 @@ impl Codegen {
                         self.out.push_str(&format!("    printf(\"%s\\n\", display_enum_{}({}));\n", enum_name, expr_str));
                     }
                     _ => {
-                        self.out.push_str(&format!("    printf(\"%lld\\n\", (long long){});\n", expr_str));
+                        // Smart display: detect if value is a string pointer or an integer
+                        // ep_auto_to_string returns the pointer unchanged if it's a string,
+                        // or allocates a new buffer with the int-to-string conversion
+                        self.out.push_str(&format!(
+                            "    {{ long long _dv = (long long){0}; long long _sv = ep_auto_to_string(_dv); printf(\"%s\\n\", (char*)_sv); }}\n",
+                            expr_str
+                        ));
                     }
                 }
             }
@@ -2237,6 +2243,12 @@ impl Codegen {
         if gc_root_count > 0 {
             self.out.push_str(&format!("    ep_gc_pop_roots({});\n", gc_root_count));
         }
+
+        // Scan function body for explicit free_list/free_map calls
+        // to avoid double-freeing in auto-cleanup
+        let mut user_freed: std::collections::HashSet<String> = std::collections::HashSet::new();
+        Self::collect_user_freed(&func.body, &mut user_freed);
+
         // Get the function's return type to avoid freeing the returned value
         let func_ret_type = self.func_return_types.get(&func.name).cloned();
         for (var_name, _) in &var_types {
@@ -2249,6 +2261,10 @@ impl Codegen {
                     if t == Some(frt) {
                         continue;
                     }
+                }
+                // Skip if user already explicitly freed this variable
+                if user_freed.contains(var_name) {
+                    continue;
                 }
                 if t == Some(&Type::List) {
                     self.out.push_str(&format!("    free_list({});\n", var_name));
@@ -2272,6 +2288,38 @@ impl Codegen {
         self.out.push_str("    return ret_val;\n}\n\n");
 
         Ok(())
+    }
+
+    /// Scan statements for explicit free_list/free_map calls and collect the variable names
+    fn collect_user_freed(stmts: &[Stmt], freed: &mut std::collections::HashSet<String>) {
+        use crate::ast::ExprNode;
+        for stmt in stmts {
+            match &stmt.node {
+                StmtNode::Set(_, expr, _) | StmtNode::ExprStmt(expr) => {
+                    // Check if the expression is a call to free_list or free_map
+                    if let ExprNode::Call(name, args) = &expr.node {
+                        if (name == "free_list" || name == "free_map") && !args.is_empty() {
+                            if let ExprNode::Identifier(var_name) = &args[0].node {
+                                freed.insert(var_name.clone());
+                            }
+                        }
+                    }
+                }
+                StmtNode::If(_, then_branch, else_branch) => {
+                    Self::collect_user_freed(then_branch, freed);
+                    if let Some(else_stmts) = else_branch {
+                        Self::collect_user_freed(else_stmts, freed);
+                    }
+                }
+                StmtNode::RepeatWhile(_, body) => {
+                    Self::collect_user_freed(body, freed);
+                }
+                StmtNode::ForEach(_, _, body) => {
+                    Self::collect_user_freed(body, freed);
+                }
+                _ => {}
+            }
+        }
     }
 
     fn gen_method(&mut self, md: &MethodDef) -> Result<(), String> {
