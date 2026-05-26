@@ -419,7 +419,7 @@ impl TypeChecker {
         // Register struct definitions
         for sd in &program.struct_defs {
             let fields: Vec<(String, MonoType)> = sd.fields.iter()
-                .map(|(name, ann)| (name.clone(), self.annotation_to_mono(ann)))
+                .map(|(name, ann, _)| (name.clone(), self.annotation_to_mono(ann)))
                 .collect();
             self.struct_defs.insert(sd.name.clone(), fields);
         }

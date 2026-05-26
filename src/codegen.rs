@@ -314,7 +314,7 @@ impl Codegen {
         // Find structs where ALL accessed fields exist
         let mut candidates = Vec::new();
         for (struct_name, sd) in &self.struct_defs {
-            let struct_field_names: Vec<&str> = sd.fields.iter().map(|(n, _)| n.as_str()).collect();
+            let struct_field_names: Vec<&str> = sd.fields.iter().map(|(n, _, _)| n.as_str()).collect();
             let all_match = accessed_fields.iter().all(|f| struct_field_names.contains(&f.as_str()));
             if all_match {
                 candidates.push(struct_name.clone());
@@ -479,7 +479,7 @@ impl Codegen {
                 let obj_type = self.infer_type(obj, var_types);
                 if let Type::Struct(struct_name) = obj_type {
                     if let Some(sd) = self.struct_defs.get(&struct_name) {
-                        for (fname, ftype) in &sd.fields {
+                        for (fname, ftype, _) in &sd.fields {
                             if fname == field_name {
                                 return match ftype {
                                     TypeAnnotation::Int => Type::Int,
@@ -1279,17 +1279,47 @@ impl Codegen {
             }
             ExprNode::StructCreate(struct_name, fields) => {
                 let c_name = format!("EpStruct_{}", struct_name);
-                let num_fields = fields.len();
                 let mut lines = Vec::new();
                 lines.push(format!("({{"));
                 lines.push(format!("    {}* _s = ({}*)malloc(sizeof({}));", c_name, c_name, c_name));
+                
+                // Collect explicitly provided field names
+                let provided: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
+                
+                // Set explicitly provided fields
                 for (fname, fexpr) in fields {
                     let fval = self.gen_expr(fexpr, var_types)?;
                     lines.push(format!("    _s->{} = {};", fname, fval));
                 }
-                lines.push(format!("    {{ EpGCObject* _go = ep_gc_register(_s, EP_OBJ_STRUCT); if(_go) _go->num_fields = {}; }}", num_fields));
+                
+                // Fill in missing fields with defaults from struct definition
+                if let Some(sd) = self.struct_defs.get(struct_name).cloned() {
+                    for (fname, ftype, default_expr) in &sd.fields {
+                        if !provided.contains(&fname.as_str()) {
+                            if let Some(def_expr) = default_expr {
+                                let def_val = self.gen_expr(def_expr, var_types)?;
+                                lines.push(format!("    _s->{} = {};", fname, def_val));
+                            } else {
+                                // Use type-appropriate zero value
+                                let zero = match ftype {
+                                    TypeAnnotation::Str | TypeAnnotation::DynStr => "(long long)\"\"".to_string(),
+                                    TypeAnnotation::List => "create_list()".to_string(),
+                                    _ => "0".to_string(),
+                                };
+                                lines.push(format!("    _s->{} = {};", fname, zero));
+                            }
+                        }
+                    }
+                }
+                
+                let total_fields = if let Some(sd) = self.struct_defs.get(struct_name) {
+                    sd.fields.len()
+                } else {
+                    fields.len()
+                };
+                lines.push(format!("    {{ EpGCObject* _go = ep_gc_register(_s, EP_OBJ_STRUCT); if(_go) _go->num_fields = {}; }}", total_fields));
                 lines.push(format!("    (long long)_s;"));
-                lines.push(format!("}})"));
+                lines.push(format!("}})")); 
                 Ok(lines.join("\n"))
             }
             ExprNode::EnumCreate(enum_name, variant_name, args) => {
@@ -1581,7 +1611,7 @@ impl Codegen {
             self.out.push_str("\n/* User-Defined Structures */\n");
             for sd in &program.struct_defs {
                 self.out.push_str(&format!("typedef struct {{\n"));
-                for (fname, ftype) in &sd.fields {
+                for (fname, ftype, _) in &sd.fields {
                     let c_type = match ftype {
                         TypeAnnotation::Int => "long long",
                         TypeAnnotation::Float => "long long",
@@ -1599,7 +1629,7 @@ impl Codegen {
                 self.out.push_str(&format!("void free_struct_{}(long long ptr) {{\n", sd.name));
                 self.out.push_str(&format!("    if (ptr == 0) return;\n"));
                 self.out.push_str(&format!("    EpStruct_{}* s = (EpStruct_{}*)ptr;\n", sd.name, sd.name));
-                for (fname, ftype) in &sd.fields {
+                for (fname, ftype, _) in &sd.fields {
                     match ftype {
                         TypeAnnotation::List => {
                             self.out.push_str(&format!("    free_list(s->{});\n", fname));

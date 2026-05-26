@@ -302,8 +302,16 @@ impl Parser {
             self.expect(Token::Field)?;
             let (field_name, _) = self.expect_identifier()?;
             self.expect(Token::As)?;
-            let field_type = self.parse_type_annotation()?;
-            fields.push((field_name, field_type));
+            let field_type = self.parse_type_annotation()?
+;
+            // Parse optional default value: is <expr>
+            let default_val = if self.peek() == &Token::Is {
+                self.advance(); // consume 'is'
+                Some(self.parse_expr(Precedence::Lowest)?)
+            } else {
+                None
+            };
+            fields.push((field_name, field_type, default_val));
 
             if self.peek() == &Token::Newline {
                 self.advance();

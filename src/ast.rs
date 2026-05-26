@@ -43,7 +43,7 @@ pub enum TypeAnnotation {
 pub struct StructDef {
     pub name: String,
     pub type_params: Vec<String>,
-    pub fields: Vec<(String, TypeAnnotation)>,
+    pub fields: Vec<(String, TypeAnnotation, Option<Expr>)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
