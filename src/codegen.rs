@@ -4026,6 +4026,7 @@ long long ep_random_int(long long min, long long max) {
 const C_MAIN_BOOTSTRAPPER: &str = r#"
 /* Bootstrapper C main */
 int main(int argc, char** argv) {
+    srand((unsigned int)time(NULL));
     init_ep_args(argc, argv);
     int result = (int)_main();
     ep_gc_shutdown();
