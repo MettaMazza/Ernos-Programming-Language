@@ -683,7 +683,7 @@ impl TypeChecker {
 
         // String utilities (continued)
         self.func_types.insert("get_character".into(), (vec![MonoType::Str, MonoType::Int], MonoType::Int));
-        self.func_types.insert("string_from_list".into(), (vec![MonoType::Int], MonoType::DynStr));
+        self.func_types.insert("string_from_list".into(), (vec![MonoType::List(Box::new(MonoType::Int))], MonoType::DynStr));
         self.func_types.insert("get_list_data_ptr".into(), (vec![MonoType::Int], MonoType::Int));
 
         // CLI arguments

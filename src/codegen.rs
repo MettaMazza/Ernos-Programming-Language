@@ -44,6 +44,8 @@ pub struct Codegen {
     pending_closure_name: Option<String>,
     /// Maps closure C function name -> list of captured variable names from outer scope
     closure_captures: HashMap<String, Vec<String>>,
+    /// Set of C runtime builtin function names (used to skip conflicting stdlib imports)
+    builtin_c_funcs: std::collections::HashSet<String>,
 }
 
 impl Codegen {
@@ -62,6 +64,7 @@ impl Codegen {
             closure_c_names: HashMap::new(),
             pending_closure_name: None,
             closure_captures: HashMap::new(),
+            builtin_c_funcs: std::collections::HashSet::new(),
         }
     }
 
@@ -206,6 +209,15 @@ impl Codegen {
         self.func_return_types.insert("char_at".to_string(), Type::Int);
         self.func_return_types.insert("char_from_code".to_string(), Type::DynStr);
         self.func_return_types.insert("ep_abs".to_string(), Type::Int);
+        self.func_return_types.insert("string_to_int".to_string(), Type::Int);
+        self.func_return_types.insert("ep_random_int".to_string(), Type::Int);
+        self.func_return_types.insert("ep_time_ms".to_string(), Type::Int);
+        self.func_return_types.insert("ep_uuid_v4".to_string(), Type::DynStr);
+        self.func_return_types.insert("ep_base64_encode".to_string(), Type::DynStr);
+        self.func_return_types.insert("create_channel".to_string(), Type::Int);
+
+        // Save the set of builtin C runtime names before externals/user funcs are added
+        self.builtin_c_funcs = self.func_return_types.keys().cloned().collect();
 
         for ext in &program.externals {
             if let Some(ref rt) = ext.return_type {
@@ -1307,7 +1319,13 @@ impl Codegen {
                 let left_str = self.gen_expr(left, var_types)?;
                 let right_str = self.gen_expr(right, var_types)?;
                 
-                let is_string = self.infer_type(left, var_types) == Type::Str || self.infer_type(left, var_types) == Type::DynStr;
+                let left_type = self.infer_type(left, var_types);
+                let right_type = self.infer_type(right, var_types);
+                let inferred_string = left_type == Type::Str || left_type == Type::DynStr
+                    || right_type == Type::Str || right_type == Type::DynStr;
+                let has_string_literal = matches!(&left.node, ExprNode::StringLiteral(_))
+                    || matches!(&right.node, ExprNode::StringLiteral(_));
+                let is_string = inferred_string || has_string_literal;
                 // Check if comparing a string to integer 0 (null check pattern from try expressions)
                 let right_is_zero = matches!(&right.node, ExprNode::Integer(0));
                 let left_is_zero = matches!(&left.node, ExprNode::Integer(0));
@@ -2187,6 +2205,10 @@ impl Codegen {
 
         self.out.push_str("\n/* External Function Prototypes (FFI) */\n");
         for ext in &program.externals {
+            // Skip forward declarations for functions already in the C runtime
+            if self.builtin_c_funcs.contains(&ext.name) {
+                continue;
+            }
             let mut params_str = Vec::new();
             for _ in &ext.params {
                 params_str.push("long long");
@@ -2197,6 +2219,10 @@ impl Codegen {
 
         self.out.push_str("\n/* User Function Prototypes */\n");
         for func in &program.functions {
+            // Skip prototypes for functions that shadow C runtime builtins
+            if self.builtin_c_funcs.contains(&func.name) {
+                continue;
+            }
             let mut params_str = Vec::new();
             for _ in &func.params {
                 params_str.push("long long");
@@ -2289,6 +2315,10 @@ impl Codegen {
         let closure_fwd_decls_placeholder = true; // marker for post-codegen generation
 
         for func in &program.functions {
+            // Skip user-defined functions that shadow C runtime builtins
+            if self.builtin_c_funcs.contains(&func.name) {
+                continue;
+            }
             self.gen_function(func)?;
         }
 
@@ -5280,7 +5310,17 @@ long long ep_net_recv_bytes(long long fd, long long count) {
 const C_MAIN_BOOTSTRAPPER: &str = r#"
 /* Bootstrapper C main */
 int main(int argc, char** argv) {
-    srand((unsigned int)time(NULL));
+    {
+        unsigned int seed;
+        FILE* urand = fopen("/dev/urandom", "rb");
+        if (urand && fread(&seed, sizeof(seed), 1, urand) == 1) {
+            fclose(urand);
+        } else {
+            if (urand) fclose(urand);
+            seed = (unsigned int)time(NULL) ^ (unsigned int)getpid();
+        }
+        srand(seed);
+    }
     init_ep_args(argc, argv);
     int result = (int)_main();
     ep_gc_shutdown();

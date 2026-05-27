@@ -8,7 +8,7 @@ external define string_length with s:
 external define get_character with s and idx:
 external define substring with s and start and len:
 external define concat with a and b:
-external define ep_int_to_str with n:
+external define int_to_string with n:
 external define string_from_list with lst:
 
 # ---- Character Operations ----
@@ -303,7 +303,7 @@ define builder_append with builder and s:
     return builder
 
 define builder_append_int with builder and n:
-    set s to ep_int_to_str(n)
+    set s to int_to_string(n)
     set ok to append_list(builder and s)
     return builder
 

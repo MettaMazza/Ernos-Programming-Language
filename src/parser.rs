@@ -211,6 +211,10 @@ impl Parser {
                     self.advance(); // consume "returning"
                     return_type = Some(self.parse_type_annotation()?);
                 }
+                // Optional colon after external definition (consistency with regular define)
+                if self.peek() == &Token::Colon {
+                    self.advance();
+                }
                 // Optional newline after external definition
                 if self.peek() == &Token::Newline {
                     self.advance();
@@ -429,6 +433,19 @@ impl Parser {
                 }
                 params.push((next_param, next_is_borrow, next_type));
             }
+        }
+
+        // Detect wrong argument order: "define foo with x on Type:" should be
+        // "define foo on Type with x:"
+        if self.peek() == &Token::On {
+            return Err(ParseError {
+                message: format!(
+                    "Wrong argument order in method definition. \
+                     Use: define {} on <Type> with <params>:",
+                    name
+                ),
+                span: self.peek_span(),
+            });
         }
 
         let mut return_type = None;
@@ -879,6 +896,13 @@ impl Parser {
                     self.advance();
                 }
                 Ok(Stmt::new(StmtNode::ExprStmt(expr)))
+            }
+            Token::Receive => {
+                return Err(ParseError {
+                    message: "'receive' is an expression, not a statement. \
+                              Use: set <name> to receive from <channel>".to_string(),
+                    span,
+                });
             }
             other => Err(ParseError {
                 message: format!("Unexpected statement start: {:?}", other),
