@@ -414,6 +414,69 @@ When using `import "module" as alias`, all functions from the module are availab
 
 ---
 
+## 13.1. Bridge Libraries (FFI)
+
+Pre-built bindings for popular C libraries using dynamic loading. Located in `stdlib/bridge/`:
+
+```ernos
+import "stdlib/bridge/sqlite"
+
+define main:
+    set db to sqlite_open("test.db")
+    set _ to sqlite_exec(db and "CREATE TABLE users (name TEXT, age INT)")
+    set _ to sqlite_close(db)
+    return 0
+```
+
+Available bridges: `sqlite`, `curl`, `zlib`, `openssl`, `pcre`, `jansson`.
+
+### Dynamic Library Loading (Low-Level FFI)
+
+```ernos
+define main:
+    set lib to ep_dlopen("libm.dylib")
+    set abs_fn to ep_dlsym(lib and "abs")
+    set result to ep_dlcall1(abs_fn and -42)
+    display result    # 42
+    set _ to ep_dlclose(lib)
+    return 0
+```
+
+FFI Functions:
+- `ep_dlopen(path)` — load shared library, returns handle
+- `ep_dlsym(handle and name)` — find symbol, returns function pointer
+- `ep_dlclose(handle)` — close library
+- `ep_dlcall0(fn)` through `ep_dlcall6(fn and a1 ... and a6)` — call with 0-6 args
+
+---
+
+## 13.2. C Header Binding Generator
+
+Generate ErnosPlain bindings from C headers:
+
+```bash
+ernos bind /usr/include/math.h -o math_bindings.ep
+ernos bind mylib.h -o mylib.ep
+```
+
+Parses: function declarations, struct definitions, enums, typedefs, `#define` constants.
+
+---
+
+## 13.3. Cross-Language Transpilers
+
+Translate source code from other languages into ErnosPlain:
+
+```bash
+ernos transpile script.py -o script.ep     # Python → ErnosPlain
+ernos transpile program.c -o program.ep    # C → ErnosPlain
+ernos transpile app.js -o app.ep           # JavaScript → ErnosPlain
+```
+
+Supported extensions: `.py`, `.c`, `.h`, `.js`, `.mjs`
+
+
+
 ## 14. Compilation
 
 ### Basic Usage

@@ -5,7 +5,7 @@
 
 <p align="center">
   <a href="#"><img src="https://img.shields.io/badge/Version-1.0.0-blue.svg" alt="Version"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Tests-32%2F32-brightgreen.svg" alt="Tests"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tests-36%2F36-brightgreen.svg" alt="Tests"></a>
   <a href="#"><img src="https://img.shields.io/badge/Performance-C--Level-orange.svg" alt="Performance"></a>
   <a href="#"><img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-blueviolet.svg" alt="Platform"></a>
   <a href="#"><img src="https://img.shields.io/badge/Compiler-Self--Hosted-success.svg" alt="Self-Hosted"></a>
@@ -116,6 +116,8 @@ define main:
 | **Release** | `ernos file.ep --release` | Compile with `-O3 -flto` |
 | **ASAN** | `ernos file.ep --asan` | Compile with AddressSanitizer |
 | **Native** | `ernos file.ep --native` | Compile via native assembly (no Clang) |
+| **Bind** | `ernos bind header.h` | Generate .ep bindings from C headers |
+| **Transpile** | `ernos transpile file.py` | Translate Python/C/JS to ErnosPlain |
 
 ### 🌍 Platform Support
 - **macOS** (ARM64 + x86_64) — primary development platform
@@ -231,6 +233,28 @@ define main:
     return 0
 ```
 
+### Dynamic Library Loading (FFI)
+```ernos
+define main:
+    set lib to ep_dlopen("libm.dylib")
+    set abs_fn to ep_dlsym(lib and "abs")
+    set result to ep_dlcall1(abs_fn and -42)
+    display result    # 42
+    set _ to ep_dlclose(lib)
+    return 0
+```
+
+### Cross-Language Transpilation
+```bash
+# Translate existing code from other languages into ErnosPlain
+ernos transpile script.py -o script.ep     # Python → ErnosPlain
+ernos transpile program.c -o program.ep    # C → ErnosPlain
+ernos transpile app.js -o app.ep           # JavaScript → ErnosPlain
+
+# Generate .ep bindings from C headers
+ernos bind /usr/include/math.h -o math_bindings.ep
+```
+
 ---
 
 ## Architecture
@@ -266,6 +290,10 @@ Source (.ep)
 | `src/diagnostics.rs` | ~380 | Rich error reporting with ANSI colors |
 | `src/native_codegen.rs` | ~500 | ARM64 native assembly backend (macOS + Linux) |
 | `src/x86_64_codegen.rs` | ~480 | x86_64 native assembly backend (macOS + Linux) |
+| `src/bind_c.rs` | ~400 | C header binding generator (zero-dependency) |
+| `src/transpile_py.rs` | ~1,840 | Python → ErnosPlain transpiler |
+| `src/transpile_c.rs` | ~1,300 | C → ErnosPlain transpiler |
+| `src/transpile_js.rs` | ~1,210 | JavaScript → ErnosPlain transpiler |
 
 ---
 

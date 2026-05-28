@@ -370,7 +370,36 @@ These are implemented as C functions in the runtime (codegen.rs). They are NOT E
 `channel` (keyword), `create_channel()`, `send value to channel` (statement), `receive from channel` (expression), `spawn function(args)` (statement), `channel_has_data(ch)`, `channel_try_recv(ch)`
 
 ### Math / System
-`ep_random_int(min and max)`, `ep_time_ms()`, `ep_time_now_ms()`, `ep_time_now_sec()`, `ep_sleep_ms(ms)`, `ep_abs(n)`, `ep_system(cmd)`
+`ep_random_int(min and max)`, `ep_time_ms()`, `ep_time_now_ms()`, `ep_time_now_sec()`, `ep_sleep_ms(ms)`, `ep_abs(n)`, `ep_system(cmd)`, `ep_play_sound(path)` (macOS)
+
+### FFI (Dynamic Library Loading)
+`ep_dlopen(path)` — load .dylib/.so, returns handle
+`ep_dlsym(handle and name)` — find symbol, returns function pointer
+`ep_dlclose(handle)` — close library handle
+`ep_dlcall0(fn)` through `ep_dlcall6(fn and a1 ... and a6)` — call function pointer with 0-6 args
+
+All FFI functions work with `long long` arguments. Pointers and integers are passed directly. Strings must be passed as their `long long` representation (which is already how ErnosPlain stores them).
+
+### CLI Subcommands
+
+```bash
+# Compile and run
+ernos program.ep                     # Compile to ./program, then run
+ernos program.ep --native            # Compile via native assembly backend
+
+# C header binding generation
+ernos bind header.h [-o bindings.ep] # Parse C header → ErnosPlain bindings
+
+# Cross-language transpilation
+ernos transpile file.py [-o out.ep]  # Python → ErnosPlain
+ernos transpile file.c [-o out.ep]   # C → ErnosPlain
+ernos transpile file.js [-o out.ep]  # JavaScript → ErnosPlain
+
+# Other
+ernos --version                      # Show version
+ernos --list-builtins                # List all builtin functions
+ernos check file.ep                  # Type-check without compiling
+```
 
 ---
 
@@ -408,6 +437,23 @@ If ANY step fails, the change is not ready. Fix it before committing. Do not com
 8. **Namespace imports** — `import "module" as alias` adds `alias_` prefixed function names
 9. **HOF with named functions** — passing named functions as arguments requires closure wrapping in some cases
 10. **Concurrency scale** — channel operations are safe up to ~500-1000 operations before GC pressure
+
+---
+
+## Bridge Libraries
+
+Pre-built bindings for popular C libraries using the FFI system. Located in `stdlib/bridge/`:
+
+| Module | Library | Key Functions |
+|---|---|---|
+| `sqlite.ep` | SQLite3 | `sqlite_open`, `sqlite_exec`, `sqlite_close` |
+| `curl.ep` | libcurl | `curl_init`, `curl_perform`, `http_get`, `http_post` |
+| `zlib.ep` | zlib | `zlib_compress`, `zlib_uncompress`, `zlib_crc32` |
+| `openssl.ep` | OpenSSL | `openssl_sha256`, `openssl_sha512`, `openssl_rand_bytes` |
+| `pcre.ep` | PCRE2 | `pcre2_compile_pattern`, `regex_matches` |
+| `jansson.ep` | Jansson | `json_parse`, `json_encode`, `json_object_set` |
+
+Usage: `import "stdlib/bridge/sqlite"` — all functions use `ep_dlopen`/`ep_dlsym` at runtime, so the library must be installed on the target system.
 
 ---
 
