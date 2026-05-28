@@ -160,6 +160,12 @@ impl NativeCodegen {
         }
         self.emit("");
 
+        // Suppress "missing .note.GNU-stack" linker warning on Linux
+        if !self.is_macos {
+            self.emit("");
+            self.emit(".section .note.GNU-stack,\"\",@progbits");
+        }
+
         Ok(self.asm.clone())
     }
 

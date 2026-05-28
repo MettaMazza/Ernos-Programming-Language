@@ -1014,6 +1014,7 @@ define get_c_runtime_source:
     set ok to append_list(lines and "#include <stdio.h>\n")
     set ok to append_list(lines and "#include <stdlib.h>\n")
     set ok to append_list(lines and "#include <string.h>\n")
+    set ok to append_list(lines and "#include <stdint.h>\n")
     set ok to append_list(lines and "\n")
     set ok to append_list(lines and "#ifdef _WIN32\n")
     set ok to append_list(lines and "  #include <winsock2.h>\n")
