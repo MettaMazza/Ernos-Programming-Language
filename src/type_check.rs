@@ -658,6 +658,10 @@ impl TypeChecker {
         self.func_types.insert("ep_dlcall4".into(), (vec![MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int], MonoType::Int));
         self.func_types.insert("ep_dlcall5".into(), (vec![MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int], MonoType::Int));
         self.func_types.insert("ep_dlcall6".into(), (vec![MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int], MonoType::Int));
+        self.func_types.insert("ep_dlcall7".into(), (vec![MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int], MonoType::Int));
+        self.func_types.insert("ep_dlcall8".into(), (vec![MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int], MonoType::Int));
+        self.func_types.insert("ep_dlcall9".into(), (vec![MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int], MonoType::Int));
+        self.func_types.insert("ep_dlcall10".into(), (vec![MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int], MonoType::Int));
 
         // Display helpers
         self.func_types.insert("display".into(), (vec![MonoType::Int], MonoType::Unit));

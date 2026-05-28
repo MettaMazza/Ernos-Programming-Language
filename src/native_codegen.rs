@@ -242,6 +242,13 @@ impl NativeCodegen {
                     if !names.contains(var) {
                         names.push(var.clone());
                     }
+                    // Internal iteration variables used by ForEach codegen
+                    for internal in &["_foreach_list", "_foreach_len", "_foreach_i"] {
+                        let s = internal.to_string();
+                        if !names.contains(&s) {
+                            names.push(s);
+                        }
+                    }
                     self.collect_var_names(body, names);
                 }
                 _ => {}
@@ -357,6 +364,67 @@ impl NativeCodegen {
                 if let Some(ref lbl) = self.loop_continue_label {
                     self.emit(&format!("    b {}", lbl));
                 }
+            }
+
+            StmtNode::ForEach(var_name, iterable, body) => {
+                // for each VAR in ITERABLE:
+                // Compile as: _list = iterable; _len = length_list(_list); _i = 0;
+                //   loop: if _i >= _len goto end; VAR = get_list(_list, _i); body; _i++; goto loop; end:
+                let loop_label = self.new_label("foreach");
+                let end_label = self.new_label("foreach_end");
+
+                let prev_break = self.loop_break_label.take();
+                let prev_continue = self.loop_continue_label.take();
+                self.loop_break_label = Some(end_label.clone());
+                self.loop_continue_label = Some(loop_label.clone());
+
+                // Evaluate iterable into x0 and save as _foreach_list
+                self.gen_expr(iterable, "x0", frame_size)?;
+                let list_off = self.get_var_offset("_foreach_list");
+                self.emit(&format!("    str x0, [x29, #{}]", list_off));
+
+                // _foreach_len = length_list(_foreach_list)
+                // x0 already has list ptr
+                let len_sym = self.sym("length_list");
+                self.emit(&format!("    bl {}", len_sym));
+                let len_off = self.get_var_offset("_foreach_len");
+                self.emit(&format!("    str x0, [x29, #{}]", len_off));
+
+                // _foreach_i = 0
+                let i_off = self.get_var_offset("_foreach_i");
+                self.emit(&format!("    str xzr, [x29, #{}]", i_off));
+
+                // Loop start
+                self.emit(&format!("{}:", loop_label));
+                // if _foreach_i >= _foreach_len, break
+                self.emit(&format!("    ldr x9, [x29, #{}]", i_off));
+                self.emit(&format!("    ldr x10, [x29, #{}]", len_off));
+                self.emit("    cmp x9, x10");
+                self.emit(&format!("    b.ge {}", end_label));
+
+                // VAR = get_list(_foreach_list, _foreach_i)
+                self.emit(&format!("    ldr x0, [x29, #{}]", list_off)); // x0 = list
+                self.emit(&format!("    ldr x1, [x29, #{}]", i_off));   // x1 = index
+                let get_sym = self.sym("get_list");
+                self.emit(&format!("    bl {}", get_sym));
+                let var_off = self.var_fp_offset(var_name);
+                self.emit(&format!("    str x0, [x29, #{}]", var_off));
+
+                // Body
+                for s in body {
+                    self.gen_statement(s, cleanup_label, frame_size)?;
+                }
+
+                // _foreach_i++
+                self.emit(&format!("    ldr x9, [x29, #{}]", i_off));
+                self.emit("    add x9, x9, #1");
+                self.emit(&format!("    str x9, [x29, #{}]", i_off));
+                self.emit(&format!("    b {}", loop_label));
+
+                self.emit(&format!("{}:", end_label));
+
+                self.loop_break_label = prev_break;
+                self.loop_continue_label = prev_continue;
             }
 
             _ => {
@@ -515,6 +583,48 @@ impl NativeCodegen {
 
             ExprNode::BoolLiteral(b) => {
                 self.emit(&format!("    mov {}, #{}", dest, if *b { 1 } else { 0 }));
+            }
+
+            ExprNode::ListLiteral(elements) => {
+                // create_list() returns a new empty list handle
+                let create_sym = self.sym("create_list");
+                self.emit(&format!("    bl {}", create_sym));
+                // x0 now holds the list pointer; save it on stack
+                self.emit("    str x0, [sp, #-16]!");
+
+                for elem in elements {
+                    // Evaluate element into x1
+                    self.gen_expr(elem, "x1", frame_size)?;
+                    // x1 = element value, list pointer on stack
+                    self.emit("    ldr x0, [sp]");  // peek list ptr
+                    // append_list(list_ptr, value) — x0=list, x1=value
+                    // NOTE: append_list returns the VALUE, not the list ptr
+                    // The list pointer is stable (internal realloc doesn't change the struct ptr)
+                    let append_sym = self.sym("append_list");
+                    self.emit(&format!("    bl {}", append_sym));
+                    // Don't update stack — list pointer hasn't changed
+                }
+
+                // Pop the list pointer into dest
+                self.emit("    ldr x0, [sp], #16");
+                if dest != "x0" {
+                    self.emit(&format!("    mov {}, x0", dest));
+                }
+            }
+
+            ExprNode::FloatLiteral(f) => {
+                // Encode the float as a 64-bit integer (bit-cast)
+                let bits = f.to_bits();
+                self.emit(&format!("    movz {}, #{}", dest, bits & 0xFFFF));
+                if bits > 0xFFFF {
+                    self.emit(&format!("    movk {}, #{}, lsl #16", dest, (bits >> 16) & 0xFFFF));
+                }
+                if bits > 0xFFFFFFFF {
+                    self.emit(&format!("    movk {}, #{}, lsl #32", dest, (bits >> 32) & 0xFFFF));
+                }
+                if bits > 0xFFFFFFFFFFFF {
+                    self.emit(&format!("    movk {}, #{}, lsl #48", dest, (bits >> 48) & 0xFFFF));
+                }
             }
 
             _ => {

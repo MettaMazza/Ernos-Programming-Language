@@ -149,6 +149,7 @@ impl Parser {
         let mut method_defs = Vec::new();
         let mut trait_defs = Vec::new();
         let mut trait_impls = Vec::new();
+        let mut top_level_constants = Vec::new();
 
         while self.peek() != &Token::EOF {
             // Skip leading newlines
@@ -265,6 +266,11 @@ impl Parser {
             } else if self.peek() == &Token::Implement {
                 let ti = self.parse_trait_impl()?;
                 trait_impls.push(ti);
+            } else if self.peek() == &Token::Set {
+                // Top-level constant: set NAME to EXPR
+                // Collected for global variable initialization
+                let stmt = self.parse_statement()?;
+                top_level_constants.push(stmt);
             } else {
                 return Err(ParseError {
                     message: format!("Unexpected token at top level: {:?}", self.peek()),
@@ -273,7 +279,7 @@ impl Parser {
             }
         }
 
-        Ok(Program { imports, externals, functions, struct_defs, enum_defs, method_defs, trait_defs, trait_impls })
+        Ok(Program { imports, externals, functions, struct_defs, enum_defs, method_defs, trait_defs, trait_impls, top_level_constants })
     }
 
     fn parse_struct_def(&mut self) -> Result<StructDef, ParseError> {

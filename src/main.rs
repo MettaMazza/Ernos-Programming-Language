@@ -57,6 +57,7 @@ fn parse_all_modules(
     all_method_defs: &mut Vec<ast::MethodDef>,
     all_trait_defs: &mut Vec<ast::TraitDef>,
     all_trait_impls: &mut Vec<ast::TraitImpl>,
+    all_top_level_constants: &mut Vec<ast::Stmt>,
 ) -> Result<(), String> {
     let canonical_path = entry_path.canonicalize().map_err(|e| format!("Could not canonicalize path '{}': {}", entry_path.display(), e))?;
     
@@ -92,6 +93,7 @@ fn parse_all_modules(
     all_method_defs.extend(program.method_defs);
     all_trait_defs.extend(program.trait_defs);
     all_trait_impls.extend(program.trait_impls);
+    all_top_level_constants.extend(program.top_level_constants);
 
     for (imp, alias) in program.imports {
         let resolved_path = resolve_import_path(&canonical_path, &imp);
@@ -110,7 +112,9 @@ fn parse_all_modules(
             let mut mod_methods: Vec<ast::MethodDef> = Vec::new();
             let mut mod_traits: Vec<ast::TraitDef> = Vec::new();
             let mut mod_trait_impls: Vec<ast::TraitImpl> = Vec::new();
-            parse_all_modules(&resolved_path, parsed_files, &mut mod_funcs, &mut mod_externs, &mut mod_structs, &mut mod_enums, &mut mod_methods, &mut mod_traits, &mut mod_trait_impls)?;
+            let mut mod_constants: Vec<ast::Stmt> = Vec::new();
+            parse_all_modules(&resolved_path, parsed_files, &mut mod_funcs, &mut mod_externs, &mut mod_structs, &mut mod_enums, &mut mod_methods, &mut mod_traits, &mut mod_trait_impls, &mut mod_constants)?;
+            all_top_level_constants.extend(mod_constants);
 
             // Add original-named functions (for internal module calls)
             for f in &mod_funcs {
@@ -137,7 +141,7 @@ fn parse_all_modules(
             all_trait_impls.extend(mod_trait_impls);
         } else {
             // Unaliased import: dump everything into global namespace (backward compatible)
-            parse_all_modules(&resolved_path, parsed_files, all_functions, all_externals, all_struct_defs, all_enum_defs, all_method_defs, all_trait_defs, all_trait_impls)?;
+            parse_all_modules(&resolved_path, parsed_files, all_functions, all_externals, all_struct_defs, all_enum_defs, all_method_defs, all_trait_defs, all_trait_impls, all_top_level_constants)?;
         }
     }
 
@@ -383,8 +387,9 @@ fn main() {
         let mut all_method_defs = Vec::new();
         let mut all_trait_defs = Vec::new();
         let mut all_trait_impls = Vec::new();
+        let mut all_constants = Vec::new();
         let mut parsed_files = HashSet::new();
-        match parse_all_modules(input_path, &mut parsed_files, &mut all_functions, &mut all_externals, &mut all_struct_defs, &mut all_enum_defs, &mut all_method_defs, &mut all_trait_defs, &mut all_trait_impls) {
+        match parse_all_modules(input_path, &mut parsed_files, &mut all_functions, &mut all_externals, &mut all_struct_defs, &mut all_enum_defs, &mut all_method_defs, &mut all_trait_defs, &mut all_trait_impls, &mut all_constants) {
             Ok(()) => {
                 println!("\x1b[1;32m✓\x1b[0m {} — no syntax errors ({} functions, {} structs, {} enums)", 
                     args[2], all_functions.len(), all_struct_defs.len(), all_enum_defs.len());
@@ -432,8 +437,9 @@ fn main() {
     let mut all_method_defs = Vec::new();
     let mut all_trait_defs = Vec::new();
     let mut all_trait_impls = Vec::new();
+    let mut all_top_level_constants = Vec::new();
     let mut parsed_files = HashSet::new();
-    if let Err(err_msg) = parse_all_modules(input_path, &mut parsed_files, &mut all_functions, &mut all_externals, &mut all_struct_defs, &mut all_enum_defs, &mut all_method_defs, &mut all_trait_defs, &mut all_trait_impls) {
+    if let Err(err_msg) = parse_all_modules(input_path, &mut parsed_files, &mut all_functions, &mut all_externals, &mut all_struct_defs, &mut all_enum_defs, &mut all_method_defs, &mut all_trait_defs, &mut all_trait_impls, &mut all_top_level_constants) {
         eprintln!("Compiler Error: {}", err_msg);
         std::process::exit(1);
     }
@@ -458,6 +464,7 @@ fn main() {
         method_defs: all_method_defs,
         trait_defs: all_trait_defs,
         trait_impls: all_trait_impls,
+        top_level_constants: all_top_level_constants,
     };
 
     // Validate that main function exists

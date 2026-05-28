@@ -189,4 +189,5 @@ pub struct Program {
     pub method_defs: Vec<MethodDef>,
     pub trait_defs: Vec<TraitDef>,
     pub trait_impls: Vec<TraitImpl>,
+    pub top_level_constants: Vec<Stmt>,  // Top-level set statements (constants for bridges)
 }

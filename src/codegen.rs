@@ -46,6 +46,8 @@ pub struct Codegen {
     closure_captures: HashMap<String, Vec<String>>,
     /// Set of C runtime builtin function names (used to skip conflicting stdlib imports)
     builtin_c_funcs: std::collections::HashSet<String>,
+    /// Set of top-level constant names (emitted as C globals, not re-declared as locals)
+    global_constants: std::collections::HashSet<String>,
 }
 
 impl Codegen {
@@ -65,6 +67,7 @@ impl Codegen {
             pending_closure_name: None,
             closure_captures: HashMap::new(),
             builtin_c_funcs: std::collections::HashSet::new(),
+            global_constants: std::collections::HashSet::new(),
         }
     }
 
@@ -187,6 +190,10 @@ impl Codegen {
         self.func_return_types.insert("ep_dlcall4".to_string(), Type::Int);
         self.func_return_types.insert("ep_dlcall5".to_string(), Type::Int);
         self.func_return_types.insert("ep_dlcall6".to_string(), Type::Int);
+        self.func_return_types.insert("ep_dlcall7".to_string(), Type::Int);
+        self.func_return_types.insert("ep_dlcall8".to_string(), Type::Int);
+        self.func_return_types.insert("ep_dlcall9".to_string(), Type::Int);
+        self.func_return_types.insert("ep_dlcall10".to_string(), Type::Int);
         self.func_return_types.insert("ep_system".to_string(), Type::Int);
         self.func_return_types.insert("ep_play_sound".to_string(), Type::Int);
         self.func_return_types.insert("concat".to_string(), Type::DynStr);
@@ -2159,6 +2166,13 @@ impl Codegen {
         self.analyze_return_types(program);
         self.analyze_safety(program)?;
 
+        // Register top-level constant names as globals
+        for stmt in &program.top_level_constants {
+            if let StmtNode::Set(name, _, _) = &stmt.node {
+                self.global_constants.insert(name.clone());
+            }
+        }
+
         // Register method return types
         for md in &program.method_defs {
             let key = format!("{}_{}", md.struct_name, md.name);
@@ -2520,7 +2534,49 @@ impl Codegen {
         if self.is_test_mode {
             self.out.push_str(&self.get_c_test_main_source(program));
         } else {
-            self.out.push_str(C_MAIN_BOOTSTRAPPER);
+            // Emit top-level constant globals and init function
+            if !program.top_level_constants.is_empty() {
+                self.out.push_str("\n/* ========== Top-Level Constants (Bridge Libraries) ========== */\n");
+                // Declare globals
+                for stmt in &program.top_level_constants {
+                    if let StmtNode::Set(name, _, _) = &stmt.node {
+                        self.out.push_str(&format!("long long {} = 0;\n", name));
+                    }
+                }
+                // Generate init function
+                self.out.push_str("\nvoid __ep_init_constants(void) {\n");
+                for stmt in &program.top_level_constants {
+                    if let StmtNode::Set(name, expr, _) = &stmt.node {
+                        let empty_types: HashMap<String, Type> = HashMap::new();
+                        let val = self.gen_expr(expr, &empty_types)?;
+                        self.out.push_str(&format!("    {} = {};\n", name, val));
+                    }
+                }
+                self.out.push_str("}\n\n");
+                // Custom bootstrapper with constant init
+                self.out.push_str(r#"/* Bootstrapper C main */
+int main(int argc, char** argv) {
+    {
+        unsigned int seed;
+        FILE* urand = fopen("/dev/urandom", "rb");
+        if (urand && fread(&seed, sizeof(seed), 1, urand) == 1) {
+            fclose(urand);
+        } else {
+            if (urand) fclose(urand);
+            seed = (unsigned int)time(NULL) ^ (unsigned int)getpid();
+        }
+        srand(seed);
+    }
+    init_ep_args(argc, argv);
+    __ep_init_constants();
+    int result = (int)_main();
+    ep_gc_shutdown();
+    return result;
+}
+"#);
+            } else {
+                self.out.push_str(C_MAIN_BOOTSTRAPPER);
+            }
         }
 
         // Generate closure forward declarations now that captures are known
@@ -2643,7 +2699,8 @@ impl Codegen {
         
         for (var_name, _) in &var_types {
             let is_param = func.params.iter().any(|p| &p.0 == var_name);
-            if !is_param {
+            let is_global = self.global_constants.contains(var_name);
+            if !is_param && !is_global {
                 let safe_var = Self::sanitize_c_name(var_name);
                 self.out.push_str(&format!("    long long {} = 0;\n", safe_var));
             }
@@ -3599,6 +3656,10 @@ typedef long long (*ep_fn3)(long long, long long, long long);
 typedef long long (*ep_fn4)(long long, long long, long long, long long);
 typedef long long (*ep_fn5)(long long, long long, long long, long long, long long);
 typedef long long (*ep_fn6)(long long, long long, long long, long long, long long, long long);
+typedef long long (*ep_fn7)(long long, long long, long long, long long, long long, long long, long long);
+typedef long long (*ep_fn8)(long long, long long, long long, long long, long long, long long, long long, long long);
+typedef long long (*ep_fn9)(long long, long long, long long, long long, long long, long long, long long, long long, long long);
+typedef long long (*ep_fn10)(long long, long long, long long, long long, long long, long long, long long, long long, long long, long long);
 
 long long ep_dlcall0(long long fptr) {
     return ((ep_fn0)fptr)();
@@ -3620,6 +3681,18 @@ long long ep_dlcall5(long long fptr, long long a0, long long a1, long long a2, l
 }
 long long ep_dlcall6(long long fptr, long long a0, long long a1, long long a2, long long a3, long long a4, long long a5) {
     return ((ep_fn6)fptr)(a0, a1, a2, a3, a4, a5);
+}
+long long ep_dlcall7(long long fptr, long long a0, long long a1, long long a2, long long a3, long long a4, long long a5, long long a6) {
+    return ((ep_fn7)fptr)(a0, a1, a2, a3, a4, a5, a6);
+}
+long long ep_dlcall8(long long fptr, long long a0, long long a1, long long a2, long long a3, long long a4, long long a5, long long a6, long long a7) {
+    return ((ep_fn8)fptr)(a0, a1, a2, a3, a4, a5, a6, a7);
+}
+long long ep_dlcall9(long long fptr, long long a0, long long a1, long long a2, long long a3, long long a4, long long a5, long long a6, long long a7, long long a8) {
+    return ((ep_fn9)fptr)(a0, a1, a2, a3, a4, a5, a6, a7, a8);
+}
+long long ep_dlcall10(long long fptr, long long a0, long long a1, long long a2, long long a3, long long a4, long long a5, long long a6, long long a7, long long a8, long long a9) {
+    return ((ep_fn10)fptr)(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9);
 }
 /* ========== End Dynamic Library Loading ========== */
 

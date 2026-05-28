@@ -240,6 +240,12 @@ impl X86_64Codegen {
                     if !names.contains(var) {
                         names.push(var.clone());
                     }
+                    for internal in &["_foreach_list", "_foreach_len", "_foreach_i"] {
+                        let s = internal.to_string();
+                        if !names.contains(&s) {
+                            names.push(s);
+                        }
+                    }
                     self.collect_var_names(body, names);
                 }
                 _ => {}
@@ -347,6 +353,62 @@ impl X86_64Codegen {
                 if let Some(ref lbl) = self.loop_continue_label {
                     self.emit(&format!("    jmp {}", lbl));
                 }
+            }
+
+            StmtNode::ForEach(var_name, iterable, body) => {
+                let loop_label = self.new_label("foreach");
+                let end_label = self.new_label("foreach_end");
+
+                let prev_break = self.loop_break_label.take();
+                let prev_continue = self.loop_continue_label.take();
+                self.loop_break_label = Some(end_label.clone());
+                self.loop_continue_label = Some(loop_label.clone());
+
+                // Evaluate iterable, save as _foreach_list
+                self.gen_expr(iterable, "rax", frame_size)?;
+                let list_off = self.get_var_offset("_foreach_list");
+                self.emit(&format!("    mov [rbp + {}], rax", list_off));
+
+                // _foreach_len = length_list(_foreach_list)
+                self.emit("    mov rdi, rax");
+                let len_sym = self.sym("length_list");
+                self.emit(&format!("    call {}", len_sym));
+                let len_off = self.get_var_offset("_foreach_len");
+                self.emit(&format!("    mov [rbp + {}], rax", len_off));
+
+                // _foreach_i = 0
+                let i_off = self.get_var_offset("_foreach_i");
+                self.emit(&format!("    mov QWORD PTR [rbp + {}], 0", i_off));
+
+                // Loop start
+                self.emit(&format!("{}:", loop_label));
+                self.emit(&format!("    mov rax, [rbp + {}]", i_off));
+                self.emit(&format!("    cmp rax, [rbp + {}]", len_off));
+                self.emit(&format!("    jge {}", end_label));
+
+                // VAR = get_list(_foreach_list, _foreach_i)
+                self.emit(&format!("    mov rdi, [rbp + {}]", list_off));
+                self.emit(&format!("    mov rsi, [rbp + {}]", i_off));
+                let get_sym = self.sym("get_list");
+                self.emit(&format!("    call {}", get_sym));
+                let var_off = self.var_fp_offset(var_name);
+                self.emit(&format!("    mov [rbp + {}], rax", var_off));
+
+                // Body
+                for s in body {
+                    self.gen_statement(s, cleanup_label, frame_size)?;
+                }
+
+                // _foreach_i++
+                self.emit(&format!("    mov rax, [rbp + {}]", i_off));
+                self.emit("    inc rax");
+                self.emit(&format!("    mov [rbp + {}], rax", i_off));
+                self.emit(&format!("    jmp {}", loop_label));
+
+                self.emit(&format!("{}:", end_label));
+
+                self.loop_break_label = prev_break;
+                self.loop_continue_label = prev_continue;
             }
 
             _ => {
@@ -498,6 +560,38 @@ impl X86_64Codegen {
 
             ExprNode::BoolLiteral(b) => {
                 self.emit(&format!("    mov {}, {}", dest, if *b { 1 } else { 0 }));
+            }
+
+            ExprNode::ListLiteral(elements) => {
+                // create_list() takes no args, returns list ptr in rax
+                let create_sym = self.sym("create_list");
+                self.emit(&format!("    call {}", create_sym));
+                // rax holds list ptr; save it
+                self.emit("    push rax");
+
+                for elem in elements {
+                    // Evaluate element into rax (may clobber registers)
+                    self.gen_expr(elem, "rax", frame_size)?;
+                    // rax = element value; list ptr is on stack
+                    self.emit("    mov rsi, rax");           // rsi = value (2nd arg)
+                    self.emit("    mov rdi, [rsp]");         // rdi = list ptr (1st arg)
+                    let append_sym = self.sym("append_list");
+                    self.emit(&format!("    call {}", append_sym));
+                    // NOTE: append_list returns the VALUE, not the list ptr
+                    // Don't update stack — list pointer is stable
+                }
+
+                // Pop list pointer
+                self.emit("    pop rax");
+                if dest != "rax" {
+                    self.emit(&format!("    mov {}, rax", dest));
+                }
+            }
+
+            ExprNode::FloatLiteral(f) => {
+                // Encode the float as a 64-bit integer (bit-cast)
+                let bits = f.to_bits() as i64;
+                self.emit(&format!("    movabs {}, {}", dest, bits));
             }
 
             _ => {
