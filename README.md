@@ -9,7 +9,6 @@
   <a href="#"><img src="https://img.shields.io/badge/Performance-C--Level-orange.svg" alt="Performance"></a>
   <a href="#"><img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-blueviolet.svg" alt="Platform"></a>
   <a href="#"><img src="https://img.shields.io/badge/Compiler-Self--Hosted-success.svg" alt="Self-Hosted"></a>
-  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
 </p>
 
 ---
@@ -56,7 +55,7 @@ Ernos compiles to C, then to a native binary via `clang -O2`. The generated code
 ### 🛡️ Compile-Time Safety
 - **Hindley-Milner type inference** — types are inferred even without annotations
 - **Enforced type checking** — type errors stop compilation
-- **Ownership & borrowing** — use-after-move, move-while-borrowed detection
+- **Ownership & borrowing analysis** — use-after-move, move-while-borrowed detection
 - **Send/Sync safety** — borrowed references cannot be sent to threads
 
 ```ernos
@@ -71,7 +70,6 @@ define main:
 
 ### ⚡ Performance
 - Compiles to C, then to native binary via `clang -O2`
-- Smart GC safepoints — pure functions skip garbage collection overhead
 - Constant folding and dead code elimination at AST level
 - Release mode: `clang -O3 -flto` (via `--release` flag)
 
@@ -108,17 +106,16 @@ define main:
 
 | Tool | Command | Description |
 |------|---------|-------------|
-| **Compiler** | `epc program.ep` | Compile to native binary |
-| **REPL** | `epc repl` | Interactive evaluation with session state |
-| **Formatter** | `epc format file.ep` | Auto-format source code |
-| **Checker** | `epc check file.ep` | Syntax/type validation without compiling |
-| **Test Runner** | `epc test file.ep` | Run tests |
-| **Builtins** | `epc --list-builtins` | Show all built-in functions |
-| **Debug** | `epc file.ep --debug` | Compile with `-O0 -g` |
-| **Release** | `epc file.ep --release` | Compile with `-O3 -flto` |
-| **ASAN** | `epc file.ep --asan` | Compile with AddressSanitizer |
-| **Native** | `epc file.ep --native` | Compile via native assembly (no Clang) |
-| **Package Manager** | `epm init/build/run/test` | Project management (written in Ernos) |
+| **Compiler** | `ernos program.ep` | Compile to native binary |
+| **REPL** | `ernos --repl` | Interactive evaluation with session state |
+| **Formatter** | `ernos format file.ep` | Auto-format source code |
+| **Checker** | `ernos check file.ep` | Type/syntax validation without compiling |
+| **Test Runner** | `ernos test file.ep` | Run tests |
+| **Builtins** | `ernos --list-builtins` | Show all built-in functions |
+| **Debug** | `ernos file.ep --debug` | Compile with `-O0 -g` |
+| **Release** | `ernos file.ep --release` | Compile with `-O3 -flto` |
+| **ASAN** | `ernos file.ep --asan` | Compile with AddressSanitizer |
+| **Native** | `ernos file.ep --native` | Compile via native assembly (no Clang) |
 
 ### 🌍 Platform Support
 - **macOS** (ARM64 + x86_64) — primary development platform
@@ -224,6 +221,16 @@ define main:
     return 0
 ```
 
+### Namespace Imports
+```ernos
+import "math" as m
+
+define main:
+    set result to m_absolute(-42)
+    display result    # 42
+    return 0
+```
+
 ---
 
 ## Architecture
@@ -251,14 +258,14 @@ Source (.ep)
 | File | Lines | Description |
 |------|-------|-------------|
 | `src/lexer.rs` | ~800 | Tokenizer with indentation tracking |
-| `src/parser.rs` | ~1,470 | Recursive descent parser with Pratt precedence |
-| `src/type_check.rs` | ~1,130 | Hindley-Milner type inference with unification |
+| `src/parser.rs` | ~1,500 | Recursive descent parser with Pratt precedence |
+| `src/type_check.rs` | ~1,380 | Hindley-Milner type inference with unification |
 | `src/borrow_check.rs` | ~520 | Ownership, borrowing, Send/Sync analysis |
 | `src/optimizer.rs` | ~250 | AST-level constant folding and DCE |
-| `src/codegen.rs` | ~4,750 | C code generation with full runtime |
+| `src/codegen.rs` | ~5,360 | C code generation with full runtime |
 | `src/diagnostics.rs` | ~380 | Rich error reporting with ANSI colors |
-| `src/native_codegen.rs` | ~425 | ARM64 native assembly backend |
-| `src/x86_64_codegen.rs` | ~465 | x86_64 native assembly backend |
+| `src/native_codegen.rs` | ~500 | ARM64 native assembly backend (macOS + Linux) |
+| `src/x86_64_codegen.rs` | ~480 | x86_64 native assembly backend (macOS + Linux) |
 
 ---
 
@@ -273,9 +280,11 @@ Ernos compiles its own compiler. The self-hosted compiler modules:
 
 ### Bootstrap
 ```bash
-cat ep_lexer.ep ep_parser.ep ep_codegen.ep epc.ep > self_hosted_compiler.ep
-./target/release/ernos self_hosted_compiler.ep
-./self_hosted_compiler hello.ep
+# The Rust compiler compiles the self-hosted compiler
+./target/release/ernos epc.ep
+
+# The self-hosted compiler can compile programs
+./epc hello.ep
 ./hello
 ```
 
@@ -306,6 +315,8 @@ cat ep_lexer.ep ep_parser.ep ep_codegen.ep epc.ep > self_hosted_compiler.ep
 | Spawn | `spawn function(args)` |
 | Try | `try expression` |
 | List literal | `[1, 2, 3]` or `["a", "b"]` |
+| Import | `import "module"` or `import "module" as alias` |
+| Closure | `set f to given x: return x * 2` |
 | Comment | `# this is a comment` |
 
 
@@ -330,12 +341,6 @@ Conformance tests are in the [`conformance/`](conformance/) directory.
 cp -R ernosplain-syntax ~/.vscode/extensions/
 # Restart VS Code — all .ep files will have syntax highlighting
 ```
-
----
-
-## License
-
-MIT License. See [LICENSE](LICENSE) for details.
 
 ---
 

@@ -1,6 +1,6 @@
 # Ernos Language Reference Manual
 
-**Version 1.0.0** — Production Release
+**Version 1.0.0**
 
 Ernos is a statically-typed, compiled programming language with plain English syntax, Hindley-Milner type inference, ownership-based memory safety, and native code generation via C.
 
@@ -19,8 +19,9 @@ Ernos is a statically-typed, compiled programming language with plain English sy
 9. [Ownership & Borrowing](#9-ownership--borrowing)
 10. [Closures & Higher-Order Functions](#10-closures--higher-order-functions)
 11. [Error Handling](#11-error-handling)
-12. [Standard Library](#12-standard-library)
-13. [Compilation](#13-compilation)
+12. [Imports & Modules](#12-imports--modules)
+13. [Standard Library](#13-standard-library)
+14. [Compilation](#14-compilation)
 
 ---
 
@@ -60,7 +61,7 @@ set name as Str to "Alice"
 set ratio as Float to 3.14
 ```
 
-Type annotations are optional — the Hindley-Milner inference engine determines types automatically. But if inference is ambiguous, the compiler requires an annotation.
+Type annotations are optional — the Hindley-Milner inference engine determines types automatically.
 
 ---
 
@@ -80,6 +81,8 @@ Type annotations are optional — the Hindley-Milner inference engine determines
 |:---------:|:--------|:-----------|
 | `<` | `is less than` | Less Than |
 | `>` | `is greater than` | Greater Than |
+| `<=` | — | Less Than or Equal |
+| `>=` | — | Greater Than or Equal |
 | `==` | `equals` / `is equal to` | Equal To |
 | `!=` | `is not equal to` | Not Equal To |
 
@@ -89,6 +92,8 @@ Type annotations are optional — the Hindley-Milner inference engine determines
 | `&&` | `and also` | Logical AND |
 | `\|\|` | `or else` | Logical OR |
 | `not` | `not` | Logical NOT |
+
+> **Note:** The `and` keyword is context-sensitive — inside conditions it acts as logical AND, inside function call parentheses it separates arguments.
 
 ```ernos
 set result to 10 + 5 * 2           # 20 (precedence enforced)
@@ -100,12 +105,14 @@ if score > 90 && passed == true:
 
 ## 4. Control Flow
 
-### If / Else
+### If / Else / Else If
 ```ernos
 if score >= 90:
     display "Grade A"
-else:
+else if score >= 80:
     display "Grade B"
+else:
+    display "Grade C"
 ```
 
 ### Repeat While (loops)
@@ -113,6 +120,12 @@ else:
 set i to 0
 repeat while i < 10:
     display i
+    set i to i + 1
+```
+
+The `while` shorthand also works:
+```ernos
+while i < 10:
     set i to i + 1
 ```
 
@@ -181,7 +194,7 @@ define main:
 ### Async Functions
 ```ernos
 async define fetch_data with url as Str returning Int:
-    set data to ep_net_connect(url)
+    set data to ep_net_connect(url and 80)
     return data
 
 define main:
@@ -259,14 +272,17 @@ define main:
 
 ### Spawn Threads
 ```ernos
-define worker with id as Int:
-    display concat("Worker " and int_to_string(id))
+define worker with id as Int and ch:
+    send id * 10 to ch
     return 0
 
 define main:
-    spawn worker(1)
-    spawn worker(2)
-    spawn worker(3)
+    set ch to channel
+    spawn worker(1 and ch)
+    spawn worker(2 and ch)
+    set a to receive from ch
+    set b to receive from ch
+    display a + b
     return 0
 ```
 
@@ -283,6 +299,8 @@ define main:
     display value    # 42
     return 0
 ```
+
+> **Note:** Channel creation uses either `channel` (keyword) or `create_channel()` (function call). Send syntax is `send value to channel`. Receive syntax is `receive from channel`.
 
 ---
 
@@ -338,36 +356,81 @@ else:
 
 ---
 
-## 12. Standard Library
+## 12. Imports & Modules
 
-Import standard library modules:
+### Basic Import
 ```ernos
-import "stdlib/string.ep"
-import "stdlib/collections.ep"
-import "stdlib/json.ep"
+import "string"
+import "fs"
+import "json"
 ```
 
-19 modules available: `string`, `collections`, `fs`, `net`, `http`, `json`, `csv`, `datetime`, `crypto`, `regex`, `sync`, `os`, `test`, `log`, `math`, `sort`, `sql`, `gui`, `hash`.
+Standard library modules are resolved by name — `import "string"` resolves to `stdlib/string.ep`. Relative paths also work: `import "mylib.ep"`.
 
-See the full standard library documentation in `stdlib/README.md`.
+### Namespace Import
+```ernos
+import "math" as m
+
+define main:
+    set result to m_absolute(-42)
+    display result    # 42
+    return 0
+```
+
+When using `import "module" as alias`, all functions from the module are available with the `alias_` prefix while also remaining available by their original names.
 
 ---
 
-## 13. Compilation
+## 13. Standard Library
+
+23 modules available: `string`, `collections`, `fs`, `net`, `http`, `json`, `csv`, `datetime`, `crypto`, `regex`, `sync`, `os`, `test`, `log`, `math`, `sort`, `sql`, `gui`, `hash`, `toml`, `static_server`, `websocket`, `select`.
+
+### Core Modules
+
+| Module | Description |
+|--------|-------------|
+| `string` | String manipulation, builder, formatting |
+| `collections` | HashMap, HashSet, Stack, Queue, PriorityQueue |
+| `fs` | File I/O, directory operations, paths |
+| `os` | Environment, process, system info |
+| `datetime` | Timestamps, formatting, arithmetic |
+| `math` | Arithmetic and mathematical functions |
+| `json` | JSON parsing and generation |
+| `csv` | CSV parsing and generation |
+| `regex` | Pattern matching |
+| `crypto` | Hashing, encoding, random |
+| `sync` | Mutex, RWLock, Atomic, Barrier, Semaphore |
+| `net` / `http` | TCP sockets, HTTP client and server |
+| `test` | Assertions and test runner |
+| `log` | Structured logging |
+| `sort` | Sorting algorithms |
+| `sql` | SQLite bindings |
+| `gui` | GUI via raylib |
+| `hash` | Hashing utilities |
+| `toml` | TOML config parsing |
+| `static_server` | Static file HTTP server |
+| `websocket` | WebSocket protocol |
+| `select` | I/O multiplexing |
+
+---
+
+## 14. Compilation
 
 ### Basic Usage
 ```bash
-ernos program.ep           # Compile with -O2
-./program                  # Run the native binary
+./target/release/ernos program.ep    # Compile with -O2
+./program                            # Run the native binary
 ```
 
 ### Build Modes
 ```bash
-ernos --release program.ep  # Compile with -O3 + LTO
-ernos --debug program.ep    # Compile with -O0 + debug symbols
-ernos --check program.ep    # Type check only, no binary
-ernos --format program.ep   # Auto-format source code
-ernos --repl                # Interactive REPL
+ernos program.ep --release    # Compile with -O3 + LTO
+ernos program.ep --debug      # Compile with -O0 + debug symbols
+ernos check program.ep        # Type check only, no binary
+ernos format program.ep       # Auto-format source code
+ernos --repl                  # Interactive REPL
+ernos program.ep --native     # Native assembly (no Clang)
+ernos program.ep --asan       # AddressSanitizer
 ```
 
 ### Cross-Platform
@@ -378,9 +441,6 @@ clang program_compiled.c -O2 -o program -lpthread
 
 # Linux
 gcc program_compiled.c -O2 -o program -lpthread
-
-# Windows (MinGW)
-gcc program_compiled.c -O2 -o program.exe -lpthread
 ```
 
 ---
@@ -394,6 +454,7 @@ gcc program_compiled.c -O2 -o program.exe -lpthread
 | `Bool` | Boolean | `true`, `false` |
 | `Str` | String literal (immutable) | `"hello"` |
 | `DynStr` | Heap-allocated string | `concat("a" and "b")` |
+| `Any` | Top type (from container returns) | `get_list(l and 0)` |
 | `List of T` | Dynamic array | `create_list()` |
 | `StructName` | Named struct | `create Point: ...` |
 | `EnumName` | Tagged union | `Ok with 42` |

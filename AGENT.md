@@ -198,6 +198,9 @@ else:
 repeat while x < 100:
     set x to x + 1
 
+while x < 100:
+    set x to x + 1
+
 for each item in items:
     display item
 
@@ -249,6 +252,10 @@ send 42 to ch
 # Imports
 import "string"
 import "fs"
+import "math" as m
+
+# Namespace import usage
+set val to m_absolute(-10)
 
 # F-strings
 display f"Hello {name}, you are {age} years old"
@@ -258,6 +265,10 @@ set items to create_list()
 append_list(items and 10)
 display get_list(items and 0)
 display length_list(items)
+
+# List literals
+set nums to [1, 2, 3]
+set names to ["Alice", "Bob"]
 
 # Maps
 set m to create_map()
@@ -284,13 +295,13 @@ These are implemented as C functions in the runtime (codegen.rs). They are NOT E
 `string_length(s)`, `substring(s and start and len)`, `string_concat(a and b)` (alias: `concat`), `int_to_string(n)`, `string_to_int(s)`, `string_contains(s and sub)`, `string_index_of(s and sub)`, `string_replace(s and old and new)`, `string_split(s and delim)`, `string_upper(s)`, `string_lower(s)`, `string_trim(s)`, `char_at(s and index)`, `get_character(s and index)` (returns ASCII code)
 
 ### I/O
-`display`, `read_file_content(path)`, `write_file_content(path and content)`, `file_append(path and content)`
+`display`, `read_file_content(path)`, `write_file_content(path and content)`, `file_append(path and content)`, `file_read(path)`, `file_write(path and content)`, `file_exists(path)`
 
 ### Concurrency
-`create_channel()`, `send ... to ...`, `receive from ...`, `spawn`
+`create_channel()`, `send ... to ...`, `receive from ...`, `spawn`, `channel_has_data(ch)`, `channel_try_recv(ch)`
 
 ### Math / System
-`random_range(min and max)`, `time_now()`, `sleep_ms(ms)`, `exit(code)`
+`ep_random_int(min and max)`, `ep_time_ms()`, `ep_time_now_ms()`, `ep_time_now_sec()`, `ep_sleep_ms(ms)`, `ep_abs(n)`, `ep_system(cmd)`
 
 ---
 
@@ -318,13 +329,14 @@ If any step fails, the change is not ready. Fix it before committing.
 
 ## Known Constraints
 
-1. **All values are `long long`** — no floats at runtime yet (Float is in the spec but not fully implemented in codegen)
+1. **All values are `long long`** — no floats at runtime yet (Float is in the type system but codegen support is partial)
 2. **Single-file compilation** — the import system flattens everything into one C file
-3. **No generics** — the type system is monomorphic (parametric polymorphism via `MonoType::Any` for container returns)
+3. **MonoType::Any for containers** — `get_list`, `pop_list`, `map_get_val`, `map_get_str` return `Any` to support heterogeneous data
 4. **No closures over mutable state** — closures capture by value at creation time
 5. **GC is stop-the-world** — all threads pause during collection (protected by `ep_gc_mutex`)
 6. **Thread limit** — maximum 256 concurrent threads (`EP_MAX_THREADS`)
 7. **No Windows support** — partial `#ifdef _WIN32` polyfills exist but are untested
+8. **Namespace imports** — `import "module" as alias` adds `alias_` prefixed function names
 
 ---
 
