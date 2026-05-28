@@ -355,22 +355,43 @@ implement Printable for User:
 These are implemented as C functions in the runtime (codegen.rs). They are NOT ErnosPlain functions — they are compiler intrinsics. Do not try to redefine them.
 
 ### Lists
-`create_list()`, `append_list(list and value)`, `get_list(list and index)`, `set_list(list and index and value)`, `length_list(list)`, `pop_list(list)`, `remove_list(list and index)`, `free_list(list)`
+`create_list()`, `append_list(list and value)`, `get_list(list and index)`, `set_list(list and index and value)`, `length_list(list)`, `pop_list(list)`, `remove_list(list and index)`, `free_list(list)`, `get_list_data_ptr(list)`, `string_from_list(list)`
 
 ### Maps
-`create_map()`, `map_insert(map and key and value)`, `map_get_val(map and key)`, `map_get_str(map and key)`, `map_set_str(map and key and value)`, `map_contains(map and key)`, `map_delete(map and key)`, `map_keys(map)`, `map_values(map)`, `map_size(map)`, `free_map(map)`
+`create_map()`, `map_insert(map and key and value)`, `map_get_val(map and key)`, `map_get_str(map and key)`, `map_set_str(map and key and value)`, `map_contains(map and key)`, `map_has_key(map and key)`, `map_delete(map and key)`, `map_keys(map)`, `map_values(map)`, `map_size(map)`, `free_map(map)`
+
+### Deques
+`create_deque()`, `deque_push_front(deque and value)`, `deque_push_back(deque and value)`, `deque_pop_front(deque)`, `deque_pop_back(deque)`, `deque_length(deque)`, `free_deque(deque)`
 
 ### Strings
-`string_length(s)`, `substring(s and start and len)`, `string_concat(a and b)` (alias: `concat`), `int_to_string(n)` (alias: `ep_int_to_str`), `string_to_int(s)`, `string_contains(s and sub)`, `string_index_of(s and sub)`, `string_replace(s and old and new)`, `string_split(s and delim)`, `string_upper(s)`, `string_lower(s)`, `string_trim(s)`, `char_at(s and index)`, `get_character(s and index)` (returns ASCII code), `char_from_code(code)` (returns single-char string)
+`string_length(s)`, `substring(s and start and len)`, `string_concat(a and b)` (alias: `concat`), `int_to_string(n)` (alias: `ep_int_to_str`), `string_to_int(s)`, `string_contains(s and sub)`, `string_index_of(s and sub)`, `string_replace(s and old and new)`, `string_split(s and delim)`, `string_upper(s)`, `string_lower(s)`, `string_trim(s)`, `char_at(s and index)`, `get_character(s and index)` (returns ASCII code), `char_from_code(code)` (returns single-char string), `ep_auto_to_string(val)`
 
 ### I/O
-`display expr`, `read_file_content(path)`, `write_file_content(path and content)`, `file_append(path and content)`, `file_read(path)`, `file_write(path and content)`, `file_exists(path)`
+`display expr`, `display_string(s)`, `read_line()`, `read_int()`, `read_float()`, `read_file_content(path)`, `write_file_content(path and content)`, `file_append(path and content)`, `file_read(path)`, `file_write(path and content)`, `file_exists(path)`
+
+### Filesystem
+`fs_exists(path)`, `fs_is_file(path)`, `fs_is_dir(path)`, `fs_get_size(path)`, `fs_delete_file(path)`, `fs_copy_file(src and dst)`, `fs_move_file(src and dst)`, `fs_scan_dir(path)`
 
 ### Concurrency
-`channel` (keyword), `create_channel()`, `send value to channel` (statement), `receive from channel` (expression), `spawn function(args)` (statement), `channel_has_data(ch)`, `channel_try_recv(ch)`
+`channel` (keyword), `create_channel()`, `send value to channel` (statement), `receive from channel` (expression), `spawn function(args)` (statement), `channel_has_data(ch)`, `channel_try_recv(ch)`, `channel_select(ch_list)`, `send_channel(ch and val)`, `recv_channel(ch)`
+
+### Networking
+`ep_net_connect(host and port)`, `ep_net_listen(port)`, `ep_net_accept(server)`, `ep_net_send(socket and data)`, `ep_net_recv(socket and bufsize)`, `ep_net_recv_bytes(socket and bufsize)`, `ep_net_close(socket)`, `ep_http_request(method and url and body and headers)`
+
+### JSON
+`json_get_int(json and key)`, `json_get_string(json and key)`, `json_get_bool(json and key)`
+
+### SQLite
+`sqlite_get_callback_ptr()`
 
 ### Math / System
-`ep_random_int(min and max)`, `ep_time_ms()`, `ep_time_now_ms()`, `ep_time_now_sec()`, `ep_sleep_ms(ms)`, `ep_abs(n)`, `ep_system(cmd)`, `ep_play_sound(path)` (macOS)
+`ep_random_int(min and max)`, `ep_time_ms()`, `ep_time_now_ms()`, `ep_time_now_sec()`, `ep_time_day()`, `ep_time_month()`, `ep_time_year()`, `ep_sleep_ms(ms)`, `ep_abs(n)`, `ep_system(cmd)`, `ep_play_sound(path)` (macOS), `run_command(cmd)`
+
+### Float
+`int_to_float(n)`, `float_to_int(f)`, `float_to_string(f)`
+
+### Command-Line Args
+`get_argument_count()`, `get_argument(index)`
 
 ### FFI (Dynamic Library Loading)
 `ep_dlopen(path)` — load .dylib/.so, returns handle

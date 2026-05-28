@@ -286,11 +286,11 @@ Source (.ep)
 | `src/type_check.rs` | ~1,380 | Hindley-Milner type inference with unification |
 | `src/borrow_check.rs` | ~520 | Ownership, borrowing, Send/Sync analysis |
 | `src/optimizer.rs` | ~250 | AST-level constant folding and DCE |
-| `src/codegen.rs` | ~5,360 | C code generation with full runtime |
+| `src/codegen.rs` | ~5,660 | C code generation with full runtime |
 | `src/diagnostics.rs` | ~380 | Rich error reporting with ANSI colors |
 | `src/native_codegen.rs` | ~500 | ARM64 native assembly backend (macOS + Linux) |
 | `src/x86_64_codegen.rs` | ~480 | x86_64 native assembly backend (macOS + Linux) |
-| `src/bind_c.rs` | ~400 | C header binding generator (zero-dependency) |
+| `src/bind_c.rs` | ~1,420 | C header binding generator (zero-dependency) |
 | `src/transpile_py.rs` | ~1,840 | Python → ErnosPlain transpiler |
 | `src/transpile_c.rs` | ~1,300 | C → ErnosPlain transpiler |
 | `src/transpile_js.rs` | ~1,210 | JavaScript → ErnosPlain transpiler |
