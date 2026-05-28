@@ -752,6 +752,18 @@ impl TypeChecker {
         self.func_types.insert("ep_time_year".into(), (vec![MonoType::Int], MonoType::Int));
         self.func_types.insert("ep_time_month".into(), (vec![MonoType::Int], MonoType::Int));
         self.func_types.insert("ep_time_day".into(), (vec![MonoType::Int], MonoType::Int));
+
+        // FFI pointer/byte builtins
+        self.func_types.insert("str_to_ptr".into(), (vec![MonoType::Str], MonoType::Int));
+        self.func_types.insert("ptr_to_str".into(), (vec![MonoType::Int], MonoType::DynStr));
+        self.func_types.insert("peek_byte".into(), (vec![MonoType::Int, MonoType::Int], MonoType::Int));
+        self.func_types.insert("poke_byte".into(), (vec![MonoType::Int, MonoType::Int, MonoType::Int], MonoType::Int));
+        self.func_types.insert("alloc_bytes".into(), (vec![MonoType::Int], MonoType::Int));
+        self.func_types.insert("free_bytes".into(), (vec![MonoType::Int], MonoType::Int));
+        let v_ltb = self.fresh_var();
+        self.func_types.insert("list_to_bytes".into(), (vec![MonoType::List(Box::new(v_ltb))], MonoType::Int));
+        let v_btl = self.fresh_var();
+        self.func_types.insert("bytes_to_list".into(), (vec![MonoType::Int, MonoType::Int], MonoType::List(Box::new(v_btl))));
     }
 
     // ──────────────────────────────────────────

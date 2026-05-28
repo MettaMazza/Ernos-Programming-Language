@@ -233,6 +233,17 @@ impl Codegen {
         self.func_return_types.insert("ep_base64_encode".to_string(), Type::DynStr);
         self.func_return_types.insert("create_channel".to_string(), Type::Int);
 
+        // FFI pointer/byte builtins
+        self.func_return_types.insert("str_to_ptr".to_string(), Type::Int);
+        self.func_return_types.insert("ptr_to_str".to_string(), Type::DynStr);
+        self.func_return_types.insert("ep_int_to_str".to_string(), Type::DynStr);
+        self.func_return_types.insert("peek_byte".to_string(), Type::Int);
+        self.func_return_types.insert("poke_byte".to_string(), Type::Int);
+        self.func_return_types.insert("alloc_bytes".to_string(), Type::Int);
+        self.func_return_types.insert("free_bytes".to_string(), Type::Int);
+        self.func_return_types.insert("list_to_bytes".to_string(), Type::Int);
+        self.func_return_types.insert("bytes_to_list".to_string(), Type::List);
+
         // Save the set of builtin C runtime names before externals/user funcs are added
         self.builtin_c_funcs = self.func_return_types.keys().cloned().collect();
 
@@ -2122,6 +2133,48 @@ impl Codegen {
         out.push_str("    return (long long)buf;\n");
         out.push_str("}\n\n");
 
+        // ep_int_to_str alias
+        out.push_str("long long ep_int_to_str(long long val) { return int_to_string(val); }\n\n");
+
+        // FFI pointer/byte builtins
+        out.push_str("long long str_to_ptr(long long s) { return s; }\n");
+        out.push_str("long long ptr_to_str(long long p) {\n");
+        out.push_str("    if (p == 0) return (long long)strdup(\"\");\n");
+        out.push_str("    char* copy = strdup((const char*)p);\n");
+        out.push_str("    ep_gc_register(copy, EP_OBJ_STRING);\n");
+        out.push_str("    return (long long)copy;\n");
+        out.push_str("}\n\n");
+        out.push_str("long long peek_byte(long long ptr, long long offset) {\n");
+        out.push_str("    return (long long)((unsigned char*)ptr)[offset];\n");
+        out.push_str("}\n");
+        out.push_str("long long poke_byte(long long ptr, long long offset, long long value) {\n");
+        out.push_str("    ((unsigned char*)ptr)[offset] = (unsigned char)value;\n");
+        out.push_str("    return 0;\n");
+        out.push_str("}\n");
+        out.push_str("long long alloc_bytes(long long size) {\n");
+        out.push_str("    return (long long)calloc((size_t)size, 1);\n");
+        out.push_str("}\n");
+        out.push_str("long long free_bytes(long long ptr) {\n");
+        out.push_str("    free((void*)ptr);\n");
+        out.push_str("    return 0;\n");
+        out.push_str("}\n");
+        out.push_str("long long list_to_bytes(long long list_ptr) {\n");
+        out.push_str("    long long len = length_list(list_ptr);\n");
+        out.push_str("    unsigned char* buf = (unsigned char*)malloc(len);\n");
+        out.push_str("    for (long long i = 0; i < len; i++) {\n");
+        out.push_str("        buf[i] = (unsigned char)get_list(list_ptr, i);\n");
+        out.push_str("    }\n");
+        out.push_str("    return (long long)buf;\n");
+        out.push_str("}\n");
+        out.push_str("long long bytes_to_list(long long ptr, long long len) {\n");
+        out.push_str("    long long list = create_list();\n");
+        out.push_str("    unsigned char* buf = (unsigned char*)ptr;\n");
+        out.push_str("    for (long long i = 0; i < len; i++) {\n");
+        out.push_str("        append_list(list, (long long)buf[i]);\n");
+        out.push_str("    }\n");
+        out.push_str("    return list;\n");
+        out.push_str("}\n\n");
+
         out.push_str("long long string_to_int(long long s) {\n");
         out.push_str("    if (s == 0) return 0;\n");
         out.push_str("    return atoll((const char*)s);\n");
@@ -2347,6 +2400,48 @@ impl Codegen {
         self.out.push_str("    snprintf(buf, 32, \"%lld\", val);\n");
         self.out.push_str("    ep_gc_register(buf, EP_OBJ_STRING);\n");
         self.out.push_str("    return (long long)buf;\n");
+        self.out.push_str("}\n\n");
+
+        // ep_int_to_str alias
+        self.out.push_str("long long ep_int_to_str(long long val) { return int_to_string(val); }\n\n");
+
+        // FFI pointer/byte builtins
+        self.out.push_str("long long str_to_ptr(long long s) { return s; }\n");
+        self.out.push_str("long long ptr_to_str(long long p) {\n");
+        self.out.push_str("    if (p == 0) return (long long)strdup(\"\");\n");
+        self.out.push_str("    char* copy = strdup((const char*)p);\n");
+        self.out.push_str("    ep_gc_register(copy, EP_OBJ_STRING);\n");
+        self.out.push_str("    return (long long)copy;\n");
+        self.out.push_str("}\n\n");
+        self.out.push_str("long long peek_byte(long long ptr, long long offset) {\n");
+        self.out.push_str("    return (long long)((unsigned char*)ptr)[offset];\n");
+        self.out.push_str("}\n");
+        self.out.push_str("long long poke_byte(long long ptr, long long offset, long long value) {\n");
+        self.out.push_str("    ((unsigned char*)ptr)[offset] = (unsigned char)value;\n");
+        self.out.push_str("    return 0;\n");
+        self.out.push_str("}\n");
+        self.out.push_str("long long alloc_bytes(long long size) {\n");
+        self.out.push_str("    return (long long)calloc((size_t)size, 1);\n");
+        self.out.push_str("}\n");
+        self.out.push_str("long long free_bytes(long long ptr) {\n");
+        self.out.push_str("    free((void*)ptr);\n");
+        self.out.push_str("    return 0;\n");
+        self.out.push_str("}\n");
+        self.out.push_str("long long list_to_bytes(long long list_ptr) {\n");
+        self.out.push_str("    long long len = length_list(list_ptr);\n");
+        self.out.push_str("    unsigned char* buf = (unsigned char*)malloc(len);\n");
+        self.out.push_str("    for (long long i = 0; i < len; i++) {\n");
+        self.out.push_str("        buf[i] = (unsigned char)get_list(list_ptr, i);\n");
+        self.out.push_str("    }\n");
+        self.out.push_str("    return (long long)buf;\n");
+        self.out.push_str("}\n");
+        self.out.push_str("long long bytes_to_list(long long ptr, long long len) {\n");
+        self.out.push_str("    long long list = create_list();\n");
+        self.out.push_str("    unsigned char* buf = (unsigned char*)ptr;\n");
+        self.out.push_str("    for (long long i = 0; i < len; i++) {\n");
+        self.out.push_str("        append_list(list, (long long)buf[i]);\n");
+        self.out.push_str("    }\n");
+        self.out.push_str("    return list;\n");
         self.out.push_str("}\n\n");
 
         self.out.push_str("long long string_to_int(long long s) {\n");
