@@ -1186,6 +1186,7 @@ impl Codegen {
                     // String matching via strcmp
                     self.out.push_str("    {\n");
                     self.out.push_str(&format!("        const char* _match_val = (const char*){};\n", expr_str));
+                    self.out.push_str("        if (_match_val) {\n");
                     for (arm_idx, (pattern, _bindings, body)) in arms.iter().enumerate() {
                         let keyword = if arm_idx == 0 { "if" } else { "else if" };
                         // Escape the pattern string for C
@@ -1196,6 +1197,7 @@ impl Codegen {
                         }
                         self.out.push_str("        }\n");
                     }
+                    self.out.push_str("        }\n"); // close if (_match_val)
                     self.out.push_str("    }\n");
                 } else if matches!(enum_type, Type::Int) {
                     // Integer matching via ==
@@ -1379,15 +1381,26 @@ impl Codegen {
                     };
                     Ok(format!("({} {} {})", left_str, op_str, right_str))
                 } else if is_string {
-                    let cmp_op = match op {
-                        CompOp::LessThan => "< 0",
-                        CompOp::GreaterThan => "> 0",
-                        CompOp::LessEqual => "<= 0",
-                        CompOp::GreaterEqual => ">= 0",
-                        CompOp::Equals => "== 0",
-                        CompOp::NotEquals => "!= 0",
-                    };
-                    Ok(format!("(strcmp((char*){}, (char*){}) {})", left_str, right_str, cmp_op))
+                    match op {
+                        CompOp::Equals => {
+                            Ok(format!("ep_str_equals({}, {})", left_str, right_str))
+                        }
+                        CompOp::NotEquals => {
+                            Ok(format!("(!ep_str_equals({}, {}))", left_str, right_str))
+                        }
+                        _ => {
+                            // Ordering comparisons — null-safe: if either is null, return 0 (false)
+                            let cmp_op = match op {
+                                CompOp::LessThan => "< 0",
+                                CompOp::GreaterThan => "> 0",
+                                CompOp::LessEqual => "<= 0",
+                                CompOp::GreaterEqual => ">= 0",
+                                _ => unreachable!(),
+                            };
+                            Ok(format!("((char*){l} && (char*){r} ? strcmp((char*){l}, (char*){r}) {cmp} : 0)",
+                                l=left_str, r=right_str, cmp=cmp_op))
+                        }
+                    }
                 } else {
                     let op_str = match op {
                         CompOp::LessThan => "<",
