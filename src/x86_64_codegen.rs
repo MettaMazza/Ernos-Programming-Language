@@ -257,13 +257,27 @@ impl X86_64Codegen {
         self.var_offsets.get(name).copied().unwrap_or(0)
     }
 
+    /// Check if an expression produces a string value (pointer to char data)
+    fn is_string_expr(expr: &Expr) -> bool {
+        match &expr.node {
+            ExprNode::StringLiteral(_) => true,
+            ExprNode::Call(name, _) => matches!(name.as_str(),
+                "concat" | "ep_auto_to_string" | "int_to_string" |
+                "string_upper" | "string_lower" | "substring" |
+                "string_trim" | "string_repeat" | "string_replace" |
+                "char_at" | "read_input" | "read_file"
+            ),
+            _ => false,
+        }
+    }
+
     fn gen_statement(&mut self, stmt: &Stmt, cleanup_label: &str, frame_size: i64) -> Result<(), String> {
         match &stmt.node {
             StmtNode::Display(expr) => {
                 self.gen_expr(expr, "rax", frame_size)?;
 
                 // System V x86_64: 1st arg in rdi, 2nd arg in rsi, al = 0 (no floats)
-                if matches!(expr.node, ExprNode::StringLiteral(_)) {
+                if Self::is_string_expr(expr) {
                     if self.is_macos {
                         self.emit("    lea rdi, [rip + fmt_str]");
                     } else {

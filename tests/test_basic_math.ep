@@ -1,4 +1,4 @@
-# Simple self-host validation test
+# Basic arithmetic and function call test
 define add with a and b:
     return a + b
 
@@ -7,5 +7,5 @@ define main:
     set y to 20
     set result to add(x and y)
     display result
-    display "Self-hosted compiler works!"
+    display "Basic math test passed"
     return 0

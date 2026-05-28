@@ -533,7 +533,16 @@ fn main() {
         std::process::exit(1);
     }
 
-    let stem = input_path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+    // Place output binary next to the source file, not in CWD
+    let stem = {
+        let parent = input_path.parent().unwrap_or(Path::new("."));
+        let name = input_path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+        if parent == Path::new("") || parent == Path::new(".") {
+            name.to_string()
+        } else {
+            format!("{}/{}", parent.display(), name)
+        }
+    };
     
     println!("[1/3] Tokenizing and Parsing '{}'...", input_path_str);
 
@@ -579,6 +588,17 @@ fn main() {
         let has_main = program.functions.iter().any(|f| f.name == "main");
         if !has_main {
             eprintln!("Compiler Error: Every program must have a 'main' function.");
+            std::process::exit(1);
+        }
+    }
+
+    // Validate compile flags — reject unknown --flags instead of silently ignoring them
+    let known_flags = ["--native", "--release", "--debug", "--asan", "--sanitize"];
+    let start_idx = if is_test_mode { 3 } else { 2 }; // skip binary name + source/test arg
+    for arg in args.iter().skip(start_idx) {
+        if arg.starts_with("--") && !known_flags.contains(&arg.as_str()) {
+            eprintln!("Error: Unknown flag '{}'", arg);
+            eprintln!("Valid flags: {}", known_flags.join(", "));
             std::process::exit(1);
         }
     }
@@ -682,7 +702,7 @@ fn main() {
         let ld_status = if os == "macos" {
             let target_arch = if is_x86_64 { "x86_64" } else { "arm64" };
             Command::new("ld")
-                .arg("-o").arg(stem)
+                .arg("-o").arg(&stem)
                 .arg(&obj_path)
                 .arg(&runtime_obj_path)
                 .arg("-lSystem")
@@ -693,7 +713,7 @@ fn main() {
             // Linux: use gcc to link, include pthread and math libs
             Command::new("gcc")
                 .arg("-no-pie")
-                .arg("-o").arg(stem)
+                .arg("-o").arg(&stem)
                 .arg(&obj_path)
                 .arg(&runtime_obj_path)
                 .arg("-lpthread")
@@ -709,7 +729,7 @@ fn main() {
                 let _ = fs::remove_file(&obj_path);
                 let _ = fs::remove_file(&runtime_c_path);
                 let _ = fs::remove_file(&runtime_obj_path);
-                println!("\nSuccessfully compiled into native binary: ./{}", stem);
+                println!("\nSuccessfully compiled into native binary: {}", stem);
             }
             Ok(s) => {
                 eprintln!("Error: Linker failed with exit code: {}", s);
@@ -777,7 +797,11 @@ fn main() {
     println!("[3/3] Compiling and Linking via Clang...");
 
     // Run clang to compile and link the transpiled C file
-    let output_executable = format!("./{}", stem);
+    let output_executable = if stem.contains('/') {
+        stem.clone()
+    } else {
+        format!("./{}", stem)
+    };
     
     let mut link_flags = Vec::new();
     link_flags.push("-lpthread");
