@@ -81,7 +81,6 @@ impl Parser {
             Token::Trait => Ok(("trait".to_string(), span)),
             Token::Implement => Ok(("implement".to_string(), span)),
             Token::Structure => Ok(("structure".to_string(), span)),
-            Token::Channel => Ok(("channel".to_string(), span)),
             Token::Check => Ok(("check".to_string(), span)),
             // English alias keywords — allowed as identifiers for backward compatibility
             Token::Define => Ok(("describe".to_string(), span)),   // "describe" alias
@@ -259,7 +258,7 @@ impl Parser {
                     let is_name_token = matches!(&self.tokens[self.pos + 1].0,
                         Token::Identifier(_) | Token::Choice | Token::Field |
                         Token::Variant | Token::Structure | Token::Check |
-                        Token::Trait | Token::Implement | Token::Channel |
+                        Token::Trait | Token::Implement |
                         Token::Define | Token::Repeat | Token::Display |
                         Token::Break | Token::Continue | Token::Each |
                         Token::Multiply | Token::Returning

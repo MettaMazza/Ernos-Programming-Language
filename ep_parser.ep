@@ -271,6 +271,10 @@ define parse_program with state:
                         set dummy to advance_token(state)
                         set ok to expect_token_type(state and 1) # define
                         set tok_name to advance_token(state)
+                        if get_token_type(tok_name) == 34: # TOK_CHANNEL
+                            display "Parser Error: Cannot use 'channel' as external function name at line:"
+                            display get_token_line(tok_name)
+                            return 0
                         set name to get_token_value(tok_name)
                         set params to create_list() + 0
                         set next_tok to peek_token(state)
@@ -282,6 +286,10 @@ define parse_program with state:
                                 set dummy to advance_token(state)
                                 set is_borrow to 1
                             set tok_param to advance_token(state)
+                            if get_token_type(tok_param) == 34: # TOK_CHANNEL
+                                display "Parser Error: Cannot use 'channel' as parameter name at line:"
+                                display get_token_line(tok_param)
+                                return 0
                             set param_name to get_token_value(tok_param)
                             set param_node to create_list() + 0
                             set ok to append_list(param_node and param_name)
@@ -298,6 +306,10 @@ define parse_program with state:
                                         set dummy to advance_token(state)
                                         set is_borrow3 to 1
                                     set tok_param to advance_token(state)
+                                    if get_token_type(tok_param) == 34: # TOK_CHANNEL
+                                        display "Parser Error: Cannot use 'channel' as parameter name at line:"
+                                        display get_token_line(tok_param)
+                                        return 0
                                     set param_name to get_token_value(tok_param)
                                     set param_node to create_list() + 0
                                     set ok to append_list(param_node and param_name)
@@ -331,6 +343,10 @@ define parse_function_async with state and is_async:
     set ok to expect_token_type(state and 1) # define
     
     set tok_name to advance_token(state)
+    if get_token_type(tok_name) == 34: # TOK_CHANNEL
+        display "Parser Error: Cannot use 'channel' as function name at line:"
+        display get_token_line(tok_name)
+        return 0
     set name to get_token_value(tok_name)
     
     set params to create_list() + 0
@@ -345,6 +361,10 @@ define parse_function_async with state and is_async:
             set dummy to advance_token(state)
             set is_borrow to 1
         set tok_param to advance_token(state)
+        if get_token_type(tok_param) == 34: # TOK_CHANNEL
+            display "Parser Error: Cannot use 'channel' as parameter name at line:"
+            display get_token_line(tok_param)
+            return 0
         set param_name to get_token_value(tok_param)
         set param_node to create_list() + 0
         set ok to append_list(param_node and param_name)
@@ -362,6 +382,10 @@ define parse_function_async with state and is_async:
                     set dummy to advance_token(state)
                     set is_borrow3 to 1
                 set tok_param to advance_token(state)
+                if get_token_type(tok_param) == 34: # TOK_CHANNEL
+                    display "Parser Error: Cannot use 'channel' as parameter name at line:"
+                    display get_token_line(tok_param)
+                    return 0
                 set param_name to get_token_value(tok_param)
                 set param_node to create_list() + 0
                 set ok to append_list(param_node and param_name)
@@ -419,6 +443,10 @@ define parse_statement with state:
     
     if t == 2: # set
         set tok_var to advance_token(state)
+        if get_token_type(tok_var) == 34: # TOK_CHANNEL
+            display "Parser Error: Cannot use 'channel' as variable name at line:"
+            display get_token_line(tok_var)
+            return 0
         set var_name to get_token_value(tok_var)
         set ok to expect_token_type(state and 3) # to
         set expr to parse_expr(state and 0) + 0
