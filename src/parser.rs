@@ -83,6 +83,15 @@ impl Parser {
             Token::Structure => Ok(("structure".to_string(), span)),
             Token::Channel => Ok(("channel".to_string(), span)),
             Token::Check => Ok(("check".to_string(), span)),
+            // English alias keywords — allowed as identifiers for backward compatibility
+            Token::Define => Ok(("describe".to_string(), span)),   // "describe" alias
+            Token::Repeat => Ok(("loop".to_string(), span)),       // "loop" alias
+            Token::Display => Ok(("show".to_string(), span)),      // "show"/"print" alias
+            Token::Break => Ok(("stop".to_string(), span)),        // "stop" alias
+            Token::Continue => Ok(("skip".to_string(), span)),     // "skip" alias
+            Token::Each => Ok(("every".to_string(), span)),        // "every" alias
+            Token::Multiply => Ok(("times".to_string(), span)),    // "times" alias
+            Token::Returning => Ok(("returns".to_string(), span)), // "returns" alias
             _ => Err(ParseError {
                 message: format!("Expected identifier, found {:?}", tok),
                 span,
@@ -245,7 +254,17 @@ impl Parser {
                     let td = self.parse_trait_def()?;
                     trait_defs.push(td);
                 } else if self.pos + 1 < self.tokens.len() {
-                    if let Token::Identifier(_) = &self.tokens[self.pos + 1].0 {
+                    // Check if the next token could be an identifier (name)
+                    // This includes actual identifiers plus keywords allowed as names
+                    let is_name_token = matches!(&self.tokens[self.pos + 1].0,
+                        Token::Identifier(_) | Token::Choice | Token::Field |
+                        Token::Variant | Token::Structure | Token::Check |
+                        Token::Trait | Token::Implement | Token::Channel |
+                        Token::Define | Token::Repeat | Token::Display |
+                        Token::Break | Token::Continue | Token::Each |
+                        Token::Multiply | Token::Returning
+                    );
+                    if is_name_token {
                         // Look ahead: is there an "on" after the name to detect method?
                         let is_method = self.pos + 2 < self.tokens.len() && self.tokens[self.pos + 2].0 == Token::On;
                         if is_method {
@@ -1147,12 +1166,19 @@ impl Parser {
             }
             // Allow keywords as variable names in expression position
             ref kw @ (Token::Choice | Token::Field | Token::Variant | Token::Structure |
-            Token::Check | Token::Trait | Token::Implement) => {
+            Token::Check | Token::Trait | Token::Implement |
+            Token::Define | Token::Repeat | Token::Display | Token::Break | Token::Continue |
+            Token::Each | Token::Returning) => {
                 let name = match kw {
                     Token::Choice => "choice", Token::Field => "field",
                     Token::Variant => "variant", Token::Structure => "structure",
                     Token::Check => "check",
                     Token::Trait => "trait", Token::Implement => "implement",
+                    // English alias keywords usable as identifiers
+                    Token::Define => "describe", Token::Repeat => "loop",
+                    Token::Display => "show",
+                    Token::Break => "stop", Token::Continue => "skip",
+                    Token::Each => "every", Token::Returning => "returns",
                     _ => unreachable!(),
                 };
                 Expr::with_span(ExprNode::Identifier(name.to_string()), span)

@@ -5502,7 +5502,7 @@ long long ep_auto_to_string(long long val) {
 #if defined(__APPLE__)
         // macOS: use vm_read_overwrite to safely probe
         char probe;
-        mach_vm_size_t sz = 1;
+        vm_size_t sz = 1;
         kern_return_t kr = vm_read_overwrite(mach_task_self(), (mach_vm_address_t)val, 1, (mach_vm_address_t)&probe, &sz);
         if (kr == KERN_SUCCESS) {
             unsigned char first = (unsigned char)probe;

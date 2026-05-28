@@ -571,7 +571,12 @@ impl<'a> Lexer<'a> {
                             continue;
                         }
                     } else if w_lower == "is" {
-                        if let Some(next_idx) = match_phrase(i + 1, &["less", "than"]) {
+                        // "is not equal to" must be checked before "is not" to avoid partial match
+                        if let Some(next_idx) = match_phrase(i + 1, &["not", "equal", "to"]) {
+                            tokens.push((Token::NotEquals, span.clone()));
+                            i = next_idx;
+                            continue;
+                        } else if let Some(next_idx) = match_phrase(i + 1, &["less", "than"]) {
                             tokens.push((Token::LessThan, span.clone()));
                             i = next_idx;
                             continue;
@@ -583,8 +588,53 @@ impl<'a> Lexer<'a> {
                             tokens.push((Token::Equals, span.clone()));
                             i = next_idx;
                             continue;
-                        } else if let Some(next_idx) = match_phrase(i + 1, &["not", "equal", "to"]) {
+                        // New English aliases for comparisons
+                        } else if let Some(next_idx) = match_phrase(i + 1, &["at", "least"]) {
+                            tokens.push((Token::GreaterEqual, span.clone()));
+                            i = next_idx;
+                            continue;
+                        } else if let Some(next_idx) = match_phrase(i + 1, &["at", "most"]) {
+                            tokens.push((Token::LessEqual, span.clone()));
+                            i = next_idx;
+                            continue;
+                        } else if let Some(next_idx) = match_phrase(i + 1, &["more", "than"]) {
+                            tokens.push((Token::GreaterThan, span.clone()));
+                            i = next_idx;
+                            continue;
+                        } else if let Some(next_idx) = match_phrase(i + 1, &["fewer", "than"]) {
+                            tokens.push((Token::LessThan, span.clone()));
+                            i = next_idx;
+                            continue;
+                        } else if let Some(next_idx) = match_phrase(i + 1, &["smaller", "than"]) {
+                            tokens.push((Token::LessThan, span.clone()));
+                            i = next_idx;
+                            continue;
+                        } else if let Some(next_idx) = match_phrase(i + 1, &["bigger", "than"]) {
+                            tokens.push((Token::GreaterThan, span.clone()));
+                            i = next_idx;
+                            continue;
+                        } else if let Some(next_idx) = match_phrase(i + 1, &["larger", "than"]) {
+                            tokens.push((Token::GreaterThan, span.clone()));
+                            i = next_idx;
+                            continue;
+                        } else if let Some(next_idx) = match_phrase(i + 1, &["the", "same", "as"]) {
+                            tokens.push((Token::Equals, span.clone()));
+                            i = next_idx;
+                            continue;
+                        } else if let Some(next_idx) = match_phrase(i + 1, &["different", "from"]) {
                             tokens.push((Token::NotEquals, span.clone()));
+                            i = next_idx;
+                            continue;
+                        }
+                    } else if w_lower == "does" {
+                        if let Some(next_idx) = match_phrase(i + 1, &["not", "equal"]) {
+                            tokens.push((Token::NotEquals, span.clone()));
+                            i = next_idx;
+                            continue;
+                        }
+                    } else if w_lower == "give" {
+                        if let Some(next_idx) = match_phrase(i + 1, &["back"]) {
+                            tokens.push((Token::Return, span.clone()));
                             i = next_idx;
                             continue;
                         }
@@ -601,7 +651,13 @@ impl<'a> Lexer<'a> {
                             continue;
                         }
                     } else if w_lower == "for" {
+                        // "for each" and "for every" both work
                         if let Some(next_idx) = match_phrase(i + 1, &["each"]) {
+                            tokens.push((Token::For, span.clone()));
+                            tokens.push((Token::Each, span.clone()));
+                            i = next_idx;
+                            continue;
+                        } else if let Some(next_idx) = match_phrase(i + 1, &["every"]) {
                             tokens.push((Token::For, span.clone()));
                             tokens.push((Token::Each, span.clone()));
                             i = next_idx;
@@ -611,16 +667,16 @@ impl<'a> Lexer<'a> {
 
                     // Simple single-word keywords
                     let tok = match w_lower.as_str() {
-                        "define" => Token::Define,
+                        "define" | "describe" => Token::Define,
                         "with" => Token::With,
                         "and" => Token::And,
-                        "set" => Token::Set,
-                        "to" => Token::To,
+                        "set" | "let" => Token::Set,
+                        "to" | "be" => Token::To,
                         "if" => Token::If,
                         "else" => Token::Else,
                         "return" => Token::Return,
-                        "display" => Token::Display,
-                        "repeat" => Token::Repeat,
+                        "display" | "show" | "print" => Token::Display,
+                        "repeat" | "loop" => Token::Repeat,
                         "while" => Token::While,
                         "import" => Token::Import,
                         "spawn" => Token::Spawn,
@@ -635,12 +691,12 @@ impl<'a> Lexer<'a> {
                         "as" => Token::As,
                         "is" => Token::Is,
                         "create" => Token::Create,
-                        "returning" => Token::Returning,
+                        "returning" | "returns" => Token::Returning,
                         "choice" => Token::Choice,
                         "variant" => Token::Variant,
                         "check" => Token::Check,
                         "for" => Token::For,
-                        "each" => Token::Each,
+                        "each" | "every" => Token::Each,
                         "in" => Token::In,
                         "range" => Token::Range,
                         "on" => Token::On,
@@ -648,8 +704,8 @@ impl<'a> Lexer<'a> {
                         "implement" => Token::Implement,
                         "not" => Token::Not,
                         "modulo" => Token::Modulo,
-                        "break" => Token::Break,
-                        "continue" => Token::Continue,
+                        "break" | "stop" => Token::Break,
+                        "continue" | "skip" => Token::Continue,
                         "of" => Token::Of,
                         "try" => Token::Try,
                         "given" => Token::Given,
@@ -659,6 +715,7 @@ impl<'a> Lexer<'a> {
                         "await" => Token::Await,
                         "plus" => Token::Plus,
                         "minus" => Token::Minus,
+                        "times" => Token::Multiply,
                         "equals" => Token::Equals,
                         _ => Token::Identifier(word.clone()),
                     };
