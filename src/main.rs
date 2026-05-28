@@ -13,6 +13,8 @@ pub mod native_codegen;
 pub mod x86_64_codegen;
 pub mod bind_c;
 pub mod transpile_py;
+pub mod transpile_c;
+pub mod transpile_js;
 
 use std::env;
 use std::fs;
@@ -206,7 +208,7 @@ fn main() {
     if args[1] == "transpile" {
         if args.len() < 3 {
             eprintln!("Usage: ernos transpile <file.py> [-o output.ep]");
-            eprintln!("Supported: .py (Python)");
+            eprintln!("Supported: .py (Python), .c/.h (C), .js/.mjs (JavaScript)");
             std::process::exit(1);
         }
         let source_path = &args[2];
@@ -223,6 +225,8 @@ fn main() {
 
         let (output, lang) = match ext {
             "py" => (transpile_py::emit_ernos_from_python(source_path, &source), "Python"),
+            "c" | "h" => (transpile_c::emit_ernos_from_c(source_path, &source), "C"),
+            "js" | "mjs" => (transpile_js::emit_ernos_from_js(source_path, &source), "JavaScript"),
             _ => {
                 eprintln!("Unsupported source language: .{}", ext);
                 eprintln!("Supported: .py (Python)");
