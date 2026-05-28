@@ -770,7 +770,8 @@ impl Codegen {
                                         if src_bc > 0 {
                                             return Err(format!("Safety Error: Cannot move variable because it is currently borrowed: {}", src));
                                         }
-                                        if src_t != Type::RefList && src_t != Type::RefStr {
+                                        if src_t != Type::RefList && src_t != Type::RefStr
+                                            && src_t != Type::Str && src_t != Type::DynStr {
                                             owner_states.insert(src.clone(), OwnerState::Moved);
                                         }
                                     }
@@ -792,7 +793,8 @@ impl Codegen {
                             if src_bc > 0 {
                                 return Err(format!("Safety Error: Cannot move variable because it is currently borrowed: {}", src));
                             }
-                            if src_t != Type::RefList && src_t != Type::RefStr {
+                            if src_t != Type::RefList && src_t != Type::RefStr
+                                && src_t != Type::Str && src_t != Type::DynStr {
                                 owner_states.insert(src.clone(), OwnerState::Moved);
                             }
                         } else {
@@ -814,7 +816,8 @@ impl Codegen {
                                 if src_bc > 0 {
                                     return Err(format!("Safety Error: Cannot move variable because it is currently borrowed: {}", src));
                                 }
-                                if src_t != Type::RefList && src_t != Type::RefStr {
+                                if src_t != Type::RefList && src_t != Type::RefStr
+                                    && src_t != Type::Str && src_t != Type::DynStr {
                                     owner_states.insert(src.clone(), OwnerState::Moved);
                                 }
                             } else {
