@@ -674,7 +674,19 @@ pub fn emit_ernos_from_ruby(_filename: &str, source: &str) -> String {
     let stmts = parser.parse_file();
     let mut out = String::new();
     out.push_str("# Transpiled from Ruby\n\n");
-    for s in &stmts { emit_rb_stmt(&mut out, s, 0); }
+    for s in &stmts {
+        // Drop bare top-level main/main() calls — ErnosPlain runs main automatically
+        match s {
+            RbStmt::Expr(RbExpr::Name(n)) if n == "main" => continue,
+            RbStmt::Expr(RbExpr::Call(func, args)) => {
+                if let RbExpr::Name(n) = func.as_ref() {
+                    if n == "main" && args.is_empty() { continue; }
+                }
+                emit_rb_stmt(&mut out, s, 0);
+            }
+            _ => emit_rb_stmt(&mut out, s, 0),
+        }
+    }
     out
 }
 
@@ -940,7 +952,7 @@ fn emit_rb_expr(out: &mut String, expr: &RbExpr) {
                 "==" => " equals ", "!=" => " != ", "<" => " < ", ">" => " > ",
                 "<=" => " <= ", ">=" => " >= ",
                 "&&" => " and also ", "||" => " or else ",
-                _ => &format!(" {} ", op),
+                _ => { emit_rb_expr(out, left); out.push_str(&format!(" {} ", op)); emit_rb_expr(out, right); return; }
             };
             out.push_str(ep_op);
             emit_rb_expr(out, right);

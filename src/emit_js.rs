@@ -3,6 +3,26 @@
 /// Takes a parsed ErnosPlain Program AST and emits equivalent JavaScript source code.
 
 use crate::ast::*;
+use std::collections::HashSet;
+
+/// Recursively collect all variable names from Set statements
+fn collect_set_names_js(stmts: &[Stmt], names: &mut HashSet<String>) {
+    for stmt in stmts {
+        match &stmt.node {
+            StmtNode::Set(name, _, _) => { names.insert(name.clone()); }
+            StmtNode::If(_, then_b, else_b) => {
+                collect_set_names_js(then_b, names);
+                if let Some(eb) = else_b { collect_set_names_js(eb, names); }
+            }
+            StmtNode::RepeatWhile(_, body) => collect_set_names_js(body, names),
+            StmtNode::ForEach(_, _, body) => collect_set_names_js(body, names),
+            StmtNode::Match(_, arms) => {
+                for (_, _, body) in arms { collect_set_names_js(body, names); }
+            }
+            _ => {}
+        }
+    }
+}
 
 /// Main entry point: emit JavaScript source from an ErnosPlain AST
 pub fn emit_js_from_ep(program: &Program) -> String {
@@ -113,10 +133,19 @@ fn emit_enum_def(out: &mut String, ed: &EnumDef) {
 fn emit_method_def(out: &mut String, md: &MethodDef) {
     let func_name = format!("{}_{}", md.struct_name.to_lowercase(), md.name);
     let mut params = vec!["self".to_string()];
+    let param_names: HashSet<String> = md.params.iter().map(|(n, _, _)| n.clone()).collect();
     for (name, _, _) in &md.params {
         params.push(name.clone());
     }
     out.push_str(&format!("function {}({}) {{\n", func_name, params.join(", ")));
+    // Pre-declare all local variables
+    let mut local_vars = HashSet::new();
+    collect_set_names_js(&md.body, &mut local_vars);
+    let locals: Vec<&String> = local_vars.iter().filter(|n| !param_names.contains(*n) && *n != "self").collect();
+    if !locals.is_empty() {
+        indent(out, 1);
+        out.push_str(&format!("let {};\n", locals.iter().map(|n| n.as_str()).collect::<Vec<_>>().join(", ")));
+    }
     for stmt in &md.body {
         emit_stmt(out, &stmt.node, 1);
     }
@@ -125,11 +154,21 @@ fn emit_method_def(out: &mut String, md: &MethodDef) {
 
 fn emit_function(out: &mut String, func: &Function) {
     let params: Vec<String> = func.params.iter().map(|(n, _, _)| n.clone()).collect();
+    let param_names: HashSet<String> = func.params.iter().map(|(n, _, _)| n.clone()).collect();
 
     if func.is_async {
         out.push_str(&format!("async function {}({}) {{\n", func.name, params.join(", ")));
     } else {
         out.push_str(&format!("function {}({}) {{\n", func.name, params.join(", ")));
+    }
+
+    // Pre-declare all local variables (excluding parameters)
+    let mut local_vars = HashSet::new();
+    collect_set_names_js(&func.body, &mut local_vars);
+    let locals: Vec<&String> = local_vars.iter().filter(|n| !param_names.contains(*n)).collect();
+    if !locals.is_empty() {
+        indent(out, 1);
+        out.push_str(&format!("let {};\n", locals.iter().map(|n| n.as_str()).collect::<Vec<_>>().join(", ")));
     }
 
     for stmt in &func.body {
@@ -142,7 +181,8 @@ fn emit_stmt(out: &mut String, stmt: &StmtNode, depth: usize) {
     match stmt {
         StmtNode::Set(name, expr, _) => {
             indent(out, depth);
-            out.push_str(&format!("let {} = ", name));
+            // Plain assignment — variables are pre-declared at function scope
+            out.push_str(&format!("{} = ", name));
             emit_expr(out, &expr.node);
             out.push_str(";\n");
         }

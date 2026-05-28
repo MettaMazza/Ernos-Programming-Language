@@ -1126,6 +1126,22 @@ fn emit_go_stmt(out: &mut String, stmt: &GoStmt, depth: usize) {
                         }
                     }
                 }
+                // Bare println/print (Go builtins)
+                if let GoExpr::Name(name) = func.as_ref() {
+                    if name == "println" || name == "print" {
+                        for a in args {
+                            emit_indent(out, depth);
+                            out.push_str("display ");
+                            emit_go_expr(out, a);
+                            out.push('\n');
+                        }
+                        if args.is_empty() {
+                            emit_indent(out, depth);
+                            out.push_str("display \"\"\n");
+                        }
+                        return;
+                    }
+                }
             }
             emit_indent(out, depth);
             emit_go_expr(out, expr);
@@ -1247,7 +1263,7 @@ fn emit_go_expr(out: &mut String, expr: &GoExpr) {
                 "<=" => " <= ", ">=" => " >= ",
                 "&&" => " and also ", "||" => " or else ",
                 "&" => " + ", "|" => " + ", "^" => " + ", "<<" => " * ", ">>" => " / ",
-                _ => &format!(" {} ", op),
+                _ => { emit_go_expr(out, left); out.push_str(&format!(" {} ", op)); emit_go_expr(out, right); return; }
             };
             out.push_str(ep_op);
             emit_go_expr(out, right);

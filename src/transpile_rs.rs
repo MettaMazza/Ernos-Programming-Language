@@ -1120,7 +1120,7 @@ fn emit_rs_expr(out: &mut String, expr: &RsExpr) {
                 "==" => " equals ", "!=" => " != ", "<" => " < ", ">" => " > ",
                 "<=" => " <= ", ">=" => " >= ",
                 "&&" => " and also ", "||" => " or else ",
-                _ => &format!(" {} ", op),
+                _ => { emit_rs_expr(out, l); out.push_str(&format!(" {} ", op)); emit_rs_expr(out, r); return; }
             };
             out.push_str(ep_op); emit_rs_expr(out, r);
         }

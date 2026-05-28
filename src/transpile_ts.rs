@@ -569,7 +569,19 @@ pub fn emit_ernos_from_typescript(_filename: &str, source: &str) -> String {
     let stmts = parser.parse_file();
     let mut out = String::new();
     out.push_str("# Transpiled from TypeScript\n\n");
-    for s in &stmts { emit_ts_stmt(&mut out, s, 0, None); }
+    for s in &stmts {
+        // Drop bare top-level main/main() calls — ErnosPlain runs main automatically
+        match s {
+            TsStmt::Expr(TsExpr::Name(n)) if n == "main" => continue,
+            TsStmt::Expr(TsExpr::Call(func, args)) => {
+                if let TsExpr::Name(n) = func.as_ref() {
+                    if n == "main" && args.is_empty() { continue; }
+                }
+                emit_ts_stmt(&mut out, s, 0, None);
+            }
+            _ => emit_ts_stmt(&mut out, s, 0, None),
+        }
+    }
     out
 }
 

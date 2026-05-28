@@ -4,6 +4,26 @@
 /// This produces standalone, human-readable C — not the embedded runtime form from codegen.rs.
 
 use crate::ast::*;
+use std::collections::HashSet;
+
+/// Recursively collect all variable names from Set statements in a body
+fn collect_set_names(stmts: &[Stmt], names: &mut HashSet<String>) {
+    for stmt in stmts {
+        match &stmt.node {
+            StmtNode::Set(name, _, _) => { names.insert(name.clone()); }
+            StmtNode::If(_, then_b, else_b) => {
+                collect_set_names(then_b, names);
+                if let Some(eb) = else_b { collect_set_names(eb, names); }
+            }
+            StmtNode::RepeatWhile(_, body) => collect_set_names(body, names),
+            StmtNode::ForEach(_, _, body) => collect_set_names(body, names),
+            StmtNode::Match(_, arms) => {
+                for (_, _, body) in arms { collect_set_names(body, names); }
+            }
+            _ => {}
+        }
+    }
+}
 
 /// Main entry point: emit C source from an ErnosPlain AST
 pub fn emit_c_from_ep(program: &Program) -> String {
@@ -110,10 +130,20 @@ fn emit_enum_def(out: &mut String, ed: &EnumDef) {
 fn emit_method_def(out: &mut String, md: &MethodDef) {
     let func_name = format!("{}_{}", md.struct_name.to_lowercase(), md.name);
     let mut params = vec![format!("{}* self", md.struct_name)];
+    let param_names: HashSet<String> = md.params.iter().map(|(n, _, _)| n.clone()).collect();
     for (name, _, _) in &md.params {
         params.push(format!("long long {}", name));
     }
     out.push_str(&format!("long long {}({}) {{\n", func_name, params.join(", ")));
+    // Pre-declare all local variables (excluding parameters)
+    let mut local_vars = HashSet::new();
+    collect_set_names(&md.body, &mut local_vars);
+    let locals: Vec<&String> = local_vars.iter().filter(|n| !param_names.contains(*n)).collect();
+    if !locals.is_empty() {
+        indent(out, 1);
+        out.push_str(&format!("long long {};", locals.iter().map(|n| format!("{} = 0LL", n)).collect::<Vec<_>>().join(", ")));
+        out.push('\n');
+    }
     for stmt in &md.body {
         emit_stmt(out, &stmt.node, 1);
     }
@@ -129,6 +159,7 @@ fn ends_with_return(stmts: &[Stmt]) -> bool {
 
 fn emit_function(out: &mut String, func: &Function) {
     let params: Vec<String> = func.params.iter().map(|(n, _, _)| format!("long long {}", n)).collect();
+    let param_names: HashSet<String> = func.params.iter().map(|(n, _, _)| n.clone()).collect();
 
     if func.name == "main" {
         out.push_str("int main(void) {\n");
@@ -137,6 +168,15 @@ fn emit_function(out: &mut String, func: &Function) {
             func.name,
             if params.is_empty() { "void".to_string() } else { params.join(", ") }
         ));
+    }
+
+    // Pre-declare all local variables (excluding parameters)
+    let mut local_vars = HashSet::new();
+    collect_set_names(&func.body, &mut local_vars);
+    let locals: Vec<&String> = local_vars.iter().filter(|n| !param_names.contains(*n)).collect();
+    if !locals.is_empty() {
+        indent(out, 1);
+        out.push_str(&format!("long long {};\n", locals.iter().map(|n| format!("{} = 0LL", n)).collect::<Vec<_>>().join(", ")));
     }
 
     for stmt in &func.body {
@@ -155,9 +195,8 @@ fn emit_stmt(out: &mut String, stmt: &StmtNode, depth: usize) {
     match stmt {
         StmtNode::Set(name, expr, _) => {
             indent(out, depth);
-            // Use assignment — C requires declaration before use, but for simplicity
-            // we use long long for everything and let the C compiler handle it
-            out.push_str(&format!("long long {} = ", name));
+            // Plain assignment — variables are pre-declared at function scope
+            out.push_str(&format!("{} = ", name));
             emit_expr(out, &expr.node);
             out.push_str(";\n");
         }
