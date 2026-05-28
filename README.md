@@ -100,6 +100,12 @@ define main:
 | `websocket` | WebSocket protocol implementation |
 | `select` | I/O multiplexing |
 
+### 🔌 FFI Bridge Libraries (19 bindings)
+
+Pre-built bindings for C libraries via `ep_dlopen`/`ep_dlsym`/`ep_dlcall`:
+
+`raylib` · `sdl2` · `ncurses` · `cairo` · `libpng` · `stb_image` · `miniaudio` · `libsndfile` · `curl` · `openssl` · `libsodium` · `zlib` · `sqlite` · `jansson` · `expat` · `pcre` · `libgit2` · `libuv` · `lmdb`
+
 > **Note:** Stdlib modules are written in ErnosPlain and call into the compiler's C runtime. They require the corresponding C runtime functions to be available.
 
 ### 🔧 Developer Tools
@@ -272,28 +278,38 @@ Source (.ep)
     ↓
   Optimizer (constant folding, dead code elimination)
     ↓
-  Codegen → C source
+  Codegen → C source (includes ownership safety checks)
     ↓
   Clang -O2 → Native binary
 ```
+
+> **Note:** The codegen phase performs additional ownership checks (use-after-move, borrow violations) as a safety net alongside the dedicated borrow checker. Both must pass for compilation to succeed.
 
 ### Compiler Modules
 
 | File | Lines | Description |
 |------|-------|-------------|
 | `src/lexer.rs` | ~800 | Tokenizer with indentation tracking |
-| `src/parser.rs` | ~1,500 | Recursive descent parser with Pratt precedence |
-| `src/type_check.rs` | ~1,380 | Hindley-Milner type inference with unification |
+| `src/parser.rs` | ~1,510 | Recursive descent parser with Pratt precedence |
+| `src/type_check.rs` | ~1,410 | Hindley-Milner type inference with unification |
 | `src/borrow_check.rs` | ~520 | Ownership, borrowing, Send/Sync analysis |
 | `src/optimizer.rs` | ~250 | AST-level constant folding and DCE |
-| `src/codegen.rs` | ~5,660 | C code generation with full runtime |
+| `src/codegen.rs` | ~5,740 | C code generation with full runtime |
 | `src/diagnostics.rs` | ~380 | Rich error reporting with ANSI colors |
-| `src/native_codegen.rs` | ~500 | ARM64 native assembly backend (macOS + Linux) |
-| `src/x86_64_codegen.rs` | ~480 | x86_64 native assembly backend (macOS + Linux) |
-| `src/bind_c.rs` | ~1,420 | C header binding generator (zero-dependency) |
-| `src/transpile_py.rs` | ~1,840 | Python → ErnosPlain transpiler |
-| `src/transpile_c.rs` | ~1,300 | C → ErnosPlain transpiler |
-| `src/transpile_js.rs` | ~1,210 | JavaScript → ErnosPlain transpiler |
+| `src/native_codegen.rs` | ~650 | ARM64 native assembly backend (macOS + Linux) |
+| `src/x86_64_codegen.rs` | ~620 | x86_64 native assembly backend (macOS + Linux) |
+| `src/bind_c.rs` | ~1,440 | C header binding generator (zero-dependency) |
+| `src/transpile_py.rs` | ~1,880 | Python → ErnosPlain transpiler |
+| `src/transpile_c.rs` | ~1,380 | C → ErnosPlain transpiler |
+| `src/transpile_js.rs` | ~1,240 | JavaScript → ErnosPlain transpiler |
+| `src/transpile_go.rs` | ~1,360 | Go → ErnosPlain transpiler |
+| `src/transpile_rs.rs` | ~1,210 | Rust → ErnosPlain transpiler |
+| `src/transpile_rb.rs` | ~1,080 | Ruby → ErnosPlain transpiler |
+| `src/transpile_java.rs` | ~730 | Java → ErnosPlain transpiler |
+| `src/transpile_ts.rs` | ~730 | TypeScript → ErnosPlain transpiler |
+| `src/emit_c.rs` | ~570 | ErnosPlain → C emitter |
+| `src/emit_js.rs` | ~590 | ErnosPlain → JavaScript emitter |
+| `src/emit_python.rs` | ~640 | ErnosPlain → Python emitter |
 
 ---
 
@@ -301,10 +317,11 @@ Source (.ep)
 
 Ernos compiles its own compiler. The self-hosted compiler modules:
 
-- `ep_lexer.ep` — Lexer (30KB)
-- `ep_parser.ep` — Parser (26KB)
-- `ep_codegen.ep` — Code generator (178KB)
-- `epc.ep` — Compiler driver (8KB)
+- `ep_lexer.ep` — Lexer (518 lines)
+- `ep_parser.ep` — Parser (641 lines)
+- `ep_codegen.ep` — Code generator (3,157 lines)
+- `epc.ep` — Compiler driver (218 lines)
+- **Total: 4,534 lines of ErnosPlain**
 
 ### Bootstrap
 ```bash

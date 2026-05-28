@@ -2892,6 +2892,10 @@ const RUNTIME_HEADER_AND_SRC: &str = r#"#include <stdio.h>
 #ifndef _WIN32
 #include <unistd.h>
 #endif
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#endif
+#include <fcntl.h>
 
 /* Try/catch infrastructure */
 static jmp_buf ep_try_buf;
@@ -5491,18 +5495,37 @@ long long ep_auto_to_string(long long val) {
     if (obj && obj->kind == EP_OBJ_STRING) {
         return val; // It's a known string pointer
     }
-    // Check if val looks like a valid pointer to a static/stack string
-    // Static string literals (in .rodata) aren't GC-tracked, but they are valid pointers
-    // On 64-bit systems, heap/stack/rodata pointers are typically > 0x100000 (1MB)
-    // Small integers (< 1MB) are definitely not pointers
+    // Check if val is a static string literal (in .rodata/.data segment)
+    // These aren't GC-tracked but ARE valid pointers. Use a safe probe:
+    // only dereference if the address is in a readable memory page.
     if (val > 0x100000) {
-        // Try to validate it's a readable string using the first byte
-        // Use a signal-safe approach: check if the pointer is page-aligned-ish
-        const char* p = (const char*)(void*)val;
-        unsigned char first = (unsigned char)*p;
-        if ((first >= 0x20 && first <= 0x7E) || (first >= 0xC0 && first <= 0xFD) || first == '\n' || first == '\t' || first == '\r' || first == 0) {
-            return val; // Looks like a valid string
+#if defined(__APPLE__)
+        // macOS: use vm_read_overwrite to safely probe
+        char probe;
+        mach_vm_size_t sz = 1;
+        kern_return_t kr = vm_read_overwrite(mach_task_self(), (mach_vm_address_t)val, 1, (mach_vm_address_t)&probe, &sz);
+        if (kr == KERN_SUCCESS) {
+            unsigned char first = (unsigned char)probe;
+            if ((first >= 0x20 && first <= 0x7E) || (first >= 0xC0 && first <= 0xFD) || first == '\n' || first == '\t' || first == '\r' || first == 0) {
+                return val; // Readable memory, looks like a string
+            }
         }
+#else
+        // Linux: use write() to /dev/null as a safe pointer probe
+        // write() returns -1 with EFAULT for invalid pointers, no signal
+        int devnull = open("/dev/null", 1); // O_WRONLY
+        if (devnull >= 0) {
+            ssize_t r = write(devnull, (const void*)val, 1);
+            close(devnull);
+            if (r == 1) {
+                const char* p = (const char*)(void*)val;
+                unsigned char first = (unsigned char)*p;
+                if ((first >= 0x20 && first <= 0x7E) || (first >= 0xC0 && first <= 0xFD) || first == '\n' || first == '\t' || first == '\r' || first == 0) {
+                    return val;
+                }
+            }
+        }
+#endif
     }
     // Otherwise, convert integer to string
     char* buf = (char*)malloc(32);

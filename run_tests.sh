@@ -26,7 +26,7 @@ FAILURES=""
 for TEST_FILE in tests/test_*.ep conformance/test_*.ep; do
     [[ -f "$TEST_FILE" ]] || continue
     NAME=$(basename "$TEST_FILE" .ep)
-    BINARY="./$NAME"
+    BINARY="$(dirname "$TEST_FILE")/$NAME"
 
     # ── Check for expected compile error ──
     EXPECT_COMPILE_ERROR=0
@@ -52,7 +52,7 @@ for TEST_FILE in tests/test_*.ep conformance/test_*.ep; do
         echo "FAIL  $NAME  (expected compile error but succeeded)"
         FAIL=$((FAIL + 1))
         FAILURES="$FAILURES  $NAME (should have failed)\n"
-        rm -f "$BINARY" "${NAME}_compiled.c"
+        rm -f "$BINARY" "$(dirname "$TEST_FILE")/${NAME}_compiled.c"
         continue
     fi
 
@@ -72,7 +72,7 @@ for TEST_FILE in tests/test_*.ep conformance/test_*.ep; do
         [[ $VERBOSE -eq 1 ]] && echo "      output: $ACTUAL"
         FAIL=$((FAIL + 1))
         FAILURES="$FAILURES  $NAME (exit $EXIT_CODE)\n"
-        rm -f "$BINARY" "${NAME}_compiled.c"
+        rm -f "$BINARY" "$(dirname "$TEST_FILE")/${NAME}_compiled.c"
         continue
     fi
 
@@ -97,7 +97,7 @@ for TEST_FILE in tests/test_*.ep conformance/test_*.ep; do
     fi
 
     # Clean up compiled artifacts
-    rm -f "$BINARY" "${NAME}_compiled.c"
+    rm -f "$BINARY" "$(dirname "$TEST_FILE")/${NAME}_compiled.c"
 done
 
 echo ""

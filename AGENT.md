@@ -465,14 +465,27 @@ If ANY step fails, the change is not ready. Fix it before committing. Do not com
 
 Pre-built bindings for popular C libraries using the FFI system. Located in `stdlib/bridge/`:
 
-| Module | Library | Key Functions |
+| Module | Library | Category |
 |---|---|---|
-| `sqlite.ep` | SQLite3 | `sqlite_open`, `sqlite_exec`, `sqlite_close` |
-| `curl.ep` | libcurl | `curl_init`, `curl_perform`, `http_get`, `http_post` |
-| `zlib.ep` | zlib | `zlib_compress`, `zlib_uncompress`, `zlib_crc32` |
-| `openssl.ep` | OpenSSL | `openssl_sha256`, `openssl_sha512`, `openssl_rand_bytes` |
-| `pcre.ep` | PCRE2 | `pcre2_compile_pattern`, `regex_matches` |
-| `jansson.ep` | Jansson | `json_parse`, `json_encode`, `json_object_set` |
+| `raylib.ep` | raylib | Graphics, input, audio |
+| `sdl2.ep` | SDL2 | Multimedia, windowing |
+| `ncurses.ep` | ncurses | Terminal UI |
+| `cairo.ep` | cairo | 2D vector graphics |
+| `libpng.ep` | libpng | PNG image I/O |
+| `stb_image.ep` | stb_image | Image loading |
+| `miniaudio.ep` | miniaudio | Cross-platform audio |
+| `libsndfile.ep` | libsndfile | Audio file I/O |
+| `curl.ep` | libcurl | HTTP client |
+| `openssl.ep` | OpenSSL | TLS, crypto |
+| `libsodium.ep` | libsodium | Modern cryptography |
+| `zlib.ep` | zlib | Compression |
+| `sqlite.ep` | SQLite3 | Embedded database |
+| `jansson.ep` | Jansson | JSON parsing |
+| `expat.ep` | expat | XML parsing |
+| `pcre.ep` | PCRE2 | Regex |
+| `libgit2.ep` | libgit2 | Git operations |
+| `libuv.ep` | libuv | Async I/O, event loop |
+| `lmdb.ep` | LMDB | Key-value database |
 
 Usage: `import "stdlib/bridge/sqlite"` — all functions use `ep_dlopen`/`ep_dlsym` at runtime, so the library must be installed on the target system.
 

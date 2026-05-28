@@ -1,3 +1,6 @@
+import "../ep_lexer"
+import "../ep_parser"
+
 define print_ast with node:
     display "print_ast called with node:"
     display node
