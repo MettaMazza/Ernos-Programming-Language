@@ -160,7 +160,15 @@ impl Parser {
             if self.peek() == &Token::Import {
                 self.advance(); // consume "import"
                 if let (Token::StringLiteral(path), _) = self.advance() {
-                    imports.push(path);
+                    // Parse optional alias: import "string" as str
+                    let alias = if self.peek() == &Token::As {
+                        self.advance(); // consume "as"
+                        let (alias_name, _) = self.expect_identifier()?;
+                        Some(alias_name)
+                    } else {
+                        None
+                    };
+                    imports.push((path, alias));
                     // Optional newline
                     if self.peek() == &Token::Newline {
                         self.advance();

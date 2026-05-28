@@ -43,6 +43,7 @@ pub enum MonoType {
     DynStr,    // heap-allocated string
     Unit,      // void / no value
     Never,     // unreachable (e.g., after return)
+    Any,       // top type — unifies with everything (for heterogeneous container returns)
 
     /// An unresolved type variable, to be unified
     Var(TypeVarId),
@@ -81,6 +82,7 @@ impl MonoType {
             MonoType::Str => "Str".to_string(),
             MonoType::DynStr => "DynStr".to_string(),
             MonoType::Unit => "Unit".to_string(),
+            MonoType::Any => "Any".to_string(),
             MonoType::Never => "Never".to_string(),
             MonoType::Var(id) => format!("?T{}", id),
             MonoType::List(elem) => format!("List of {}", elem.display_name()),
@@ -245,6 +247,10 @@ fn unify(subst: &mut Substitution, t1: &MonoType, t2: &MonoType, span: Span) -> 
         (MonoType::Unit, MonoType::Unit) => Ok(()),
         (MonoType::Never, _) => Ok(()), // Never unifies with anything (bottom type)
         (_, MonoType::Never) => Ok(()),
+
+        // Any unifies with everything (top type for heterogeneous containers)
+        (MonoType::Any, _) => Ok(()),
+        (_, MonoType::Any) => Ok(()),
         
         // Str and DynStr are compatible (string coercion)
         (MonoType::Str, MonoType::DynStr) | (MonoType::DynStr, MonoType::Str) => Ok(()),
@@ -254,6 +260,14 @@ fn unify(subst: &mut Substitution, t1: &MonoType, t2: &MonoType, span: Span) -> 
         
         // Int and Bool are compatible (ErnosPlain uses int for booleans)
         (MonoType::Int, MonoType::Bool) | (MonoType::Bool, MonoType::Int) => Ok(()),
+
+        // Int ↔ List coercion: at runtime both are long long (pointers cast to int)
+        // This allows heterogeneous code like the self-hosted compiler
+        (MonoType::Int, MonoType::List(_)) | (MonoType::List(_), MonoType::Int) => Ok(()),
+
+        // Int ↔ Str/DynStr coercion: at runtime strings are char* cast to long long
+        (MonoType::Int, MonoType::Str) | (MonoType::Str, MonoType::Int) => Ok(()),
+        (MonoType::Int, MonoType::DynStr) | (MonoType::DynStr, MonoType::Int) => Ok(()),
 
         // Type variable binding
         (MonoType::Var(id), _) => subst.bind(*id, &t2),
@@ -557,8 +571,7 @@ impl TypeChecker {
         self.func_types.insert("append_list".into(), (vec![MonoType::List(Box::new(v1)), v2], MonoType::Int));
         
         let v3 = self.fresh_var();
-        let v4 = self.fresh_var();
-        self.func_types.insert("get_list".into(), (vec![MonoType::List(Box::new(v3)), MonoType::Int], v4));
+        self.func_types.insert("get_list".into(), (vec![MonoType::List(Box::new(v3)), MonoType::Int], MonoType::Any));
         
         let v5 = self.fresh_var();
         let v6 = self.fresh_var();
@@ -595,15 +608,15 @@ impl TypeChecker {
 
         // List operations (continued)
         let v9 = self.fresh_var();
-        self.func_types.insert("pop_list".into(), (vec![MonoType::List(Box::new(v9))], MonoType::Int));
+        self.func_types.insert("pop_list".into(), (vec![MonoType::List(Box::new(v9))], MonoType::Any));
 
         // Map operations
         let v10 = self.fresh_var();
         self.func_types.insert("create_map".into(), (vec![], v10));
         self.func_types.insert("map_insert".into(), (vec![MonoType::Int, MonoType::Int, MonoType::Int], MonoType::Int));
         self.func_types.insert("map_set_str".into(), (vec![MonoType::Int, MonoType::Str, MonoType::Int], MonoType::Int));
-        self.func_types.insert("map_get_val".into(), (vec![MonoType::Int, MonoType::Int], MonoType::Int));
-        self.func_types.insert("map_get_str".into(), (vec![MonoType::Int, MonoType::Str], MonoType::Int));
+        self.func_types.insert("map_get_val".into(), (vec![MonoType::Int, MonoType::Int], MonoType::Any));
+        self.func_types.insert("map_get_str".into(), (vec![MonoType::Int, MonoType::Str], MonoType::Any));
         let v11 = self.fresh_var();
         self.func_types.insert("map_keys".into(), (vec![MonoType::Int], MonoType::List(Box::new(v11))));
         self.func_types.insert("map_has_key".into(), (vec![MonoType::Int, MonoType::Int], MonoType::Int));
@@ -763,7 +776,12 @@ impl TypeChecker {
         self.push_scope();
 
         // Bind `self` parameter
-        self.define("self".into(), MonoType::Struct(md.struct_name.clone(), vec![]));
+        // Type self correctly based on whether the target is an enum or struct
+        if self.enum_defs.contains_key(&md.struct_name) {
+            self.define("self".into(), MonoType::Enum(md.struct_name.clone(), vec![]));
+        } else {
+            self.define("self".into(), MonoType::Struct(md.struct_name.clone(), vec![]));
+        }
 
         // Bind parameters
         if let Some((param_types, _)) = self.method_types.get(&(md.struct_name.clone(), md.name.clone())).cloned() {
@@ -1023,18 +1041,22 @@ impl TypeChecker {
                     }
                     MonoType::Float
                 } else {
-                    // Unify both with Int
-                    if let Err(_) = unify(&mut self.subst, &lt, &MonoType::Int, expr.span) {
-                        self.error(
-                            format!("Left operand of arithmetic must be numeric, found {}", self.subst.apply(&lt).display_name()),
-                            left.span,
-                        );
+                    // Allow Any (from get_list/pop_list) and DynStr in arithmetic — they are long long at runtime
+                    if !matches!(lt_r, MonoType::Int | MonoType::Bool | MonoType::Any | MonoType::DynStr | MonoType::Var(_)) {
+                        if let Err(_) = unify(&mut self.subst, &lt, &MonoType::Int, expr.span) {
+                            self.error(
+                                format!("Left operand of arithmetic must be numeric, found {}", self.subst.apply(&lt).display_name()),
+                                left.span,
+                            );
+                        }
                     }
-                    if let Err(_) = unify(&mut self.subst, &rt, &MonoType::Int, expr.span) {
-                        self.error(
-                            format!("Right operand of arithmetic must be numeric, found {}", self.subst.apply(&rt).display_name()),
-                            right.span,
-                        );
+                    if !matches!(rt_r, MonoType::Int | MonoType::Bool | MonoType::Any | MonoType::DynStr | MonoType::Var(_)) {
+                        if let Err(_) = unify(&mut self.subst, &rt, &MonoType::Int, expr.span) {
+                            self.error(
+                                format!("Right operand of arithmetic must be numeric, found {}", self.subst.apply(&rt).display_name()),
+                                right.span,
+                            );
+                        }
                     }
                     MonoType::Int
                 }

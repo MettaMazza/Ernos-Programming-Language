@@ -13,10 +13,28 @@ pub struct NativeCodegen {
     // Maps local variable names to stack offsets (negative from FP)
     var_offsets: HashMap<String, i64>,
     stack_size: i64,
+    is_macos: bool,
+}
+
+/// Escape a string for use in GAS .asciz directive
+fn escape_asm_string(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'\\' => out.push_str("\\\\"),
+            b'"'  => out.push_str("\\\""),
+            b'\n' => out.push_str("\\n"),
+            b'\r' => out.push_str("\\r"),
+            b'\t' => out.push_str("\\t"),
+            0x20..=0x7e => out.push(b as char),
+            _ => out.push_str(&format!("\\{:03o}", b)),
+        }
+    }
+    out
 }
 
 impl NativeCodegen {
-    pub fn new() -> Self {
+    pub fn new(is_macos: bool) -> Self {
         NativeCodegen {
             asm: String::new(),
             string_literals: Vec::new(),
@@ -24,12 +42,25 @@ impl NativeCodegen {
             func_labels: HashMap::new(),
             var_offsets: HashMap::new(),
             stack_size: 0,
+            is_macos,
         }
     }
 
     fn new_label(&mut self, prefix: &str) -> String {
         self.label_counter += 1;
-        format!("L_{}_{}", prefix, self.label_counter)
+        if self.is_macos {
+            format!("L_{}_{}", prefix, self.label_counter)
+        } else {
+            format!(".L_{}_{}", prefix, self.label_counter)
+        }
+    }
+
+    fn sym(&self, name: &str) -> String {
+        if self.is_macos {
+            format!("_{}", name)
+        } else {
+            name.to_string()
+        }
     }
 
     fn emit(&mut self, line: &str) {
@@ -58,17 +89,22 @@ impl NativeCodegen {
         // Collect all function names
         for func in &program.functions {
             let label = if func.name == "main" {
-                "_main".to_string()
+                self.sym("main")
             } else {
-                format!("_ep_{}", func.name)
+                format!("{}ep_{}", if self.is_macos { "_" } else { "" }, func.name)
             };
             self.func_labels.insert(func.name.clone(), label);
         }
 
         // Preamble
-        self.emit(".section __TEXT,__text,regular,pure_instructions");
-        self.emit(".build_version macos, 14, 0");
+        if self.is_macos {
+            self.emit(".section __TEXT,__text,regular,pure_instructions");
+            self.emit(".build_version macos, 14, 0");
+        } else {
+            self.emit(".text");
+        }
         self.emit(".p2align 2");
+        self.emit("");
         self.emit("");
 
         // Generate each function
@@ -76,31 +112,48 @@ impl NativeCodegen {
             self.gen_function(func)?;
         }
 
-        // Entry point wrapper: _main calls ep_main and passes result to exit
-        self.emit(".globl _main");
-        self.emit("_main:");
+        // Entry point wrapper
+        let main_sym = self.sym("main");
+        self.emit(&format!(".globl {}", main_sym));
+        self.emit(&format!("{}:", main_sym));
         self.emit("    stp x29, x30, [sp, #-16]!");
         self.emit("    mov x29, sp");
-        self.emit("    bl _ep_main");
+        let ep_main_sym = self.sym("ep_main");
+        self.emit(&format!("    bl {}", ep_main_sym));
         // x0 already has the return value from ep_main
         self.emit("    ldp x29, x30, [sp], #16");
         self.emit("    ret");
         self.emit("");
 
-        // String literals in __cstring section
+        // String literals
         if !self.string_literals.is_empty() {
-            self.emit(".section __TEXT,__cstring,cstring_literals");
+            if self.is_macos {
+                self.emit(".section __TEXT,__cstring,cstring_literals");
+            } else {
+                self.emit(".section .rodata");
+            }
             let strings: Vec<_> = self.string_literals.iter().cloned().collect();
             for (i, s) in strings.iter().enumerate() {
-                self.emit(&format!("_str_{}: .asciz \"{}\"", i, s));
+                let label = if self.is_macos {
+                    format!("_str_{}", i)
+                } else {
+                    format!(".Lstr_{}", i)
+                };
+                self.emit(&format!("{}: .asciz \"{}\"", label, escape_asm_string(s)));
             }
             self.emit("");
         }
 
-        // The printf format string for integers
-        self.emit(".section __TEXT,__cstring,cstring_literals");
-        self.emit("_fmt_int: .asciz \"%lld\\n\"");
-        self.emit("_fmt_str: .asciz \"%s\\n\"");
+        // The printf format strings
+        if self.is_macos {
+            self.emit(".section __TEXT,__cstring,cstring_literals");
+            self.emit("_fmt_int: .asciz \"%lld\\n\"");
+            self.emit("_fmt_str: .asciz \"%s\\n\"");
+        } else {
+            self.emit(".section .rodata");
+            self.emit(".Lfmt_int: .asciz \"%lld\\n\"");
+            self.emit(".Lfmt_str: .asciz \"%s\\n\"");
+        }
         self.emit("");
 
         Ok(self.asm.clone())
@@ -125,9 +178,9 @@ impl NativeCodegen {
         let frame_size = ((self.stack_size + 15) / 16) * 16 + 16;
 
         let label = if func.name == "main" {
-            "_ep_main".to_string()
+            self.sym("ep_main")
         } else {
-            self.func_labels.get(&func.name).cloned().unwrap_or(format!("_ep_{}", func.name))
+            self.func_labels.get(&func.name).cloned().unwrap_or(format!("{}ep_{}", if self.is_macos { "_" } else { "" }, func.name))
         };
 
         self.emit(&format!(".globl {}", label));
@@ -208,13 +261,24 @@ impl NativeCodegen {
 
                 // Load format string into x0
                 if matches!(expr.node, ExprNode::StringLiteral(_)) {
-                    self.emit("    adrp x0, _fmt_str@PAGE");
-                    self.emit("    add x0, x0, _fmt_str@PAGEOFF");
+                    if self.is_macos {
+                        self.emit("    adrp x0, _fmt_str@PAGE");
+                        self.emit("    add x0, x0, _fmt_str@PAGEOFF");
+                    } else {
+                        self.emit("    adrp x0, .Lfmt_str");
+                        self.emit("    add x0, x0, :lo12:.Lfmt_str");
+                    }
                 } else {
-                    self.emit("    adrp x0, _fmt_int@PAGE");
-                    self.emit("    add x0, x0, _fmt_int@PAGEOFF");
+                    if self.is_macos {
+                        self.emit("    adrp x0, _fmt_int@PAGE");
+                        self.emit("    add x0, x0, _fmt_int@PAGEOFF");
+                    } else {
+                        self.emit("    adrp x0, .Lfmt_int");
+                        self.emit("    add x0, x0, :lo12:.Lfmt_int");
+                    }
                 }
-                self.emit("    bl _printf");
+                let printf_sym = self.sym("printf");
+                self.emit(&format!("    bl {}", printf_sym));
                 self.emit("    add sp, sp, #16");
             }
 
@@ -301,8 +365,18 @@ impl NativeCodegen {
 
             ExprNode::StringLiteral(s) => {
                 let idx = self.add_string(s);
-                self.emit(&format!("    adrp {}, _str_{}@PAGE", dest, idx));
-                self.emit(&format!("    add {}, {}, _str_{}@PAGEOFF", dest, dest, idx));
+                let str_label = if self.is_macos {
+                    format!("_str_{}", idx)
+                } else {
+                    format!(".Lstr_{}", idx)
+                };
+                if self.is_macos {
+                    self.emit(&format!("    adrp {}, {}@PAGE", dest, str_label));
+                    self.emit(&format!("    add {}, {}, {}@PAGEOFF", dest, dest, str_label));
+                } else {
+                    self.emit(&format!("    adrp {}, {}", dest, str_label));
+                    self.emit(&format!("    add {}, {}, :lo12:{}", dest, dest, str_label));
+                }
             }
 
             ExprNode::Identifier(name) => {
@@ -401,7 +475,7 @@ impl NativeCodegen {
 
                 // Call the function
                 let target = self.func_labels.get(name).cloned()
-                    .unwrap_or(format!("_{}", name));
+                    .unwrap_or(self.sym(name));
                 self.emit(&format!("    bl {}", target));
 
                 if dest != "x0" {

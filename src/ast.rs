@@ -181,7 +181,7 @@ pub struct TraitImpl {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
-    pub imports: Vec<String>,
+    pub imports: Vec<(String, Option<String>)>,  // (path, optional alias)
     pub externals: Vec<ExternalFunction>,
     pub functions: Vec<Function>,
     pub struct_defs: Vec<StructDef>,

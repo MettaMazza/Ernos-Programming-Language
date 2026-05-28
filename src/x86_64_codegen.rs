@@ -14,6 +14,23 @@ pub struct X86_64Codegen {
     is_macos: bool,
 }
 
+/// Escape a string for use in GAS .asciz directive
+fn escape_asm_string(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'\\' => out.push_str("\\\\"),
+            b'"'  => out.push_str("\\\""),
+            b'\n' => out.push_str("\\n"),
+            b'\r' => out.push_str("\\r"),
+            b'\t' => out.push_str("\\t"),
+            0x20..=0x7e => out.push(b as char),
+            _ => out.push_str(&format!("\\{:03o}", b)),
+        }
+    }
+    out
+}
+
 impl X86_64Codegen {
     pub fn new(is_macos: bool) -> Self {
         X86_64Codegen {
@@ -110,7 +127,7 @@ impl X86_64Codegen {
                 self.emit(".section __TEXT,__cstring,cstring_literals");
                 let strings: Vec<_> = self.string_literals.iter().cloned().collect();
                 for (i, s) in strings.iter().enumerate() {
-                    self.emit(&format!("str_{}: .asciz \"{}\"", i, s));
+                    self.emit(&format!("str_{}: .asciz \"{}\"", i, escape_asm_string(s)));
                 }
                 self.emit("");
             }
@@ -123,7 +140,7 @@ impl X86_64Codegen {
                 self.emit(".section .rodata");
                 let strings: Vec<_> = self.string_literals.iter().cloned().collect();
                 for (i, s) in strings.iter().enumerate() {
-                    self.emit(&format!(".Lstr_{}: .asciz \"{}\"", i, s));
+                    self.emit(&format!(".Lstr_{}: .asciz \"{}\"", i, escape_asm_string(s)));
                 }
                 self.emit("");
             }

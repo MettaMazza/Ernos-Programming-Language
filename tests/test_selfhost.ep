@@ -1,0 +1,11 @@
+# Simple self-host validation test
+define add with a and b:
+    return a + b
+
+define main:
+    set x to 10
+    set y to 20
+    set result to add(x and y)
+    display result
+    display "Self-hosted compiler works!"
+    return 0

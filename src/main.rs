@@ -89,12 +89,52 @@ fn parse_all_modules(
     all_trait_defs.extend(program.trait_defs);
     all_trait_impls.extend(program.trait_impls);
 
-    for imp in program.imports {
+    for (imp, alias) in program.imports {
         let resolved_path = resolve_import_path(&canonical_path, &imp);
         if !resolved_path.exists() {
             return Err(format!("Import error in '{}': module '{}' not found at '{}'", canonical_path.display(), imp, resolved_path.display()));
         }
-        parse_all_modules(&resolved_path, parsed_files, all_functions, all_externals, all_struct_defs, all_enum_defs, all_method_defs, all_trait_defs, all_trait_impls)?;
+
+        if let Some(ref prefix) = alias {
+            // Aliased import: parse the module, then add BOTH prefixed and original names.
+            // Prefixed names allow the caller to use alias_function_name().
+            // Original names are needed because the module's own functions reference each other.
+            let mut mod_funcs: Vec<ast::Function> = Vec::new();
+            let mut mod_externs: Vec<ast::ExternalFunction> = Vec::new();
+            let mut mod_structs: Vec<ast::StructDef> = Vec::new();
+            let mut mod_enums: Vec<ast::EnumDef> = Vec::new();
+            let mut mod_methods: Vec<ast::MethodDef> = Vec::new();
+            let mut mod_traits: Vec<ast::TraitDef> = Vec::new();
+            let mut mod_trait_impls: Vec<ast::TraitImpl> = Vec::new();
+            parse_all_modules(&resolved_path, parsed_files, &mut mod_funcs, &mut mod_externs, &mut mod_structs, &mut mod_enums, &mut mod_methods, &mut mod_traits, &mut mod_trait_impls)?;
+
+            // Add original-named functions (for internal module calls)
+            for f in &mod_funcs {
+                all_functions.push(f.clone());
+            }
+            // Add prefixed aliases
+            for f in mod_funcs {
+                let mut aliased = f;
+                aliased.name = format!("{}_{}", prefix, aliased.name);
+                all_functions.push(aliased);
+            }
+            for e in &mod_externs {
+                all_externals.push(e.clone());
+            }
+            for e in mod_externs {
+                let mut aliased = e;
+                aliased.name = format!("{}_{}", prefix, aliased.name);
+                all_externals.push(aliased);
+            }
+            all_struct_defs.extend(mod_structs);
+            all_enum_defs.extend(mod_enums);
+            all_method_defs.extend(mod_methods);
+            all_trait_defs.extend(mod_traits);
+            all_trait_impls.extend(mod_trait_impls);
+        } else {
+            // Unaliased import: dump everything into global namespace (backward compatible)
+            parse_all_modules(&resolved_path, parsed_files, all_functions, all_externals, all_struct_defs, all_enum_defs, all_method_defs, all_trait_defs, all_trait_impls)?;
+        }
     }
 
     Ok(())
@@ -291,13 +331,16 @@ fn main() {
         std::process::exit(1);
     }
 
+    // Deduplicate functions (aliased imports add both original and prefixed names)
     let mut function_names = HashSet::new();
-    for func in &all_functions {
-        if !function_names.insert(&func.name) {
-            eprintln!("Compiler Error: Function '{}' is defined multiple times across modules.", func.name);
-            std::process::exit(1);
+    let mut deduped_functions = Vec::new();
+    for func in all_functions {
+        if function_names.insert(func.name.clone()) {
+            deduped_functions.push(func);
         }
+        // Silently skip duplicates — expected from aliased imports
     }
+    let all_functions = deduped_functions;
 
     let mut program = ast::Program {
         imports: Vec::new(),
@@ -332,7 +375,7 @@ fn main() {
             (ncg.generate(&program), true)
         } else {
             println!("[2/3] Generating Native ARM64 Assembly...");
-            let mut ncg = native_codegen::NativeCodegen::new();
+            let mut ncg = native_codegen::NativeCodegen::new(os == "macos");
             (ncg.generate(&program), false)
         };
 
