@@ -15,6 +15,14 @@ pub mod bind_c;
 pub mod transpile_py;
 pub mod transpile_c;
 pub mod transpile_js;
+pub mod transpile_go;
+pub mod transpile_rb;
+pub mod transpile_rs;
+pub mod transpile_java;
+pub mod transpile_ts;
+pub mod emit_python;
+pub mod emit_js;
+pub mod emit_c;
 
 use std::env;
 use std::fs;
@@ -212,7 +220,7 @@ fn main() {
     if args[1] == "transpile" {
         if args.len() < 3 {
             eprintln!("Usage: ernos transpile <file.py> [-o output.ep]");
-            eprintln!("Supported: .py (Python), .c/.h (C), .js/.mjs (JavaScript)");
+            eprintln!("Supported: .py .c .h .js .mjs .go .rb .rs .java .ts .tsx");
             std::process::exit(1);
         }
         let source_path = &args[2];
@@ -231,9 +239,14 @@ fn main() {
             "py" => (transpile_py::emit_ernos_from_python(source_path, &source), "Python"),
             "c" | "h" => (transpile_c::emit_ernos_from_c(source_path, &source), "C"),
             "js" | "mjs" => (transpile_js::emit_ernos_from_js(source_path, &source), "JavaScript"),
+            "go" => (transpile_go::emit_ernos_from_go(source_path, &source), "Go"),
+            "rb" => (transpile_rb::emit_ernos_from_ruby(source_path, &source), "Ruby"),
+            "rs" => (transpile_rs::emit_ernos_from_rust(source_path, &source), "Rust"),
+            "java" => (transpile_java::emit_ernos_from_java(source_path, &source), "Java"),
+            "ts" | "tsx" => (transpile_ts::emit_ernos_from_typescript(source_path, &source), "TypeScript"),
             _ => {
                 eprintln!("Unsupported source language: .{}", ext);
-                eprintln!("Supported: .py (Python)");
+                eprintln!("Supported: .py .c .h .js .mjs .go .rb .rs .java .ts .tsx");
                 std::process::exit(1);
             }
         };
@@ -261,6 +274,75 @@ fn main() {
         let line_count = output.lines().count();
         println!("  Functions: {}", func_count);
         println!("  Lines: {}", line_count);
+        return;
+    }
+
+    // Handle 'ernos emit file.ep --python|--js|--c [-o output]' subcommand
+    if args[1] == "emit" {
+        if args.len() < 4 {
+            eprintln!("Usage: ernos emit <file.ep> --python|--js|--c [-o output]");
+            std::process::exit(1);
+        }
+        let source_path = &args[2];
+        let target = &args[3];
+
+        let source = match fs::read_to_string(source_path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Error reading '{}': {}", source_path, e);
+                std::process::exit(1);
+            }
+        };
+
+        // Parse the ErnosPlain source
+        let mut lex = lexer::Lexer::new(&source);
+        let tokens = match lex.tokenize() {
+            Ok(toks) => toks,
+            Err(e) => {
+                eprintln!("Lexer error: {}", e.message);
+                std::process::exit(1);
+            }
+        };
+        let mut par = parser::Parser::new(tokens);
+        let program = match par.parse_program() {
+            Ok(prog) => prog,
+            Err(e) => {
+                eprintln!("Parser error: {}", e.message);
+                std::process::exit(1);
+            }
+        };
+
+        let (output, ext_out, lang) = match target.as_str() {
+            "--python" | "--py" => (emit_python::emit_python_from_ep(&program), "py", "Python"),
+            "--js" | "--javascript" => (emit_js::emit_js_from_ep(&program), "js", "JavaScript"),
+            "--c" => (emit_c::emit_c_from_ep(&program), "c", "C"),
+            _ => {
+                eprintln!("Unsupported emit target: {}", target);
+                eprintln!("Supported: --python, --js, --c");
+                std::process::exit(1);
+            }
+        };
+
+        let output_path = if let Some(idx) = args.iter().position(|a| a == "-o") {
+            args.get(idx + 1).cloned().unwrap_or_else(|| {
+                let stem = Path::new(source_path).file_stem()
+                    .and_then(|s| s.to_str()).unwrap_or("emitted");
+                format!("{}.{}", stem, ext_out)
+            })
+        } else {
+            let stem = Path::new(source_path).file_stem()
+                .and_then(|s| s.to_str()).unwrap_or("emitted");
+            format!("{}.{}", stem, ext_out)
+        };
+
+        if let Err(e) = fs::write(&output_path, &output) {
+            eprintln!("Error writing '{}': {}", output_path, e);
+            std::process::exit(1);
+        }
+
+        println!("Emitted ErnosPlain → {}: {}", lang, output_path);
+        println!("  Source: {}", source_path);
+        println!("  Lines: {}", output.lines().count());
         return;
     }
 
