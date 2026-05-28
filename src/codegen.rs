@@ -2885,9 +2885,10 @@ int main(int argc, char** argv) {
 
         // Scan for ownership transfers: variables passed to container-insertion
         // functions (map_insert, append_list, set_list) should NOT be auto-freed
-        // because the container now owns them.
+        // because the container now owns them. Also tracks variables passed to
+        // user-defined functions, since the callee could transfer ownership.
         let mut transferred: std::collections::HashSet<String> = std::collections::HashSet::new();
-        Self::collect_transferred(&func.body, &mut transferred);
+        Self::collect_transferred(&func.body, &mut transferred, &self.builtin_c_funcs);
 
         // Get the function's return type to avoid freeing the returned value
         let func_ret_type = self.func_return_types.get(&func.name).cloned();
@@ -2968,23 +2969,26 @@ int main(int argc, char** argv) {
     /// Scan statements for ownership-transferring calls and collect variable names.
     /// When a list/map/struct variable is passed as a value to a container-insertion
     /// function, ownership is transferred — the container now owns it.
-    fn collect_transferred(stmts: &[Stmt], transferred: &mut std::collections::HashSet<String>) {
+    /// Also tracks variables passed to user-defined functions, since the caller
+    /// can't know whether the callee stores the value in a container.
+    fn collect_transferred(stmts: &[Stmt], transferred: &mut std::collections::HashSet<String>,
+                           builtins: &std::collections::HashSet<String>) {
         for stmt in stmts {
             match &stmt.node {
                 StmtNode::Set(_, expr, _) | StmtNode::ExprStmt(expr) => {
-                    Self::collect_transferred_from_expr(expr, transferred);
+                    Self::collect_transferred_from_expr(expr, transferred, builtins);
                 }
                 StmtNode::If(_, then_branch, else_branch) => {
-                    Self::collect_transferred(then_branch, transferred);
+                    Self::collect_transferred(then_branch, transferred, builtins);
                     if let Some(else_stmts) = else_branch {
-                        Self::collect_transferred(else_stmts, transferred);
+                        Self::collect_transferred(else_stmts, transferred, builtins);
                     }
                 }
                 StmtNode::RepeatWhile(_, body) => {
-                    Self::collect_transferred(body, transferred);
+                    Self::collect_transferred(body, transferred, builtins);
                 }
                 StmtNode::ForEach(_, _, body) => {
-                    Self::collect_transferred(body, transferred);
+                    Self::collect_transferred(body, transferred, builtins);
                 }
                 StmtNode::Send(_, val) => {
                     // Sending a value over a channel transfers ownership
@@ -2997,7 +3001,8 @@ int main(int argc, char** argv) {
         }
     }
 
-    fn collect_transferred_from_expr(expr: &Expr, transferred: &mut std::collections::HashSet<String>) {
+    fn collect_transferred_from_expr(expr: &Expr, transferred: &mut std::collections::HashSet<String>,
+                                     builtins: &std::collections::HashSet<String>) {
         if let ExprNode::Call(name, args) = &expr.node {
             match name.as_str() {
                 // map_insert(map, key, value) — 3rd arg (index 2) is transferred
@@ -3018,7 +3023,18 @@ int main(int argc, char** argv) {
                         transferred.insert(var_name.clone());
                     }
                 }
-                _ => {}
+                _ => {
+                    // For user-defined functions (not builtins), any argument
+                    // could be stored in a container by the callee — we can't
+                    // know, so mark all identifier args as potentially transferred.
+                    if !builtins.contains(name) {
+                        for arg in args {
+                            if let ExprNode::Identifier(var_name) = &arg.node {
+                                transferred.insert(var_name.clone());
+                            }
+                        }
+                    }
+                }
             }
         }
     }
