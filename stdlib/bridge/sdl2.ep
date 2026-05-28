@@ -1,0 +1,157 @@
+# ErnosPlain Bridge: SDL2 (Graphics, Audio, Input)
+# Usage: import "stdlib/bridge/sdl2"
+# Requires: SDL2 installed (brew install sdl2)
+
+# ========== Init Flag Constants ==========
+set SDL_INIT_TIMER to 1
+set SDL_INIT_AUDIO to 16
+set SDL_INIT_VIDEO to 32
+set SDL_INIT_JOYSTICK to 512
+set SDL_INIT_GAMECONTROLLER to 8192
+set SDL_INIT_EVENTS to 16384
+set SDL_INIT_EVERYTHING to 62001
+
+# ========== Window Flag Constants ==========
+set SDL_WINDOW_SHOWN to 4
+set SDL_WINDOW_FULLSCREEN to 1
+set SDL_WINDOW_RESIZABLE to 32
+set SDL_WINDOW_BORDERLESS to 16
+
+set SDL_WINDOWPOS_CENTERED to 805240832
+
+# ========== Renderer Flag Constants ==========
+set SDL_RENDERER_ACCELERATED to 2
+set SDL_RENDERER_PRESENTVSYNC to 4
+
+# ========== Event Type Constants ==========
+set SDL_QUIT_EVENT to 256
+set SDL_KEYDOWN_EVENT to 768
+set SDL_KEYUP_EVENT to 769
+set SDL_MOUSEMOTION_EVENT to 1024
+set SDL_MOUSEBUTTONDOWN_EVENT to 1025
+
+# ========== Internal: Load Library ==========
+
+define sdl_load returning Int:
+    set lib to ep_dlopen("libSDL2.dylib")
+    if lib equals 0:
+        set lib to ep_dlopen("libSDL2-2.0.so")
+    if lib equals 0:
+        set lib to ep_dlopen("libSDL2-2.0.so.0")
+    if lib equals 0:
+        set lib to ep_dlopen("libSDL2.so")
+    return lib
+
+# ========== Init / Quit ==========
+
+define sdl_init with flags as Int returning Int:
+    set lib to sdl_load()
+    if lib equals 0:
+        display "Error: could not load SDL2"
+        return 0 - 1
+    set fn to ep_dlsym(lib and "SDL_Init")
+    return ep_dlcall1(fn and flags)
+
+define sdl_quit:
+    set lib to sdl_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "SDL_Quit")
+    return ep_dlcall0(fn)
+
+# ========== Window ==========
+
+define sdl_create_window with title as Str and x as Int and y as Int and w as Int and h as Int and flags as Int returning Int:
+    set lib to sdl_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "SDL_CreateWindow")
+    return ep_dlcall6(fn and title and x and y and w and h and flags)
+
+define sdl_destroy_window with win as Int:
+    set lib to sdl_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "SDL_DestroyWindow")
+    return ep_dlcall1(fn and win)
+
+# ========== Renderer ==========
+
+define sdl_create_renderer with win as Int and index as Int and flags as Int returning Int:
+    set lib to sdl_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "SDL_CreateRenderer")
+    return ep_dlcall3(fn and win and index and flags)
+
+define sdl_destroy_renderer with renderer as Int:
+    set lib to sdl_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "SDL_DestroyRenderer")
+    return ep_dlcall1(fn and renderer)
+
+define sdl_render_clear with renderer as Int returning Int:
+    set lib to sdl_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "SDL_RenderClear")
+    return ep_dlcall1(fn and renderer)
+
+define sdl_render_present with renderer as Int:
+    set lib to sdl_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "SDL_RenderPresent")
+    return ep_dlcall1(fn and renderer)
+
+define sdl_set_render_draw_color with renderer as Int and r as Int and g as Int and b as Int and a as Int returning Int:
+    set lib to sdl_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "SDL_SetRenderDrawColor")
+    return ep_dlcall5(fn and renderer and r and g and b and a)
+
+# ========== Events ==========
+
+define sdl_poll_event with event_ptr as Int returning Int:
+    set lib to sdl_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "SDL_PollEvent")
+    return ep_dlcall1(fn and event_ptr)
+
+# ========== Timing ==========
+
+define sdl_delay with ms as Int:
+    set lib to sdl_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "SDL_Delay")
+    return ep_dlcall1(fn and ms)
+
+define sdl_get_ticks returning Int:
+    set lib to sdl_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "SDL_GetTicks")
+    return ep_dlcall0(fn)
+
+define sdl_get_error returning Int:
+    set lib to sdl_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "SDL_GetError")
+    return ep_dlcall0(fn)
+
+# ========== Convenience ==========
+
+define sdl_quick_init with title as Str and w as Int and h as Int returning Int:
+    # Initialize SDL, create window + renderer. Returns renderer handle.
+    set _ to sdl_init(SDL_INIT_VIDEO)
+    set win to sdl_create_window(title and SDL_WINDOWPOS_CENTERED and SDL_WINDOWPOS_CENTERED and w and h and SDL_WINDOW_SHOWN)
+    if win equals 0:
+        display "Error: could not create SDL window"
+        return 0
+    set renderer to sdl_create_renderer(win and 0 - 1 and SDL_RENDERER_ACCELERATED)
+    return renderer

@@ -1,0 +1,177 @@
+# ErnosPlain Bridge: raylib (2D/3D Game Rendering)
+# Usage: import "stdlib/bridge/raylib"
+# Requires: libraylib installed (brew install raylib)
+
+# ========== Color Constants (RGBA packed as int) ==========
+set RAYLIB_WHITE to 4294967295
+set RAYLIB_BLACK to 255
+set RAYLIB_RED to 4278190335
+set RAYLIB_GREEN to 16711935
+set RAYLIB_BLUE to 65535
+set RAYLIB_YELLOW to 4294902015
+set RAYLIB_PURPLE to 2147516671
+set RAYLIB_ORANGE to 4289003775
+set RAYLIB_PINK to 4286578943
+set RAYLIB_GRAY to 2155905279
+set RAYLIB_DARKGRAY to 1347440895
+set RAYLIB_RAYWHITE to 4156998655
+
+# ========== Key Constants ==========
+set KEY_RIGHT to 262
+set KEY_LEFT to 263
+set KEY_DOWN to 264
+set KEY_UP to 265
+set KEY_SPACE to 32
+set KEY_ENTER to 257
+set KEY_ESCAPE to 256
+set KEY_W to 87
+set KEY_A to 65
+set KEY_S to 83
+set KEY_D to 68
+
+# ========== Internal: Load Library ==========
+
+define raylib_load returning Int:
+    set lib to ep_dlopen("libraylib.dylib")
+    if lib equals 0:
+        set lib to ep_dlopen("libraylib.so")
+    if lib equals 0:
+        set lib to ep_dlopen("libraylib.so.5")
+    return lib
+
+# ========== Window Management ==========
+
+define raylib_init_window with width as Int and height as Int and title as Str:
+    set lib to raylib_load()
+    if lib equals 0:
+        display "Error: could not load raylib"
+        return 0
+    set fn to ep_dlsym(lib and "InitWindow")
+    return ep_dlcall3(fn and width and height and title)
+
+define raylib_close_window:
+    set lib to raylib_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "CloseWindow")
+    return ep_dlcall0(fn)
+
+define raylib_window_should_close returning Int:
+    set lib to raylib_load()
+    if lib equals 0:
+        return 1
+    set fn to ep_dlsym(lib and "WindowShouldClose")
+    return ep_dlcall0(fn)
+
+define raylib_set_target_fps with fps as Int:
+    set lib to raylib_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "SetTargetFPS")
+    return ep_dlcall1(fn and fps)
+
+define raylib_get_fps returning Int:
+    set lib to raylib_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "GetFPS")
+    return ep_dlcall0(fn)
+
+# ========== Drawing ==========
+
+define raylib_begin_drawing:
+    set lib to raylib_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "BeginDrawing")
+    return ep_dlcall0(fn)
+
+define raylib_end_drawing:
+    set lib to raylib_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "EndDrawing")
+    return ep_dlcall0(fn)
+
+define raylib_clear_background with color as Int:
+    set lib to raylib_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "ClearBackground")
+    return ep_dlcall1(fn and color)
+
+define raylib_draw_text with text as Str and x as Int and y as Int and size as Int and color as Int:
+    set lib to raylib_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "DrawText")
+    return ep_dlcall5(fn and text and x and y and size and color)
+
+define raylib_draw_rectangle with x as Int and y as Int and width as Int and height as Int and color as Int:
+    set lib to raylib_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "DrawRectangle")
+    return ep_dlcall5(fn and x and y and width and height and color)
+
+define raylib_draw_circle with cx as Int and cy as Int and radius as Int and color as Int:
+    set lib to raylib_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "DrawCircle")
+    return ep_dlcall4(fn and cx and cy and radius and color)
+
+define raylib_draw_line with x1 as Int and y1 as Int and x2 as Int and y2 as Int and color as Int:
+    set lib to raylib_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "DrawLine")
+    return ep_dlcall5(fn and x1 and y1 and x2 and y2 and color)
+
+# ========== Input ==========
+
+define raylib_is_key_pressed with key as Int returning Int:
+    set lib to raylib_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "IsKeyPressed")
+    return ep_dlcall1(fn and key)
+
+define raylib_is_key_down with key as Int returning Int:
+    set lib to raylib_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "IsKeyDown")
+    return ep_dlcall1(fn and key)
+
+define raylib_get_mouse_x returning Int:
+    set lib to raylib_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "GetMouseX")
+    return ep_dlcall0(fn)
+
+define raylib_get_mouse_y returning Int:
+    set lib to raylib_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "GetMouseY")
+    return ep_dlcall0(fn)
+
+define raylib_is_mouse_button_pressed with button as Int returning Int:
+    set lib to raylib_load()
+    if lib equals 0:
+        return 0
+    set fn to ep_dlsym(lib and "IsMouseButtonPressed")
+    return ep_dlcall1(fn and button)
+
+# ========== Convenience ==========
+
+define raylib_frame_begin with color as Int:
+    raylib_begin_drawing()
+    raylib_clear_background(color)
+    return 0
+
+define raylib_frame_end:
+    raylib_end_drawing()
+    return 0

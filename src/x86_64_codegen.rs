@@ -12,6 +12,8 @@ pub struct X86_64Codegen {
     var_offsets: HashMap<String, i64>,
     stack_size: i64,
     is_macos: bool,
+    loop_break_label: Option<String>,
+    loop_continue_label: Option<String>,
 }
 
 /// Escape a string for use in GAS .asciz directive
@@ -41,6 +43,8 @@ impl X86_64Codegen {
             var_offsets: HashMap::new(),
             stack_size: 0,
             is_macos,
+            loop_break_label: None,
+            loop_continue_label: None,
         }
     }
 
@@ -309,6 +313,11 @@ impl X86_64Codegen {
                 let loop_label = self.new_label("loop");
                 let end_label = self.new_label("endloop");
 
+                let prev_break = self.loop_break_label.take();
+                let prev_continue = self.loop_continue_label.take();
+                self.loop_break_label = Some(end_label.clone());
+                self.loop_continue_label = Some(loop_label.clone());
+
                 self.emit(&format!("{}:", loop_label));
                 self.gen_expr(cond, "rax", frame_size)?;
                 self.emit("    cmp rax, 0");
@@ -319,10 +328,25 @@ impl X86_64Codegen {
                 }
                 self.emit(&format!("    jmp {}", loop_label));
                 self.emit(&format!("{}:", end_label));
+
+                self.loop_break_label = prev_break;
+                self.loop_continue_label = prev_continue;
             }
 
             StmtNode::ExprStmt(expr) => {
                 self.gen_expr(expr, "rax", frame_size)?;
+            }
+
+            StmtNode::Break => {
+                if let Some(ref lbl) = self.loop_break_label {
+                    self.emit(&format!("    jmp {}", lbl));
+                }
+            }
+
+            StmtNode::Continue => {
+                if let Some(ref lbl) = self.loop_continue_label {
+                    self.emit(&format!("    jmp {}", lbl));
+                }
             }
 
             _ => {

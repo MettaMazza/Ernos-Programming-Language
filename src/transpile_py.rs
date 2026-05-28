@@ -1110,6 +1110,22 @@ fn py_type_to_ernos(hint: &str) -> &str {
     }
 }
 
+/// Sanitize identifiers that collide with Ernos keywords
+fn sanitize_ernos_ident(name: &str) -> String {
+    match name {
+        "define" | "with" | "and" | "set" | "to" | "if" | "else" | "return"
+        | "display" | "repeat" | "while" | "import" | "spawn" | "channel"
+        | "send" | "receive" | "from" | "external" | "borrow" | "structure"
+        | "field" | "as" | "is" | "create" | "returning" | "choice" | "variant"
+        | "check" | "for" | "each" | "in" | "range" | "on" | "trait" | "implement"
+        | "not" | "break" | "continue" | "of" | "try" | "given" | "true" | "false"
+        | "async" | "await" | "plus" | "minus" | "equals" | "modulo" => {
+            format!("{}_v", name)
+        }
+        _ => name.to_string(),
+    }
+}
+
 fn emit_indent(out: &mut String, depth: usize) {
     for _ in 0..depth {
         out.push_str("    ");
@@ -1132,15 +1148,16 @@ pub fn emit_ernos_from_python(filename: &str, source: &str) -> String {
     };
 
     for stmt in &stmts {
-        // Filter out bare top-level calls like main() — not valid Ernos
-        if let PyStmt::Expr(PyExpr::Call(func, _, _)) = stmt {
-            if let PyExpr::Name(n) = func.as_ref() {
-                if n == "main" || n == "__main__" {
-                    continue;
-                }
+        // Only emit function/class definitions at top level — ErnosPlain
+        // doesn't allow bare statements (calls, assignments, etc.) outside of define blocks
+        match stmt {
+            PyStmt::FuncDef(..) | PyStmt::ClassDef(..) => {
+                emit_stmt(&mut out, &mut ctx, stmt);
+            }
+            _ => {
+                // Skip bare top-level statements (calls like main(), assignments, etc.)
             }
         }
-        emit_stmt(&mut out, &mut ctx, stmt);
     }
 
     out
@@ -1155,7 +1172,7 @@ fn emit_stmt(out: &mut String, ctx: &mut EmitCtx, stmt: &PyStmt) {
     match stmt {
         PyStmt::FuncDef(name, params, ret_hint, body) => {
             emit_indent(out, ctx.depth);
-            let ep_name = name.replace("__init__", "create");
+            let ep_name = sanitize_ernos_ident(&name.replace("__init__", "create"));
 
             if params.is_empty() {
                 if let Some(ret) = ret_hint {
@@ -1167,7 +1184,7 @@ fn emit_stmt(out: &mut String, ctx: &mut EmitCtx, stmt: &PyStmt) {
                 let param_parts: Vec<String> = params.iter()
                     .map(|(pname, hint)| {
                         let ptype = hint.as_deref().map(py_type_to_ernos).unwrap_or("Int");
-                        format!("{} as {}", pname, ptype)
+                        format!("{} as {}", sanitize_ernos_ident(pname), ptype)
                     })
                     .collect();
 
@@ -1344,28 +1361,32 @@ fn emit_stmt(out: &mut String, ctx: &mut EmitCtx, stmt: &PyStmt) {
             if let PyExpr::Call(func, args, _) = iter {
                 if let PyExpr::Name(fname) = func.as_ref() {
                     if fname == "range" {
-                        out.push_str(&format!("for each {} in ", var));
-                        // range(n) or range(a, b)
-                        match args.len() {
-                            1 => {
-                                out.push_str("range(0 and ");
-                                emit_expr(out, &args[0]);
-                                out.push(')');
-                            }
-                            2 => {
-                                out.push_str("range(");
-                                emit_expr(out, &args[0]);
-                                out.push_str(" and ");
-                                emit_expr(out, &args[1]);
-                                out.push(')');
-                            }
-                            _ => {
-                                out.push_str("range(0 and 10)");
-                            }
+                        // Expand range() to set/repeat while/increment pattern
+                        // range(n) → set var to 0, repeat while var < n
+                        // range(a, b) → set var to a, repeat while var < b
+                        let (start_expr, end_expr) = match args.len() {
+                            1 => (None, &args[0]),
+                            2 => (Some(&args[0]), &args[1]),
+                            _ => (None, &args[0]),
+                        };
+                        // Emit: set var to start
+                        out.push_str(&format!("set {} to ", var));
+                        if let Some(start) = start_expr {
+                            emit_expr(out, start);
+                        } else {
+                            out.push('0');
                         }
+                        out.push('\n');
+                        // Emit: repeat while var < end:
+                        emit_indent(out, ctx.depth);
+                        out.push_str(&format!("repeat while {} < ", var));
+                        emit_expr(out, end_expr);
                         out.push_str(":\n");
                         ctx.depth += 1;
                         for s in body { emit_stmt(out, ctx, s); }
+                        // Emit: set var to var + 1
+                        emit_indent(out, ctx.depth);
+                        out.push_str(&format!("set {} to {} + 1\n", var, var));
                         ctx.depth -= 1;
                         return;
                     }
@@ -1499,7 +1520,7 @@ fn emit_cond(out: &mut String, expr: &PyExpr) {
             for (op, right) in ops {
                 match op.as_str() {
                     "==" => out.push_str(" equals "),
-                    "!=" => out.push_str(" not equals "),
+                    "!=" => out.push_str(" != "),
                     "<" => out.push_str(" < "),
                     ">" => out.push_str(" > "),
                     "<=" => out.push_str(" <= "),
@@ -1546,7 +1567,7 @@ fn emit_expr(out: &mut String, expr: &PyExpr) {
         }
         PyExpr::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
         PyExpr::None => out.push('0'),
-        PyExpr::Name(n) => out.push_str(n),
+        PyExpr::Name(n) => out.push_str(&sanitize_ernos_ident(n)),
 
         PyExpr::BinOp(left, op, right) => {
             match op.as_str() {
@@ -1594,7 +1615,7 @@ fn emit_expr(out: &mut String, expr: &PyExpr) {
             for (op, right) in ops {
                 match op.as_str() {
                     "==" => out.push_str(" equals "),
-                    "!=" => out.push_str(" not equals "),
+                    "!=" => out.push_str(" != "),
                     other => { out.push(' '); out.push_str(other); out.push(' '); }
                 };
                 emit_expr(out, right);

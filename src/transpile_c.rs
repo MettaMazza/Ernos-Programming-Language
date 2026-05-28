@@ -936,6 +936,22 @@ pub fn emit_ernos_from_c(filename: &str, source: &str) -> String {
     out
 }
 
+/// Sanitize identifiers that collide with Ernos keywords
+fn sanitize_ernos_ident(name: &str) -> String {
+    match name {
+        "define" | "with" | "and" | "set" | "to" | "if" | "else" | "return"
+        | "display" | "repeat" | "while" | "import" | "spawn" | "channel"
+        | "send" | "receive" | "from" | "external" | "borrow" | "structure"
+        | "field" | "as" | "is" | "create" | "returning" | "choice" | "variant"
+        | "check" | "for" | "each" | "in" | "range" | "on" | "trait" | "implement"
+        | "not" | "break" | "continue" | "of" | "try" | "given" | "true" | "false"
+        | "async" | "await" | "plus" | "minus" | "equals" | "modulo" => {
+            format!("{}_v", name)
+        }
+        _ => name.to_string(),
+    }
+}
+
 fn emit_indent(out: &mut String, depth: usize) {
     for _ in 0..depth { out.push_str("    "); }
 }
@@ -979,19 +995,19 @@ fn emit_c_stmt(out: &mut String, stmt: &CStmt, depth: usize) {
             emit_indent(out, depth);
             if params.is_empty() || (params.len() == 1 && params[0].0.contains("void")) {
                 if ret_type.contains("void") {
-                    out.push_str(&format!("define {}:\n", name));
+                    out.push_str(&format!("define {}:\n", sanitize_ernos_ident(name)));
                 } else {
-                    out.push_str(&format!("define {} returning {}:\n", name, c_type_to_ernos(ret_type)));
+                    out.push_str(&format!("define {} returning {}:\n", sanitize_ernos_ident(name), c_type_to_ernos(ret_type)));
                 }
             } else {
                 let param_parts: Vec<String> = params.iter()
-                    .map(|(t, n)| format!("{} as {}", n, c_type_to_ernos(t)))
+                    .map(|(t, n)| format!("{} as {}", sanitize_ernos_ident(n), c_type_to_ernos(t)))
                     .collect();
                 if ret_type.contains("void") {
-                    out.push_str(&format!("define {} with {}:\n", name, param_parts.join(" and ")));
+                    out.push_str(&format!("define {} with {}:\n", sanitize_ernos_ident(name), param_parts.join(" and ")));
                 } else {
                     out.push_str(&format!("define {} with {} returning {}:\n",
-                        name, param_parts.join(" and "), c_type_to_ernos(ret_type)));
+                        sanitize_ernos_ident(name), param_parts.join(" and "), c_type_to_ernos(ret_type)));
                 }
             }
             for s in body {
@@ -1212,7 +1228,7 @@ fn emit_c_cond(out: &mut String, expr: &CExpr) {
         CExpr::BinOp(left, op, right) => {
             let ep_op = match op.as_str() {
                 "==" => " equals ",
-                "!=" => " not equals ",
+                "!=" => " != ",
                 "&&" => " and ",
                 "||" => " or ",
                 _ => { emit_c_expr(out, left); out.push_str(&format!(" {} ", op)); emit_c_expr(out, right); return; }
@@ -1235,7 +1251,7 @@ fn emit_c_expr(out: &mut String, expr: &CExpr) {
         CExpr::Float(f) => out.push_str(&(*f as i64).to_string()),
         CExpr::Str(s) => { out.push('"'); out.push_str(&s.replace('"', "\\\"").replace('\n', "\\n")); out.push('"'); }
         CExpr::Char(c) => out.push_str(&(*c as i64).to_string()),
-        CExpr::Name(n) => out.push_str(n),
+        CExpr::Name(n) => out.push_str(&sanitize_ernos_ident(n)),
         CExpr::Null => out.push('0'),
         CExpr::Sizeof(t) => out.push_str(&format!("8 # sizeof({})", t)),
 
