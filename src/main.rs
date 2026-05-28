@@ -394,7 +394,7 @@ fn main() {
             std::process::exit(1);
         }
 
-        println!("[3/3] Assembling and Linking (no Clang)...");
+        println!("[3/4] Assembling Native Code...");
 
         // Assemble with system 'as'
         let obj_path = format!("{}_native.o", stem);
@@ -423,22 +423,60 @@ fn main() {
             }
         }
 
-        // Link with system 'ld' or 'gcc' depending on OS
+        // Hybrid compilation: compile C runtime to .o, then link with native .o
+        // This provides all the runtime functions (create_list, length_list, channels, GC, etc.)
+        // that the native assembly references as external symbols.
+        println!("[4/4] Compiling C Runtime and Linking...");
+
+        let mut cg = codegen::Codegen::new();
+        let runtime_c_src = cg.emit_runtime_c(&program);
+        let runtime_c_path = format!("{}_runtime.c", stem);
+        if let Err(e) = fs::write(&runtime_c_path, &runtime_c_src) {
+            eprintln!("Error writing runtime C source: {}", e);
+            std::process::exit(1);
+        }
+
+        // Compile runtime C to .o
+        let runtime_obj_path = format!("{}_runtime.o", stem);
+        let cc = if Command::new("clang").arg("--version").output().is_ok() { "clang" } else { "gcc" };
+        let cc_status = Command::new(cc)
+            .arg("-c")
+            .arg("-O2")
+            .arg("-o").arg(&runtime_obj_path)
+            .arg(&runtime_c_path)
+            .status();
+        match cc_status {
+            Ok(s) if s.success() => {}
+            Ok(s) => {
+                eprintln!("Error: C compiler failed on runtime with exit code: {}", s);
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("Error invoking C compiler for runtime: {}", e);
+                std::process::exit(1);
+            }
+        }
+
+        // Link native assembly .o + C runtime .o into final binary
         let ld_status = if os == "macos" {
             let target_arch = if is_x86_64 { "x86_64" } else { "arm64" };
             Command::new("ld")
                 .arg("-o").arg(stem)
                 .arg(&obj_path)
+                .arg(&runtime_obj_path)
                 .arg("-lSystem")
                 .arg("-syslibroot").arg("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk")
                 .arg("-arch").arg(target_arch)
                 .status()
         } else {
-            // Linux and other Unix-like systems: use gcc or ld
+            // Linux: use gcc to link, include pthread and math libs
             Command::new("gcc")
                 .arg("-no-pie")
                 .arg("-o").arg(stem)
                 .arg(&obj_path)
+                .arg(&runtime_obj_path)
+                .arg("-lpthread")
+                .arg("-lm")
                 .status()
         };
 
@@ -447,6 +485,8 @@ fn main() {
                 // Clean up temp files
                 let _ = fs::remove_file(&asm_path);
                 let _ = fs::remove_file(&obj_path);
+                let _ = fs::remove_file(&runtime_c_path);
+                let _ = fs::remove_file(&runtime_obj_path);
                 println!("\nSuccessfully compiled into native binary: ./{}", stem);
             }
             Ok(s) => {

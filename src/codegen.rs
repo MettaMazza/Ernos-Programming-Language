@@ -1973,6 +1973,163 @@ impl Codegen {
         lines.concat()
     }
 
+    /// Emit a standalone C file containing ONLY the runtime and program-specific
+    /// struct/enum definitions. No user function code, no main wrapper.
+    /// Used by the native backend: the runtime compiles to a .o that links
+    /// with the native assembly .o to produce a complete binary.
+    pub fn emit_runtime_c(&mut self, program: &Program) -> String {
+        let mut out = String::new();
+
+        // Register struct/enum definitions (needed for struct/enum codegen)
+        for sd in &program.struct_defs {
+            self.struct_defs.insert(sd.name.clone(), sd.clone());
+        }
+        for ed in &program.enum_defs {
+            self.enum_defs.insert(ed.name.clone(), ed.clone());
+            for (variant_name, _) in &ed.variants {
+                self.variant_to_enum.insert(variant_name.clone(), ed.name.clone());
+            }
+        }
+
+        // 1. The full C runtime header + implementation
+        out.push_str(RUNTIME_HEADER_AND_SRC);
+
+        // 2. User-defined struct typedefs and free functions
+        if !program.struct_defs.is_empty() {
+            out.push_str("\n/* User-Defined Structures */\n");
+            for sd in &program.struct_defs {
+                out.push_str(&format!("typedef struct {{\n"));
+                for (fname, _ftype, _) in &sd.fields {
+                    out.push_str(&format!("    long long {};\n", fname));
+                }
+                out.push_str(&format!("}} EpStruct_{};\n\n", sd.name));
+
+                out.push_str(&format!("void free_struct_{}(long long ptr) {{\n", sd.name));
+                out.push_str("    if (ptr == 0) return;\n");
+                out.push_str("    if (!ep_gc_find((void*)ptr)) return;\n");
+                out.push_str(&format!("    EpStruct_{}* s = (EpStruct_{}*)ptr;\n", sd.name, sd.name));
+                for (fname, ftype, _) in &sd.fields {
+                    match ftype {
+                        TypeAnnotation::List => {
+                            out.push_str(&format!("    free_list(s->{});\n", fname));
+                        }
+                        TypeAnnotation::DynStr => {
+                            out.push_str(&format!("    if (s->{}) free((void*)s->{});\n", fname, fname));
+                        }
+                        TypeAnnotation::UserDefined(inner_name) => {
+                            out.push_str(&format!("    free_struct_{}(s->{});\n", inner_name, fname));
+                        }
+                        TypeAnnotation::Generic(inner_name, _) => {
+                            out.push_str(&format!("    free_struct_{}(s->{});\n", inner_name, fname));
+                        }
+                        _ => {}
+                    }
+                }
+                out.push_str("    ep_gc_unregister(s);\n");
+                out.push_str("    free(s);\n");
+                out.push_str("}\n\n");
+            }
+        }
+
+        // 3. User-defined enum typedefs, constructors, and free functions
+        if !program.enum_defs.is_empty() {
+            out.push_str("\n/* User-Defined Choices (Enums) */\n");
+            for ed in &program.enum_defs {
+                for (i, (vname, _)) in ed.variants.iter().enumerate() {
+                    out.push_str(&format!("#define EP_TAG_{}_{} {}\n", ed.name, vname, i));
+                }
+                out.push_str("\n");
+
+                let max_fields = ed.variants.iter().map(|(_, fields)| fields.len()).max().unwrap_or(0);
+                out.push_str("typedef struct {\n");
+                out.push_str("    long long tag;\n");
+                for j in 0..max_fields {
+                    out.push_str(&format!("    long long data{};\n", j));
+                }
+                out.push_str(&format!("}} EpEnum_{};\n\n", ed.name));
+
+                out.push_str(&format!("void free_enum_{}(long long ptr) {{\n", ed.name));
+                out.push_str("    if (ptr == 0) return;\n");
+                out.push_str("    if (!ep_gc_find((void*)ptr)) return;\n");
+                out.push_str("    ep_gc_unregister((void*)ptr);\n");
+                out.push_str("    free((void*)ptr);\n");
+                out.push_str("}\n\n");
+
+                for (_i, (vname, fields)) in ed.variants.iter().enumerate() {
+                    let mut params = Vec::new();
+                    for (j, _) in fields.iter().enumerate() {
+                        params.push(format!("long long arg{}", j));
+                    }
+                    let params_str = if params.is_empty() { "void".to_string() } else { params.join(", ") };
+                    out.push_str(&format!("long long create_{}_{}({}) {{\n", ed.name, vname, params_str));
+                    out.push_str(&format!("    EpEnum_{}* e = (EpEnum_{}*)malloc(sizeof(EpEnum_{}));\n", ed.name, ed.name, ed.name));
+                    out.push_str(&format!("    e->tag = EP_TAG_{}_{};\n", ed.name, vname));
+                    for (j, _) in fields.iter().enumerate() {
+                        out.push_str(&format!("    e->data{} = arg{};\n", j, j));
+                    }
+                    out.push_str("    ep_gc_register(e, EP_OBJ_CLOSURE);\n");
+                    out.push_str("    return (long long)e;\n");
+                    out.push_str("}\n\n");
+                }
+
+                out.push_str(&format!("const char* display_enum_{}(long long ptr) {{\n", ed.name));
+                out.push_str("    if (ptr == 0) return \"(null)\";\n");
+                out.push_str(&format!("    EpEnum_{}* e = (EpEnum_{}*)ptr;\n", ed.name, ed.name));
+                for (i, (vname, _)) in ed.variants.iter().enumerate() {
+                    out.push_str(&format!("    if (e->tag == {}) return \"{}\";\n", i, vname));
+                }
+                out.push_str("    return \"(unknown)\";\n");
+                out.push_str("}\n\n");
+            }
+        }
+
+        // 4. Builtin helper functions that are emitted inline by generate()
+        out.push_str("\n/* Built-in: string concatenation */\n");
+        out.push_str("long long concat(long long a, long long b) {\n");
+        out.push_str("    const char* sa = (const char*)a;\n");
+        out.push_str("    const char* sb = (const char*)b;\n");
+        out.push_str("    long long la = strlen(sa);\n");
+        out.push_str("    long long lb = strlen(sb);\n");
+        out.push_str("    char* result = malloc(la + lb + 1);\n");
+        out.push_str("    memcpy(result, sa, la);\n");
+        out.push_str("    memcpy(result + la, sb, lb);\n");
+        out.push_str("    result[la + lb] = '\\0';\n");
+        out.push_str("    ep_gc_register(result, EP_OBJ_STRING);\n");
+        out.push_str("    return (long long)result;\n");
+        out.push_str("}\n\n");
+
+        out.push_str("long long int_to_string(long long val) {\n");
+        out.push_str("    char* buf = malloc(32);\n");
+        out.push_str("    snprintf(buf, 32, \"%lld\", val);\n");
+        out.push_str("    ep_gc_register(buf, EP_OBJ_STRING);\n");
+        out.push_str("    return (long long)buf;\n");
+        out.push_str("}\n\n");
+
+        out.push_str("long long string_to_int(long long s) {\n");
+        out.push_str("    if (s == 0) return 0;\n");
+        out.push_str("    return atoll((const char*)s);\n");
+        out.push_str("}\n\n");
+
+        out.push_str("long long read_line() {\n");
+        out.push_str("    char buf[4096];\n");
+        out.push_str("    if (fgets(buf, sizeof(buf), stdin) == NULL) { buf[0] = '\\0'; }\n");
+        out.push_str("    size_t len = strlen(buf);\n");
+        out.push_str("    if (len > 0 && buf[len-1] == '\\n') buf[len-1] = '\\0';\n");
+        out.push_str("    char* result = strdup(buf);\n");
+        out.push_str("    ep_gc_register(result, EP_OBJ_STRING);\n");
+        out.push_str("    return (long long)result;\n");
+        out.push_str("}\n\n");
+
+        out.push_str("long long read_int() {\n");
+        out.push_str("    long long val = 0;\n");
+        out.push_str("    scanf(\"%lld\", &val);\n");
+        out.push_str("    while(getchar() != '\\n');\n");
+        out.push_str("    return val;\n");
+        out.push_str("}\n\n");
+
+        out
+    }
+
     pub fn generate(&mut self, program: &Program) -> Result<String, String> {
         self.out.clear();
 
