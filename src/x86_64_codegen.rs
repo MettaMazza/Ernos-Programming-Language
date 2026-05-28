@@ -472,6 +472,10 @@ impl X86_64Codegen {
                 }
             }
 
+            ExprNode::BoolLiteral(b) => {
+                self.emit(&format!("    mov {}, {}", dest, if *b { 1 } else { 0 }));
+            }
+
             _ => {
                 return Err(format!("Native x86_64 backend: unsupported expression type: {:?}", expr.node));
             }

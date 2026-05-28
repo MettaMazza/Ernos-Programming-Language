@@ -1132,6 +1132,14 @@ pub fn emit_ernos_from_python(filename: &str, source: &str) -> String {
     };
 
     for stmt in &stmts {
+        // Filter out bare top-level calls like main() — not valid Ernos
+        if let PyStmt::Expr(PyExpr::Call(func, _, _)) = stmt {
+            if let PyExpr::Name(n) = func.as_ref() {
+                if n == "main" || n == "__main__" {
+                    continue;
+                }
+            }
+        }
         emit_stmt(&mut out, &mut ctx, stmt);
     }
 
@@ -1295,7 +1303,9 @@ fn emit_stmt(out: &mut String, ctx: &mut EmitCtx, stmt: &PyStmt) {
             out.push_str("if ");
             emit_cond(out, cond);
             out.push_str(":\n");
+            ctx.depth += 1;
             for s in body { emit_stmt(out, ctx, s); }
+            ctx.depth -= 1;
 
             for (econd, ebody) in elifs {
                 emit_indent(out, ctx.depth);
@@ -1487,20 +1497,19 @@ fn emit_cond(out: &mut String, expr: &PyExpr) {
         PyExpr::Compare(left, ops) => {
             emit_expr(out, left);
             for (op, right) in ops {
-                let ep_op = match op.as_str() {
-                    "==" => " equals ",
-                    "!=" => " not equals ",
-                    "<" => " < ",
-                    ">" => " > ",
-                    "<=" => " <= ",
-                    ">=" => " >= ",
+                match op.as_str() {
+                    "==" => out.push_str(" equals "),
+                    "!=" => out.push_str(" not equals "),
+                    "<" => out.push_str(" < "),
+                    ">" => out.push_str(" > "),
+                    "<=" => out.push_str(" <= "),
+                    ">=" => out.push_str(" >= "),
                     "in" => {
                         out.push_str(" # 'in' check — needs manual translation");
                         return;
                     }
-                    _ => &format!(" {} ", op),
+                    other => { out.push(' '); out.push_str(other); out.push(' '); }
                 };
-                out.push_str(ep_op);
                 emit_expr(out, right);
             }
         }
@@ -1540,13 +1549,7 @@ fn emit_expr(out: &mut String, expr: &PyExpr) {
         PyExpr::Name(n) => out.push_str(n),
 
         PyExpr::BinOp(left, op, right) => {
-            let ep_op = match op.as_str() {
-                "+" => " + ",
-                "-" => " - ",
-                "*" => " * ",
-                "//" => " / ",
-                "/" => " / ",
-                "%" => " % ",
+            match op.as_str() {
                 "**" => {
                     // No native power operator — use multiplication or note
                     out.push_str("# power operation: ");
@@ -1555,7 +1558,21 @@ fn emit_expr(out: &mut String, expr: &PyExpr) {
                     emit_expr(out, right);
                     return;
                 }
-                _ => &format!(" {} ", op),
+                _ => {}
+            }
+            let ep_op = match op.as_str() {
+                "+" => " + ",
+                "-" => " - ",
+                "*" => " * ",
+                "//" => " / ",
+                "/" => " / ",
+                "%" => " % ",
+                _ => {
+                    emit_expr(out, left);
+                    out.push(' '); out.push_str(op); out.push(' ');
+                    emit_expr(out, right);
+                    return;
+                }
             };
             emit_expr(out, left);
             out.push_str(ep_op);
@@ -1575,12 +1592,11 @@ fn emit_expr(out: &mut String, expr: &PyExpr) {
         PyExpr::Compare(left, ops) => {
             emit_expr(out, left);
             for (op, right) in ops {
-                let ep_op = match op.as_str() {
-                    "==" => " equals ",
-                    "!=" => " not equals ",
-                    _ => &format!(" {} ", op),
+                match op.as_str() {
+                    "==" => out.push_str(" equals "),
+                    "!=" => out.push_str(" not equals "),
+                    other => { out.push(' '); out.push_str(other); out.push(' '); }
                 };
-                out.push_str(ep_op);
                 emit_expr(out, right);
             }
         }

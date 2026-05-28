@@ -1034,12 +1034,70 @@ fn emit_c_stmt(out: &mut String, stmt: &CStmt, depth: usize) {
                         "printf" | "puts" | "fprintf" => {
                             if !args.is_empty() {
                                 let start = if fname == "fprintf" { 1 } else { 0 };
-                                out.push_str("display ");
                                 if start < args.len() {
-                                    emit_c_expr(out, &args[start]);
+                                    // Check if the first arg is a format string with specifiers
+                                    let has_format_args = args.len() > start + 1;
+                                    if has_format_args {
+                                        // printf("%d\n", val) → display val
+                                        // printf("%s: %d\n", name, val) → display f"{name}: {val}"
+                                        if let CExpr::Str(fmt) = &args[start] {
+                                            let specifier_count = fmt.matches("%d").count()
+                                                + fmt.matches("%s").count()
+                                                + fmt.matches("%ld").count()
+                                                + fmt.matches("%lld").count()
+                                                + fmt.matches("%lu").count()
+                                                + fmt.matches("%llu").count()
+                                                + fmt.matches("%i").count()
+                                                + fmt.matches("%u").count()
+                                                + fmt.matches("%x").count()
+                                                + fmt.matches("%f").count()
+                                                + fmt.matches("%c").count()
+                                                + fmt.matches("%p").count();
+                                            if specifier_count == 1 && args.len() == start + 2 {
+                                                // Single specifier with single value — just display the value
+                                                out.push_str("display ");
+                                                emit_c_expr(out, &args[start + 1]);
+                                                out.push('\n');
+                                                return;
+                                            } else if specifier_count > 0 {
+                                                // Multiple specifiers — build f-string
+                                                let mut fstr = fmt.clone();
+                                                let mut arg_idx = start + 1;
+                                                for spec in ["%lld", "%llu", "%ld", "%lu", "%d", "%i", "%u", "%s", "%x", "%f", "%c", "%p"] {
+                                                    while let Some(pos) = fstr.find(spec) {
+                                                        if arg_idx < args.len() {
+                                                            let mut arg_str = String::new();
+                                                            emit_c_expr(&mut arg_str, &args[arg_idx]);
+                                                            fstr = format!("{}{{{}}}{}", &fstr[..pos], arg_str, &fstr[pos + spec.len()..]);
+                                                            arg_idx += 1;
+                                                        } else {
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                                // Remove trailing \n from format string
+                                                let fstr = fstr.replace("\\n", "");
+                                                out.push_str(&format!("display f\"{}\"", fstr));
+                                                out.push('\n');
+                                                return;
+                                            }
+                                        }
+                                        // Fallback: emit all value args as separate display calls
+                                        for i in (start + 1)..args.len() {
+                                            out.push_str("display ");
+                                            emit_c_expr(out, &args[i]);
+                                            out.push('\n');
+                                            if i < args.len() - 1 { emit_indent(out, depth); }
+                                        }
+                                        return;
+                                    } else {
+                                        // No format args — just display the string
+                                        out.push_str("display ");
+                                        emit_c_expr(out, &args[start]);
+                                        out.push('\n');
+                                        return;
+                                    }
                                 }
-                                out.push('\n');
-                                return;
                             }
                         }
                         "scanf" | "fscanf" => {
@@ -1239,7 +1297,12 @@ fn emit_c_expr(out: &mut String, expr: &CExpr) {
                     "exit" => { out.push_str("# exit("); if !args.is_empty() { emit_c_expr(out, &args[0]); } out.push(')'); return; }
                     "printf" | "puts" => {
                         out.push_str("display ");
-                        if !args.is_empty() { emit_c_expr(out, &args[0]); }
+                        if args.len() > 1 {
+                            // Has format args — emit the value argument
+                            emit_c_expr(out, &args[1]);
+                        } else if !args.is_empty() {
+                            emit_c_expr(out, &args[0]);
+                        }
                         return;
                     }
                     "sprintf" | "snprintf" => {

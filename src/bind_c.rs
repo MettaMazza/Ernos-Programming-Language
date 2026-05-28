@@ -1321,10 +1321,23 @@ pub fn emit_ernos_bindings(header_path: &str, source: &str) -> String {
 
             CDecl::Enum { name, variants } => {
                 out.push_str(&format!("# Enum {} — integer constants\n", name));
+                // Wrap in a function so we don't emit bare top-level statements
+                out.push_str(&format!("define get_{}_constants returning Int:\n", name.to_lowercase()));
                 let mut auto_val = 0i64;
                 for (vname, explicit_val) in variants {
                     let val = explicit_val.unwrap_or(auto_val);
-                    out.push_str(&format!("set BIND_{}_{} to {}\n", name.to_uppercase(), vname.to_uppercase(), val));
+                    out.push_str(&format!("    # {}_{} = {}\n", name.to_uppercase(), vname.to_uppercase(), val));
+                    auto_val = val + 1;
+                }
+                out.push_str("    return 0\n");
+                out.push_str("\n");
+                // Also emit individual accessor functions for each variant
+                auto_val = 0;
+                for (vname, explicit_val) in variants {
+                    let val = explicit_val.unwrap_or(auto_val);
+                    out.push_str(&format!("define BIND_{}_{} returning Int:\n", name.to_uppercase(), vname.to_uppercase()));
+                    out.push_str(&format!("    return {}\n", val));
+                    out.push_str("\n");
                     auto_val = val + 1;
                 }
                 out.push_str("\n");
@@ -1358,10 +1371,15 @@ pub fn emit_ernos_bindings(header_path: &str, source: &str) -> String {
 
                 match value {
                     DefineValue::IntVal(n) => {
-                        out.push_str(&format!("set BIND_{} to {}\n", name, n));
+                        // Emit as a function that returns the value (top-level set is illegal)
+                        out.push_str(&format!("define BIND_{} returning Int:\n", name));
+                        out.push_str(&format!("    return {}\n", n));
+                        out.push_str("\n");
                     }
                     DefineValue::StrVal(s) => {
-                        out.push_str(&format!("set BIND_{} to \"{}\"\n", name, s));
+                        out.push_str(&format!("define BIND_{} returning Str:\n", name));
+                        out.push_str(&format!("    return \"{}\"\n", s));
+                        out.push_str("\n");
                     }
                     DefineValue::FuncMacro(params, expansion) => {
                         out.push_str(&format!("# Function-like macro {}({}) — inline: {}\n",
