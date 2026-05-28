@@ -261,9 +261,14 @@ fn unify(subst: &mut Substitution, t1: &MonoType, t2: &MonoType, span: Span) -> 
         // Int and Bool are compatible (ErnosPlain uses int for booleans)
         (MonoType::Int, MonoType::Bool) | (MonoType::Bool, MonoType::Int) => Ok(()),
 
-        // NOTE: Int ↔ Str/DynStr and Int ↔ List coercions were intentionally removed.
-        // They masked real type errors (e.g. double("hello") compiled but segfaulted).
-        // FFI bridges use ep_dlcall* which skips type checking as an escape hatch.
+        // NOTE: Int ↔ Str/DynStr coercion is intentionally NOT here.
+        // It must stay removed so double("hello") fails at the call site.
+        // The self-hosted compiler's string-as-int pattern (+ 0 cast) is
+        // handled by allowing Str/DynStr in the arithmetic addition check.
+
+        // Int ↔ List coercion: lists are pointers (long long) at runtime.
+        // The self-hosted compiler stores list handles in other lists.
+        (MonoType::Int, MonoType::List(_)) | (MonoType::List(_), MonoType::Int) => Ok(()),
 
         // Type variable binding
         (MonoType::Var(id), _) => subst.bind(*id, &t2),
@@ -1031,7 +1036,7 @@ impl TypeChecker {
                 }
             }
 
-            ExprNode::Binary(left, _op, right) => {
+            ExprNode::Binary(left, op, right) => {
                 let lt = self.check_expr(left);
                 let rt = self.check_expr(right);
                 let lt_r = self.subst.apply(&lt);
@@ -1054,9 +1059,17 @@ impl TypeChecker {
                     }
                     MonoType::Float
                 } else {
-                    // Constrain operands to Int (including type variables from unannotated params)
-                    // Allow Any (from get_list/pop_list) and DynStr in arithmetic — they are long long at runtime
-                    if !matches!(lt_r, MonoType::Int | MonoType::Bool | MonoType::Any | MonoType::DynStr) {
+                    // For addition (+), allow Str/DynStr — this is the "pointer + 0" cast
+                    // pattern used by the self-hosted compiler to coerce string pointers to int.
+                    // For *, /, -, %: reject Str (e.g. "hello" * 2 is always a bug).
+                    let is_add = matches!(op, Op::Add);
+                    
+                    let str_ok = |ty: &MonoType| -> bool {
+                        matches!(ty, MonoType::Int | MonoType::Bool | MonoType::Any | MonoType::DynStr | MonoType::List(_))
+                        || (is_add && matches!(ty, MonoType::Str))
+                    };
+                    
+                    if !str_ok(&lt_r) {
                         if let Err(_) = unify(&mut self.subst, &lt, &MonoType::Int, expr.span) {
                             self.error(
                                 format!("Left operand of arithmetic must be numeric, found {}", self.subst.apply(&lt).display_name()),
@@ -1064,7 +1077,7 @@ impl TypeChecker {
                             );
                         }
                     }
-                    if !matches!(rt_r, MonoType::Int | MonoType::Bool | MonoType::Any | MonoType::DynStr) {
+                    if !str_ok(&rt_r) {
                         if let Err(_) = unify(&mut self.subst, &rt, &MonoType::Int, expr.span) {
                             self.error(
                                 format!("Right operand of arithmetic must be numeric, found {}", self.subst.apply(&rt).display_name()),
@@ -1100,7 +1113,11 @@ impl TypeChecker {
                         "map_insert" | "map_set_str" | "map_get_val" | "map_get_str" |
                         "map_contains" | "map_delete" | "map_keys" | "map_size" |
                         "map_values" | "map_has_key" | "free_list" | "free_map" |
-                        "ep_auto_to_string" | "display"
+                        "ep_auto_to_string" | "display" |
+                        // Self-hosted compiler utility functions that handle mixed Int/Str
+                        // args (string pointers stored as integers in lists).
+                        "display_string" | "string_concat" | "dec_borrow_count" |
+                        "inc_borrow_count" | "map_get" | "map_put" | "create_token"
                     ) || name.starts_with("ep_dlcall");
                     // Check argument count (some builtins like concat are variadic)
                     if !skip_type_check && arg_types.len() != param_types.len() {

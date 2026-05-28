@@ -159,7 +159,7 @@ define tokenize_source with source:
                                 set current_col to current_col + 1
                             
                             set num_len to pos - num_start
-                            set num_str to substring(source and num_start and num_len) + 0
+                            set num_str to substring(source and num_start and num_len)
                             set tok to create_token(25 and num_str and current_line and current_col - num_len) + 0 # TOK_INTEGER = 25
                             set ok to append_list(tokens and tok)
                         else:
@@ -178,7 +178,7 @@ define tokenize_source with source:
                                         set id_loop to 0
                                 
                                 set id_len to pos - id_start
-                                set id_str to substring(source and id_start and id_len) + 0
+                                set id_str to substring(source and id_start and id_len)
                                 
                                 # Match keywords
                                 set tok_type to 27 # Default to TOK_IDENTIFIER = 27
