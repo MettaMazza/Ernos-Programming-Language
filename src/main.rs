@@ -11,6 +11,7 @@ pub mod optimizer;
 pub mod arm64;
 pub mod native_codegen;
 pub mod x86_64_codegen;
+pub mod bind_c;
 
 use std::env;
 use std::fs;
@@ -150,6 +151,53 @@ fn main() {
     // Handle REPL mode
     if args[1] == "--repl" || args[1] == "repl" {
         run_repl();
+        return;
+    }
+
+    // Handle 'ernos bind header.h [-o output.ep]' subcommand
+    if args[1] == "bind" {
+        if args.len() < 3 {
+            eprintln!("Usage: ernos bind <header.h> [-o output.ep]");
+            std::process::exit(1);
+        }
+        let header_path = &args[2];
+        let source = match fs::read_to_string(header_path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Error reading '{}': {}", header_path, e);
+                std::process::exit(1);
+            }
+        };
+
+        let bindings = bind_c::emit_ernos_bindings(header_path, &source);
+
+        // Determine output path
+        let output_path = if let Some(idx) = args.iter().position(|a| a == "-o") {
+            args.get(idx + 1).cloned().unwrap_or_else(|| {
+                let stem = Path::new(header_path).file_stem()
+                    .and_then(|s| s.to_str()).unwrap_or("bindings");
+                format!("bindings_{}.ep", stem)
+            })
+        } else {
+            let stem = Path::new(header_path).file_stem()
+                .and_then(|s| s.to_str()).unwrap_or("bindings");
+            format!("bindings_{}.ep", stem)
+        };
+
+        if let Err(e) = fs::write(&output_path, &bindings) {
+            eprintln!("Error writing '{}': {}", output_path, e);
+            std::process::exit(1);
+        }
+
+        println!("Generated bindings: {}", output_path);
+        println!("  Parsed: {}", header_path);
+        // Count what was generated
+        let extern_count = bindings.matches("external define").count();
+        let struct_count = bindings.matches("define structure").count();
+        let const_count = bindings.matches("set BIND_").count();
+        println!("  Functions: {}", extern_count);
+        println!("  Structures: {}", struct_count);
+        println!("  Constants: {}", const_count);
         return;
     }
 
