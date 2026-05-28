@@ -1007,26 +1007,20 @@ impl Codegen {
         match &stmt.node {
             StmtNode::Set(name, expr, _type_ann) => {
                 let safe_name = Self::sanitize_c_name(name);
-                let t = var_types.get(name);
+                let _t = var_types.get(name);
                 // If this is a closure assignment, pass the variable name to Closure codegen
                 if matches!(expr.node, ExprNode::Closure(_, _)) {
                     self.pending_closure_name = Some(name.clone());
                 }
                 let expr_str = self.gen_expr(expr, var_types)?;
 
-                if t == Some(&Type::List) {
-                    self.out.push_str("    {\n");
-                    self.out.push_str(&format!("        long long tmp_val = {};\n", expr_str));
-                    self.out.push_str(&format!("        free_list({});\n", safe_name));
-                    self.out.push_str(&format!("        {} = tmp_val;\n", safe_name));
-                    self.out.push_str("    }\n");
-                } else {
-                    // For enums, structs, and scalars: simple assignment.
-                    // We intentionally do NOT pre-free enums/structs here because
-                    // the new value may alias subtrees of the old value (e.g. BST
-                    // insert reuses children). The GC handles the old allocations.
-                    self.out.push_str(&format!("    {} = {};\n", safe_name, expr_str));
-                }
+                // For all types: simple assignment.
+                // We intentionally do NOT pre-free lists/enums/structs here because
+                // the new value may alias the old value through another variable
+                // (e.g. set current_level to next_level; set next_level to create_list()
+                // would free the list that current_level still references).
+                // The GC handles the old allocations.
+                self.out.push_str(&format!("    {} = {};\n", safe_name, expr_str));
 
                 // After free_list/free_map calls, null-out the freed variable to prevent
                 // double-free when the variable is later reassigned (pre-free pattern)
