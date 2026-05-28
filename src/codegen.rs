@@ -2761,43 +2761,67 @@ static EpGCObject* ep_gc_head = NULL;
 static long long ep_gc_count = 0;
 static long long ep_gc_threshold = 4096;
 static int ep_gc_enabled = 1;
+/* Single mutex for ALL GC and thread registry operations.
+   Previous design had two mutexes (ep_gc_mutex + ep_thread_registry_mutex)
+   which caused deadlock under concurrent channel load: thread A held gc_mutex
+   and waited for registry_mutex, thread B held registry_mutex and waited for
+   gc_mutex. Single lock eliminates the ordering problem. */
 static pthread_mutex_t ep_gc_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-/* Thread registry for conservative stack scanning in multi-threaded environment */
+/* Thread registry for GC root scanning in multi-threaded environment */
 #define EP_MAX_THREADS 256
 static __thread void* volatile ep_thread_local_top = NULL;
 static __thread void* ep_thread_local_bottom = NULL;
 
 static void* volatile* ep_thread_tops[EP_MAX_THREADS];
 static void* ep_thread_bottoms[EP_MAX_THREADS];
-static int ep_thread_active[EP_MAX_THREADS];
+static volatile int ep_thread_active[EP_MAX_THREADS];
 static int ep_num_threads = 0;
-static pthread_mutex_t ep_thread_registry_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-/* Per-thread GC root stack pointers in thread registry */
-static long long** ep_thread_root_stacks[EP_MAX_THREADS];
-static int* ep_thread_root_sps[EP_MAX_THREADS];
+/* Per-thread GC root state — heap-allocated, stable across thread lifetime.
+   Previous design stored raw pointers to __thread arrays (ep_gc_root_stack,
+   ep_gc_root_sp) in the global registry. When a thread exited, the __thread
+   storage was freed, leaving dangling pointers that ep_gc_mark would
+   dereference → segfault. Now each thread gets a heap-allocated state struct
+   that survives thread exit and is only recycled when the slot is reused. */
+typedef struct {
+    long long* roots[4096];  /* copy of root pointers, updated under lock */
+    volatile int sp;         /* current root stack pointer */
+} EpThreadGCState;
+
+static EpThreadGCState* ep_thread_gc_states[EP_MAX_THREADS];
 
 /* Shadow stack for explicit GC roots — thread-local to prevent cross-thread corruption */
 #define EP_GC_MAX_ROOTS 4096
 static __thread long long* ep_gc_root_stack[EP_GC_MAX_ROOTS];
 static __thread int ep_gc_root_sp = 0;
+static __thread int ep_thread_slot = -1;
 
 static void ep_gc_push_root(long long* root) {
     if (ep_gc_root_sp < EP_GC_MAX_ROOTS) {
-        ep_gc_root_stack[ep_gc_root_sp++] = root;
+        ep_gc_root_stack[ep_gc_root_sp] = root;
+        ep_gc_root_sp++;
+        /* Update the heap-allocated state so GC mark can see it safely */
+        if (ep_thread_slot >= 0 && ep_thread_gc_states[ep_thread_slot]) {
+            ep_thread_gc_states[ep_thread_slot]->roots[ep_gc_root_sp - 1] = root;
+            ep_thread_gc_states[ep_thread_slot]->sp = ep_gc_root_sp;
+        }
     }
 }
 static void ep_gc_pop_roots(long long count) {
     ep_gc_root_sp -= (int)count;
     if (ep_gc_root_sp < 0) ep_gc_root_sp = 0;
+    /* Update the heap-allocated state */
+    if (ep_thread_slot >= 0 && ep_thread_gc_states[ep_thread_slot]) {
+        ep_thread_gc_states[ep_thread_slot]->sp = ep_gc_root_sp;
+    }
 }
 
 static void ep_gc_register_thread(void* stack_bottom) {
     ep_thread_local_bottom = stack_bottom;
     ep_thread_local_top = stack_bottom;
     
-    pthread_mutex_lock(&ep_thread_registry_mutex);
+    pthread_mutex_lock(&ep_gc_mutex);
     int slot = -1;
     for (int i = 0; i < ep_num_threads; i++) {
         if (!ep_thread_active[i]) {
@@ -2811,23 +2835,35 @@ static void ep_gc_register_thread(void* stack_bottom) {
     if (slot != -1) {
         ep_thread_tops[slot] = &ep_thread_local_top;
         ep_thread_bottoms[slot] = stack_bottom;
+        /* Allocate or reuse heap state for this slot */
+        if (!ep_thread_gc_states[slot]) {
+            ep_thread_gc_states[slot] = (EpThreadGCState*)calloc(1, sizeof(EpThreadGCState));
+        }
+        ep_thread_gc_states[slot]->sp = 0;
+        ep_thread_slot = slot;
+        __sync_synchronize();  /* Memory barrier: state must be visible before active */
         ep_thread_active[slot] = 1;
-        ep_thread_root_stacks[slot] = ep_gc_root_stack;
-        ep_thread_root_sps[slot] = &ep_gc_root_sp;
     }
-    pthread_mutex_unlock(&ep_thread_registry_mutex);
+    pthread_mutex_unlock(&ep_gc_mutex);
 }
 
 static void ep_gc_unregister_thread(void) {
-    pthread_mutex_lock(&ep_thread_registry_mutex);
-    pthread_t self = pthread_self();
+    pthread_mutex_lock(&ep_gc_mutex);
     for (int i = 0; i < ep_num_threads; i++) {
         if (ep_thread_active[i] && ep_thread_tops[i] == &ep_thread_local_top) {
+            /* Zero root count FIRST — even if ep_gc_mark races past the
+               active check, it will see sp=0 and walk no roots instead
+               of dereferencing stale __thread pointers */
+            if (ep_thread_gc_states[i]) {
+                ep_thread_gc_states[i]->sp = 0;
+            }
+            __sync_synchronize();  /* Memory barrier: sp=0 visible before deactivation */
             ep_thread_active[i] = 0;
+            ep_thread_slot = -1;
             break;
         }
     }
-    pthread_mutex_unlock(&ep_thread_registry_mutex);
+    pthread_mutex_unlock(&ep_gc_mutex);
 }
 
 #define EP_GC_UPDATE_TOP() { volatile int _dummy; ep_thread_local_top = (void*)&_dummy; }
@@ -2969,23 +3005,36 @@ static void ep_gc_mark_object(void* ptr) {
     }
 }
 
-/* Mark phase: traverse from ALL threads' explicit GC roots */
+/* Mark phase: traverse from ALL threads' explicit GC roots.
+   Uses the heap-allocated EpThreadGCState instead of raw __thread pointers.
+   This is safe even if a thread exits mid-mark because:
+   (1) ep_gc_unregister_thread zeros sp before clearing active, with barrier
+   (2) the EpThreadGCState struct is heap-allocated and stable
+   (3) we hold ep_gc_mutex, same lock as register/unregister */
 static void ep_gc_mark(void) {
-    /* Walk all registered threads' root stacks */
-    pthread_mutex_lock(&ep_thread_registry_mutex);
+    /* ep_gc_mutex is already held by caller (ep_gc_maybe_collect) */
     for (int t = 0; t < ep_num_threads; t++) {
         if (!ep_thread_active[t]) continue;
-        if (!ep_thread_root_stacks[t] || !ep_thread_root_sps[t]) continue;
-        int sp = *ep_thread_root_sps[t];
-        long long** stack = ep_thread_root_stacks[t];
+        EpThreadGCState* state = ep_thread_gc_states[t];
+        if (!state) continue;
+        int sp = state->sp;
+        if (sp <= 0 || sp > EP_GC_MAX_ROOTS) continue;
         for (int i = 0; i < sp; i++) {
-            long long val = *stack[i];
+            long long* root_ptr = state->roots[i];
+            if (!root_ptr) continue;
+            long long val = *root_ptr;
             if (val != 0) {
                 ep_gc_mark_object((void*)val);
             }
         }
     }
-    pthread_mutex_unlock(&ep_thread_registry_mutex);
+    /* Also mark from main thread's local root stack (thread 0 / unregistered) */
+    for (int i = 0; i < ep_gc_root_sp; i++) {
+        long long val = *ep_gc_root_stack[i];
+        if (val != 0) {
+            ep_gc_mark_object((void*)val);
+        }
+    }
 }
 
 /* Sweep phase: free unmarked objects */
@@ -3021,7 +3070,7 @@ static void ep_gc_sweep(void) {
     }
 }
 
-/* Run a full GC collection */
+/* Run a full GC collection — caller MUST hold ep_gc_mutex */
 static void ep_gc_collect(void) {
     if (!ep_gc_enabled) return;
     ep_gc_mark();
@@ -3032,9 +3081,10 @@ static void ep_gc_collect(void) {
 
 /* Maybe trigger GC if we've exceeded threshold */
 static void ep_gc_maybe_collect(void) {
+    if (!ep_gc_enabled) return;  /* Early exit if GC suppressed (e.g. during channel ops) */
     EP_GC_UPDATE_TOP();
     pthread_mutex_lock(&ep_gc_mutex);
-    if (ep_gc_count >= ep_gc_threshold) {
+    if (ep_gc_count >= ep_gc_threshold && ep_gc_enabled) {
         ep_gc_collect();
     }
     pthread_mutex_unlock(&ep_gc_mutex);
@@ -3149,6 +3199,14 @@ long long create_channel(void) {
 long long send_channel(long long chan_ptr, long long value) {
     EpChannel* chan = (EpChannel*)chan_ptr;
     if (!chan) return 0;
+    /* Suppress GC during channel operations. The blocking condvar wait
+       can interleave with GC mark/sweep on another thread, causing
+       use-after-free when the GC sweeps objects that are live on a
+       thread currently blocked in send/receive. Channel buffers contain
+       raw long long values (not GC-tracked pointers), so suppressing
+       GC here is safe. */
+    int gc_was_enabled = ep_gc_enabled;
+    ep_gc_enabled = 0;
     ep_mutex_lock(&chan->mutex);
     while (chan->size >= chan->capacity) {
         ep_cond_wait(&chan->cond_send, &chan->mutex);
@@ -3158,12 +3216,16 @@ long long send_channel(long long chan_ptr, long long value) {
     chan->size += 1;
     ep_cond_signal(&chan->cond_recv);
     ep_mutex_unlock(&chan->mutex);
+    ep_gc_enabled = gc_was_enabled;
     return value;
 }
 
 long long receive_channel(long long chan_ptr) {
     EpChannel* chan = (EpChannel*)chan_ptr;
     if (!chan) return 0;
+    /* Suppress GC during channel receive — same rationale as send_channel */
+    int gc_was_enabled = ep_gc_enabled;
+    ep_gc_enabled = 0;
     ep_mutex_lock(&chan->mutex);
     while (chan->size <= 0) {
         ep_cond_wait(&chan->cond_recv, &chan->mutex);
@@ -3173,6 +3235,7 @@ long long receive_channel(long long chan_ptr) {
     chan->size -= 1;
     ep_cond_signal(&chan->cond_send);
     ep_mutex_unlock(&chan->mutex);
+    ep_gc_enabled = gc_was_enabled;
     return value;
 }
 
