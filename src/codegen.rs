@@ -1402,15 +1402,26 @@ impl Codegen {
                         }
                     }
                 } else {
-                    let op_str = match op {
-                        CompOp::LessThan => "<",
-                        CompOp::GreaterThan => ">",
-                        CompOp::LessEqual => "<=",
-                        CompOp::GreaterEqual => ">=",
-                        CompOp::Equals => "==",
-                        CompOp::NotEquals => "!=",
-                    };
-                    Ok(format!("{} {} {}", left_str, op_str, right_str))
+                    match op {
+                        CompOp::Equals => {
+                            // Use ep_str_equals for all == comparisons — it safely handles
+                            // both integer values and FFI string pointers typed as Int
+                            Ok(format!("ep_str_equals({}, {})", left_str, right_str))
+                        }
+                        CompOp::NotEquals => {
+                            Ok(format!("(!ep_str_equals({}, {}))", left_str, right_str))
+                        }
+                        _ => {
+                            let op_str = match op {
+                                CompOp::LessThan => "<",
+                                CompOp::GreaterThan => ">",
+                                CompOp::LessEqual => "<=",
+                                CompOp::GreaterEqual => ">=",
+                                _ => unreachable!(),
+                            };
+                            Ok(format!("{} {} {}", left_str, op_str, right_str))
+                        }
+                    }
                 }
             }
             ExprNode::Logical(left, op, right) => {
@@ -5074,11 +5085,12 @@ long long ep_hash_string(long long s_ptr) {
 }
 
 long long ep_str_equals(long long a_ptr, long long b_ptr) {
-    const char* a = (const char*)a_ptr;
-    const char* b = (const char*)b_ptr;
-    if (a == b) return 1;
-    if (!a || !b) return 0;
-    return strcmp(a, b) == 0 ? 1 : 0;
+    if (a_ptr == b_ptr) return 1;
+    if (!a_ptr || !b_ptr) return 0;
+    /* If either value looks like a small integer (not a valid heap pointer),
+       fall back to integer comparison — strcmp would segfault. */
+    if ((unsigned long long)a_ptr < 4096ULL || (unsigned long long)b_ptr < 4096ULL) return 0;
+    return strcmp((const char*)a_ptr, (const char*)b_ptr) == 0 ? 1 : 0;
 }
 
 /* ========== Sync Primitives ========== */
