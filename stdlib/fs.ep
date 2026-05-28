@@ -24,7 +24,7 @@ define read_file with path:
 
 define read_lines with path:
     set content to ep_read_file(path)
-    set lines to split(content and "\n")
+    set lines to string_split(content and "\n")
     return lines
 
 # ---- File Writing ----

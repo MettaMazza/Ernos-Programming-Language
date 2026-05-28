@@ -54,7 +54,7 @@ define crypto_sha256 with s:
         set byte_idx to 0
         repeat while byte_idx < 8:
             set b to get_byte(val and byte_idx)
-            set hex_res to string_concat(hex_res and byte_to_hex(b))
+            set hex_res to concat(hex_res and byte_to_hex(b))
             set byte_idx to byte_idx + 1
         set word_idx to word_idx + 1
     return hex_res
@@ -75,7 +75,7 @@ define crypto_md5 with s:
         set byte_idx to 0
         repeat while byte_idx < 8:
             set b to get_byte(val and byte_idx)
-            set hex_res to string_concat(hex_res and byte_to_hex(b))
+            set hex_res to concat(hex_res and byte_to_hex(b))
             set byte_idx to byte_idx + 1
         set word_idx to word_idx + 1
     return hex_res

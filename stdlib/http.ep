@@ -49,19 +49,19 @@ define send_response with client_fd and status_code and content_type and body:
     
     set resp to "HTTP/1.1 "
     if status_code == 200:
-        set resp to string_concat(resp and "200 OK")
+        set resp to concat(resp and "200 OK")
     else:
         if status_code == 404:
-            set resp to string_concat(resp and "404 Not Found")
+            set resp to concat(resp and "404 Not Found")
         else:
-            set resp to string_concat(resp and "500 Internal Server Error")
+            set resp to concat(resp and "500 Internal Server Error")
             
-    set resp to string_concat(resp and "\r\nContent-Type: ")
-    set resp to string_concat(resp and content_type)
-    set resp to string_concat(resp and "\r\nContent-Length: ")
-    set resp to string_concat(resp and len_str)
-    set resp to string_concat(resp and "\r\nConnection: close\r\n\r\n")
-    set resp to string_concat(resp and body)
+    set resp to concat(resp and "\r\nContent-Type: ")
+    set resp to concat(resp and content_type)
+    set resp to concat(resp and "\r\nContent-Length: ")
+    set resp to concat(resp and len_str)
+    set resp to concat(resp and "\r\nConnection: close\r\n\r\n")
+    set resp to concat(resp and body)
     
     set ok to net_send(client_fd and resp)
     set ok to net_close(client_fd)

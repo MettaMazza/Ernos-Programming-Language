@@ -473,7 +473,32 @@ fn main() {
         let mut parsed_files = HashSet::new();
         match parse_all_modules(input_path, &mut parsed_files, &mut all_functions, &mut all_externals, &mut all_struct_defs, &mut all_enum_defs, &mut all_method_defs, &mut all_trait_defs, &mut all_trait_impls, &mut all_constants) {
             Ok(()) => {
-                println!("\x1b[1;32m✓\x1b[0m {} — no syntax errors ({} functions, {} structs, {} enums)", 
+                // Build program AST and run the type checker — not just syntax checking
+                let program = ast::Program {
+                    imports: Vec::new(),
+                    externals: all_externals,
+                    functions: all_functions.clone(),
+                    struct_defs: all_struct_defs.clone(),
+                    enum_defs: all_enum_defs.clone(),
+                    method_defs: all_method_defs,
+                    trait_defs: all_trait_defs,
+                    trait_impls: all_trait_impls,
+                    top_level_constants: all_constants,
+                };
+
+                let (type_errors, _type_warnings) = type_check::TypeChecker::check_full(&program);
+                if !type_errors.is_empty() {
+                    eprintln!("\n\x1b[1;31m── Type Errors ({}) ──\x1b[0m", type_errors.len());
+                    for err in &type_errors {
+                        eprintln!("  \x1b[1;31merror\x1b[0m: {}", err);
+                    }
+                    eprintln!();
+                    eprintln!("\x1b[1;31m✗\x1b[0m {} — {} type error(s) found",
+                        args[2], type_errors.len());
+                    std::process::exit(1);
+                }
+
+                println!("\x1b[1;32m✓\x1b[0m {} — no errors ({} functions, {} structs, {} enums)", 
                     args[2], all_functions.len(), all_struct_defs.len(), all_enum_defs.len());
             }
             Err(e) => {

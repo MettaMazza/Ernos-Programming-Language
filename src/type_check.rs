@@ -261,13 +261,9 @@ fn unify(subst: &mut Substitution, t1: &MonoType, t2: &MonoType, span: Span) -> 
         // Int and Bool are compatible (ErnosPlain uses int for booleans)
         (MonoType::Int, MonoType::Bool) | (MonoType::Bool, MonoType::Int) => Ok(()),
 
-        // Int ↔ List coercion: at runtime both are long long (pointers cast to int)
-        // This allows heterogeneous code like the self-hosted compiler
-        (MonoType::Int, MonoType::List(_)) | (MonoType::List(_), MonoType::Int) => Ok(()),
-
-        // Int ↔ Str/DynStr coercion: at runtime strings are char* cast to long long
-        (MonoType::Int, MonoType::Str) | (MonoType::Str, MonoType::Int) => Ok(()),
-        (MonoType::Int, MonoType::DynStr) | (MonoType::DynStr, MonoType::Int) => Ok(()),
+        // NOTE: Int ↔ Str/DynStr and Int ↔ List coercions were intentionally removed.
+        // They masked real type errors (e.g. double("hello") compiled but segfaulted).
+        // FFI bridges use ep_dlcall* which skips type checking as an escape hatch.
 
         // Type variable binding
         (MonoType::Var(id), _) => subst.bind(*id, &t2),
@@ -713,7 +709,8 @@ impl TypeChecker {
         // String utilities (continued)
         self.func_types.insert("get_character".into(), (vec![MonoType::Str, MonoType::Int], MonoType::Int));
         self.func_types.insert("string_from_list".into(), (vec![MonoType::List(Box::new(MonoType::Int))], MonoType::DynStr));
-        self.func_types.insert("get_list_data_ptr".into(), (vec![MonoType::Int], MonoType::Int));
+        let v_gldp = self.fresh_var();
+        self.func_types.insert("get_list_data_ptr".into(), (vec![MonoType::List(Box::new(v_gldp))], MonoType::Int));
 
         // CLI arguments
         self.func_types.insert("get_argument".into(), (vec![MonoType::Int], MonoType::DynStr));
@@ -1057,8 +1054,9 @@ impl TypeChecker {
                     }
                     MonoType::Float
                 } else {
+                    // Constrain operands to Int (including type variables from unannotated params)
                     // Allow Any (from get_list/pop_list) and DynStr in arithmetic — they are long long at runtime
-                    if !matches!(lt_r, MonoType::Int | MonoType::Bool | MonoType::Any | MonoType::DynStr | MonoType::Var(_)) {
+                    if !matches!(lt_r, MonoType::Int | MonoType::Bool | MonoType::Any | MonoType::DynStr) {
                         if let Err(_) = unify(&mut self.subst, &lt, &MonoType::Int, expr.span) {
                             self.error(
                                 format!("Left operand of arithmetic must be numeric, found {}", self.subst.apply(&lt).display_name()),
@@ -1066,7 +1064,7 @@ impl TypeChecker {
                             );
                         }
                     }
-                    if !matches!(rt_r, MonoType::Int | MonoType::Bool | MonoType::Any | MonoType::DynStr | MonoType::Var(_)) {
+                    if !matches!(rt_r, MonoType::Int | MonoType::Bool | MonoType::Any | MonoType::DynStr) {
                         if let Err(_) = unify(&mut self.subst, &rt, &MonoType::Int, expr.span) {
                             self.error(
                                 format!("Right operand of arithmetic must be numeric, found {}", self.subst.apply(&rt).display_name()),
@@ -1095,14 +1093,15 @@ impl TypeChecker {
                 
                 if let Some((param_types, ret_type)) = self.func_types.get(name).cloned() {
                     // Polymorphic builtins that accept any value type — skip arg type checking
-                    // because the C runtime stores all values as long long (ints or pointers)
+                    // because the C runtime stores all values as long long (ints or pointers).
+                    // ep_dlcall*/ep_dlsym are FFI escape hatches where strings pass as int handles.
                     let skip_type_check = matches!(name.as_str(),
-                        "concat" | "append_list" | "get_list" | "set_list" |
+                        "append_list" | "get_list" | "set_list" |
                         "map_insert" | "map_set_str" | "map_get_val" | "map_get_str" |
                         "map_contains" | "map_delete" | "map_keys" | "map_size" |
                         "map_values" | "map_has_key" | "free_list" | "free_map" |
                         "ep_auto_to_string" | "display"
-                    );
+                    ) || name.starts_with("ep_dlcall");
                     // Check argument count (some builtins like concat are variadic)
                     if !skip_type_check && arg_types.len() != param_types.len() {
                         self.error(
