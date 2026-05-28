@@ -591,8 +591,13 @@ impl Codegen {
             }
             ExprNode::MethodCall(obj, method_name, _) => {
                 let obj_type = self.infer_type(obj, var_types);
-                if let Type::Struct(struct_name) = &obj_type {
-                    let key = format!("{}_{}", struct_name, method_name);
+                let type_name = match &obj_type {
+                    Type::Struct(s) => Some(s.clone()),
+                    Type::Enum(e) => Some(e.clone()),
+                    _ => None,
+                };
+                if let Some(name) = type_name {
+                    let key = format!("{}_{}", name, method_name);
                     self.func_return_types.get(&key).cloned().unwrap_or(Type::Int)
                 } else {
                     Type::Int
@@ -1276,6 +1281,11 @@ impl Codegen {
                         return Ok(format!("create_{}_{}()", enum_name, name));
                     }
                 }
+                // If this identifier is a known function name (not a variable),
+                // cast to (long long) so it can be passed as a HOF argument
+                if !var_types.contains_key(name) && self.func_return_types.contains_key(name) {
+                    return Ok(format!("(long long){}", Self::sanitize_c_name(name)));
+                }
                 Ok(name.clone())
             }
             ExprNode::Binary(left, op, right) => {
@@ -1531,9 +1541,10 @@ impl Codegen {
                 let obj_type = self.infer_type(obj, var_types);
                 let struct_name = match &obj_type {
                     Type::Struct(s) => s.clone(),
+                    Type::Enum(e) => e.clone(),
                     _ => {
                         let var_name = if let ExprNode::Identifier(n) = &obj.node { n.clone() } else { "?".to_string() };
-                        return Err(format!("Method '.{}()' called on non-struct variable '{}' (type: {:?}) at line {}:{}",
+                        return Err(format!("Method '.{}()' called on non-struct/enum variable '{}' (type: {:?}) at line {}:{}",
                             method_name, var_name, obj_type, expr.span.line, expr.span.col));
                     }
                 };
@@ -2595,7 +2606,12 @@ impl Codegen {
 
     fn gen_method(&mut self, md: &MethodDef) -> Result<(), String> {
         let mut var_types = HashMap::new();
-        var_types.insert("self".to_string(), Type::Struct(md.struct_name.clone()));
+        // Type self correctly based on whether the target is an enum or struct
+        if self.enum_defs.contains_key(&md.struct_name) {
+            var_types.insert("self".to_string(), Type::Enum(md.struct_name.clone()));
+        } else {
+            var_types.insert("self".to_string(), Type::Struct(md.struct_name.clone()));
+        }
 
         for param in &md.params {
             let param_type = if let Some(ref ann) = param.2 {
@@ -2758,6 +2774,25 @@ static int ep_thread_active[EP_MAX_THREADS];
 static int ep_num_threads = 0;
 static pthread_mutex_t ep_thread_registry_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+/* Per-thread GC root stack pointers in thread registry */
+static long long** ep_thread_root_stacks[EP_MAX_THREADS];
+static int* ep_thread_root_sps[EP_MAX_THREADS];
+
+/* Shadow stack for explicit GC roots — thread-local to prevent cross-thread corruption */
+#define EP_GC_MAX_ROOTS 4096
+static __thread long long* ep_gc_root_stack[EP_GC_MAX_ROOTS];
+static __thread int ep_gc_root_sp = 0;
+
+static void ep_gc_push_root(long long* root) {
+    if (ep_gc_root_sp < EP_GC_MAX_ROOTS) {
+        ep_gc_root_stack[ep_gc_root_sp++] = root;
+    }
+}
+static void ep_gc_pop_roots(long long count) {
+    ep_gc_root_sp -= (int)count;
+    if (ep_gc_root_sp < 0) ep_gc_root_sp = 0;
+}
+
 static void ep_gc_register_thread(void* stack_bottom) {
     ep_thread_local_bottom = stack_bottom;
     ep_thread_local_top = stack_bottom;
@@ -2777,6 +2812,8 @@ static void ep_gc_register_thread(void* stack_bottom) {
         ep_thread_tops[slot] = &ep_thread_local_top;
         ep_thread_bottoms[slot] = stack_bottom;
         ep_thread_active[slot] = 1;
+        ep_thread_root_stacks[slot] = ep_gc_root_stack;
+        ep_thread_root_sps[slot] = &ep_gc_root_sp;
     }
     pthread_mutex_unlock(&ep_thread_registry_mutex);
 }
@@ -2871,20 +2908,7 @@ static void ep_gc_table_remove(void* key) {
     }
 }
 
-/* Shadow stack for explicit GC roots */
-#define EP_GC_MAX_ROOTS 4096
-static long long* ep_gc_root_stack[EP_GC_MAX_ROOTS];
-static int ep_gc_root_sp = 0;
 
-static void ep_gc_push_root(long long* root) {
-    if (ep_gc_root_sp < EP_GC_MAX_ROOTS) {
-        ep_gc_root_stack[ep_gc_root_sp++] = root;
-    }
-}
-static void ep_gc_pop_roots(long long count) {
-    ep_gc_root_sp -= (int)count;
-    if (ep_gc_root_sp < 0) ep_gc_root_sp = 0;
-}
 
 /* Register a new GC object */
 static EpGCObject* ep_gc_register(void* ptr, EpObjKind kind) {
@@ -2945,15 +2969,23 @@ static void ep_gc_mark_object(void* ptr) {
     }
 }
 
-/* Mark phase: traverse from explicit GC roots only */
+/* Mark phase: traverse from ALL threads' explicit GC roots */
 static void ep_gc_mark(void) {
-    /* Mark all objects reachable from explicit shadow stack roots */
-    for (int i = 0; i < ep_gc_root_sp; i++) {
-        long long val = *ep_gc_root_stack[i];
-        if (val != 0) {
-            ep_gc_mark_object((void*)val);
+    /* Walk all registered threads' root stacks */
+    pthread_mutex_lock(&ep_thread_registry_mutex);
+    for (int t = 0; t < ep_num_threads; t++) {
+        if (!ep_thread_active[t]) continue;
+        if (!ep_thread_root_stacks[t] || !ep_thread_root_sps[t]) continue;
+        int sp = *ep_thread_root_sps[t];
+        long long** stack = ep_thread_root_stacks[t];
+        for (int i = 0; i < sp; i++) {
+            long long val = *stack[i];
+            if (val != 0) {
+                ep_gc_mark_object((void*)val);
+            }
         }
     }
+    pthread_mutex_unlock(&ep_thread_registry_mutex);
 }
 
 /* Sweep phase: free unmarked objects */
