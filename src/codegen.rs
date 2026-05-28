@@ -2883,6 +2883,12 @@ int main(int argc, char** argv) {
         let mut user_freed: std::collections::HashSet<String> = std::collections::HashSet::new();
         Self::collect_user_freed(&func.body, &mut user_freed);
 
+        // Scan for ownership transfers: variables passed to container-insertion
+        // functions (map_insert, append_list, set_list) should NOT be auto-freed
+        // because the container now owns them.
+        let mut transferred: std::collections::HashSet<String> = std::collections::HashSet::new();
+        Self::collect_transferred(&func.body, &mut transferred);
+
         // Get the function's return type to avoid freeing the returned value
         let func_ret_type = self.func_return_types.get(&func.name).cloned();
         for (var_name, _) in &var_types {
@@ -2898,6 +2904,10 @@ int main(int argc, char** argv) {
                 }
                 // Skip if user already explicitly freed this variable
                 if user_freed.contains(var_name) {
+                    continue;
+                }
+                // Skip if ownership was transferred to a container
+                if transferred.contains(var_name) {
                     continue;
                 }
                 if t == Some(&Type::List) {
@@ -2949,6 +2959,64 @@ int main(int argc, char** argv) {
                 }
                 StmtNode::ForEach(_, _, body) => {
                     Self::collect_user_freed(body, freed);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Scan statements for ownership-transferring calls and collect variable names.
+    /// When a list/map/struct variable is passed as a value to a container-insertion
+    /// function, ownership is transferred — the container now owns it.
+    fn collect_transferred(stmts: &[Stmt], transferred: &mut std::collections::HashSet<String>) {
+        for stmt in stmts {
+            match &stmt.node {
+                StmtNode::Set(_, expr, _) | StmtNode::ExprStmt(expr) => {
+                    Self::collect_transferred_from_expr(expr, transferred);
+                }
+                StmtNode::If(_, then_branch, else_branch) => {
+                    Self::collect_transferred(then_branch, transferred);
+                    if let Some(else_stmts) = else_branch {
+                        Self::collect_transferred(else_stmts, transferred);
+                    }
+                }
+                StmtNode::RepeatWhile(_, body) => {
+                    Self::collect_transferred(body, transferred);
+                }
+                StmtNode::ForEach(_, _, body) => {
+                    Self::collect_transferred(body, transferred);
+                }
+                StmtNode::Send(_, val) => {
+                    // Sending a value over a channel transfers ownership
+                    if let ExprNode::Identifier(var_name) = &val.node {
+                        transferred.insert(var_name.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn collect_transferred_from_expr(expr: &Expr, transferred: &mut std::collections::HashSet<String>) {
+        if let ExprNode::Call(name, args) = &expr.node {
+            match name.as_str() {
+                // map_insert(map, key, value) — 3rd arg (index 2) is transferred
+                "map_insert" if args.len() >= 3 => {
+                    if let ExprNode::Identifier(var_name) = &args[2].node {
+                        transferred.insert(var_name.clone());
+                    }
+                }
+                // append_list(list, value) — 2nd arg (index 1) is transferred
+                "append_list" if args.len() >= 2 => {
+                    if let ExprNode::Identifier(var_name) = &args[1].node {
+                        transferred.insert(var_name.clone());
+                    }
+                }
+                // set_list(list, index, value) — 3rd arg (index 2) is transferred
+                "set_list" if args.len() >= 3 => {
+                    if let ExprNode::Identifier(var_name) = &args[2].node {
+                        transferred.insert(var_name.clone());
+                    }
                 }
                 _ => {}
             }
