@@ -177,6 +177,16 @@ impl Codegen {
         self.func_return_types.insert("fs_get_size".to_string(), Type::Int);
         self.func_return_types.insert("ep_http_request".to_string(), Type::DynStr);
         self.func_return_types.insert("ep_sleep_ms".to_string(), Type::Int);
+        self.func_return_types.insert("ep_dlopen".to_string(), Type::Int);
+        self.func_return_types.insert("ep_dlsym".to_string(), Type::Int);
+        self.func_return_types.insert("ep_dlclose".to_string(), Type::Int);
+        self.func_return_types.insert("ep_dlcall0".to_string(), Type::Int);
+        self.func_return_types.insert("ep_dlcall1".to_string(), Type::Int);
+        self.func_return_types.insert("ep_dlcall2".to_string(), Type::Int);
+        self.func_return_types.insert("ep_dlcall3".to_string(), Type::Int);
+        self.func_return_types.insert("ep_dlcall4".to_string(), Type::Int);
+        self.func_return_types.insert("ep_dlcall5".to_string(), Type::Int);
+        self.func_return_types.insert("ep_dlcall6".to_string(), Type::Int);
         self.func_return_types.insert("ep_system".to_string(), Type::Int);
         self.func_return_types.insert("ep_play_sound".to_string(), Type::Int);
         self.func_return_types.insert("concat".to_string(), Type::DynStr);
@@ -3546,6 +3556,72 @@ long long ep_play_sound(long long path) {
     snprintf(cmd, sizeof(cmd), "afplay '%s' &", (const char*)path);
     return (long long)system(cmd);
 }
+
+/* ========== Dynamic Library Loading (FFI) ========== */
+#ifndef _WIN32
+#include <dlfcn.h>
+#endif
+
+long long ep_dlopen(long long path) {
+#ifdef _WIN32
+    return 0;  /* Not supported on Windows yet */
+#else
+    const char* p = (const char*)path;
+    void* handle = dlopen(p, RTLD_LAZY);
+    return (long long)handle;
+#endif
+}
+
+long long ep_dlsym(long long handle, long long name) {
+#ifdef _WIN32
+    return 0;
+#else
+    void* sym = dlsym((void*)handle, (const char*)name);
+    return (long long)sym;
+#endif
+}
+
+long long ep_dlclose(long long handle) {
+#ifdef _WIN32
+    return 0;
+#else
+    return (long long)dlclose((void*)handle);
+#endif
+}
+
+/* Call a function pointer with 0..6 arguments.
+   These are type-punned through long long — the C calling convention
+   makes this work for integer and pointer arguments. */
+typedef long long (*ep_fn0)(void);
+typedef long long (*ep_fn1)(long long);
+typedef long long (*ep_fn2)(long long, long long);
+typedef long long (*ep_fn3)(long long, long long, long long);
+typedef long long (*ep_fn4)(long long, long long, long long, long long);
+typedef long long (*ep_fn5)(long long, long long, long long, long long, long long);
+typedef long long (*ep_fn6)(long long, long long, long long, long long, long long, long long);
+
+long long ep_dlcall0(long long fptr) {
+    return ((ep_fn0)fptr)();
+}
+long long ep_dlcall1(long long fptr, long long a0) {
+    return ((ep_fn1)fptr)(a0);
+}
+long long ep_dlcall2(long long fptr, long long a0, long long a1) {
+    return ((ep_fn2)fptr)(a0, a1);
+}
+long long ep_dlcall3(long long fptr, long long a0, long long a1, long long a2) {
+    return ((ep_fn3)fptr)(a0, a1, a2);
+}
+long long ep_dlcall4(long long fptr, long long a0, long long a1, long long a2, long long a3) {
+    return ((ep_fn4)fptr)(a0, a1, a2, a3);
+}
+long long ep_dlcall5(long long fptr, long long a0, long long a1, long long a2, long long a3, long long a4) {
+    return ((ep_fn5)fptr)(a0, a1, a2, a3, a4);
+}
+long long ep_dlcall6(long long fptr, long long a0, long long a1, long long a2, long long a3, long long a4, long long a5) {
+    return ((ep_fn6)fptr)(a0, a1, a2, a3, a4, a5);
+}
+/* ========== End Dynamic Library Loading ========== */
 
 unsigned long hash_string(const char* str) {
     unsigned long hash = 5381;

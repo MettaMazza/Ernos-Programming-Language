@@ -12,6 +12,7 @@ pub mod arm64;
 pub mod native_codegen;
 pub mod x86_64_codegen;
 pub mod bind_c;
+pub mod transpile_py;
 
 use std::env;
 use std::fs;
@@ -198,6 +199,60 @@ fn main() {
         println!("  Functions: {}", extern_count);
         println!("  Structures: {}", struct_count);
         println!("  Constants: {}", const_count);
+        return;
+    }
+
+    // Handle 'ernos transpile file.py [-o output.ep]' subcommand
+    if args[1] == "transpile" {
+        if args.len() < 3 {
+            eprintln!("Usage: ernos transpile <file.py> [-o output.ep]");
+            eprintln!("Supported: .py (Python)");
+            std::process::exit(1);
+        }
+        let source_path = &args[2];
+        let ext = Path::new(source_path).extension()
+            .and_then(|e| e.to_str()).unwrap_or("");
+
+        let source = match fs::read_to_string(source_path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Error reading '{}': {}", source_path, e);
+                std::process::exit(1);
+            }
+        };
+
+        let (output, lang) = match ext {
+            "py" => (transpile_py::emit_ernos_from_python(source_path, &source), "Python"),
+            _ => {
+                eprintln!("Unsupported source language: .{}", ext);
+                eprintln!("Supported: .py (Python)");
+                std::process::exit(1);
+            }
+        };
+
+        let output_path = if let Some(idx) = args.iter().position(|a| a == "-o") {
+            args.get(idx + 1).cloned().unwrap_or_else(|| {
+                let stem = Path::new(source_path).file_stem()
+                    .and_then(|s| s.to_str()).unwrap_or("transpiled");
+                format!("{}.ep", stem)
+            })
+        } else {
+            let stem = Path::new(source_path).file_stem()
+                .and_then(|s| s.to_str()).unwrap_or("transpiled");
+            format!("{}.ep", stem)
+        };
+
+        if let Err(e) = fs::write(&output_path, &output) {
+            eprintln!("Error writing '{}': {}", output_path, e);
+            std::process::exit(1);
+        }
+
+        println!("Transpiled {} → ErnosPlain: {}", lang, output_path);
+        println!("  Source: {}", source_path);
+        let func_count = output.matches("define ").count();
+        let line_count = output.lines().count();
+        println!("  Functions: {}", func_count);
+        println!("  Lines: {}", line_count);
         return;
     }
 
@@ -525,6 +580,7 @@ fn main() {
                 .arg(&runtime_obj_path)
                 .arg("-lpthread")
                 .arg("-lm")
+                .arg("-ldl")
                 .status()
         };
 
@@ -607,6 +663,10 @@ fn main() {
     
     let mut link_flags = Vec::new();
     link_flags.push("-lpthread");
+    // dlopen/dlsym/dlclose require -ldl on Linux (macOS has it in libSystem)
+    if std::env::consts::OS != "macos" {
+        link_flags.push("-ldl");
+    }
     for path in &parsed_files {
         let path_str = path.to_string_lossy();
         if path_str.ends_with("sql.ep") {

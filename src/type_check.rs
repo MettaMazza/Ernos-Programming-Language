@@ -647,6 +647,18 @@ impl TypeChecker {
         self.func_types.insert("ep_system".into(), (vec![MonoType::Str], MonoType::Int));
         self.func_types.insert("ep_play_sound".into(), (vec![MonoType::Str], MonoType::Int));
 
+        // Dynamic library loading (FFI)
+        self.func_types.insert("ep_dlopen".into(), (vec![MonoType::Str], MonoType::Int));
+        self.func_types.insert("ep_dlsym".into(), (vec![MonoType::Int, MonoType::Str], MonoType::Int));
+        self.func_types.insert("ep_dlclose".into(), (vec![MonoType::Int], MonoType::Int));
+        self.func_types.insert("ep_dlcall0".into(), (vec![MonoType::Int], MonoType::Int));
+        self.func_types.insert("ep_dlcall1".into(), (vec![MonoType::Int, MonoType::Int], MonoType::Int));
+        self.func_types.insert("ep_dlcall2".into(), (vec![MonoType::Int, MonoType::Int, MonoType::Int], MonoType::Int));
+        self.func_types.insert("ep_dlcall3".into(), (vec![MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int], MonoType::Int));
+        self.func_types.insert("ep_dlcall4".into(), (vec![MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int], MonoType::Int));
+        self.func_types.insert("ep_dlcall5".into(), (vec![MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int], MonoType::Int));
+        self.func_types.insert("ep_dlcall6".into(), (vec![MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int], MonoType::Int));
+
         // Display helpers
         self.func_types.insert("display".into(), (vec![MonoType::Int], MonoType::Unit));
         self.func_types.insert("display_string".into(), (vec![MonoType::Str], MonoType::Unit));
