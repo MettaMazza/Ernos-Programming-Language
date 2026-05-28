@@ -581,8 +581,12 @@ fn emit_ja_stmt(out: &mut String, stmt: &JaStmt, depth: usize, class_name: Optio
             out.push('\n');
         }
         JaStmt::Method(mods, _, name, params, body) => {
-            // Filter out String[] args from main
-            let filtered_params: Vec<_> = params.iter().filter(|(n, t)| !(n == "args" && t.contains("String"))).collect();
+            // main must be parameterless in ErnosPlain — drop all its params
+            let filtered_params: Vec<_> = if name == "main" {
+                Vec::new()
+            } else {
+                params.iter().collect()
+            };
             ind(out, depth);
             let sname = san(name);
             let is_static = mods.contains(&"static".to_string());

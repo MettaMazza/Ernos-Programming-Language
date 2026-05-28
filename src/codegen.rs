@@ -2409,6 +2409,18 @@ impl Codegen {
         }
         self.out.push_str("\n");
 
+        // Declare top-level constant globals BEFORE function prototypes/definitions
+        // so bridge constants (e.g. SDL_HANDLE) are visible to all functions
+        if !program.top_level_constants.is_empty() {
+            self.out.push_str("\n/* Top-Level Constant Globals (Bridge Libraries) */\n");
+            for stmt in &program.top_level_constants {
+                if let StmtNode::Set(name, _, _) = &stmt.node {
+                    self.out.push_str(&format!("long long {} = 0;\n", name));
+                }
+            }
+            self.out.push_str("\n");
+        }
+
         self.out.push_str("\n/* User Function Prototypes */\n");
         for func in &program.functions {
             // Skip prototypes for functions that shadow C runtime builtins
@@ -2534,15 +2546,8 @@ impl Codegen {
         if self.is_test_mode {
             self.out.push_str(&self.get_c_test_main_source(program));
         } else {
-            // Emit top-level constant globals and init function
+            // Emit top-level constant init function (globals already declared earlier)
             if !program.top_level_constants.is_empty() {
-                self.out.push_str("\n/* ========== Top-Level Constants (Bridge Libraries) ========== */\n");
-                // Declare globals
-                for stmt in &program.top_level_constants {
-                    if let StmtNode::Set(name, _, _) = &stmt.node {
-                        self.out.push_str(&format!("long long {} = 0;\n", name));
-                    }
-                }
                 // Generate init function
                 self.out.push_str("\nvoid __ep_init_constants(void) {\n");
                 for stmt in &program.top_level_constants {

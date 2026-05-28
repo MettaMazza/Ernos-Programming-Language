@@ -260,6 +260,20 @@ impl NativeCodegen {
         self.var_offsets.get(name).copied().unwrap_or(0)
     }
 
+    /// Check if an expression produces a string value (pointer to char data)
+    fn is_string_expr(expr: &Expr) -> bool {
+        match &expr.node {
+            ExprNode::StringLiteral(_) => true,
+            ExprNode::Call(name, _) => matches!(name.as_str(),
+                "concat" | "ep_auto_to_string" | "int_to_string" |
+                "string_upper" | "string_lower" | "substring" |
+                "string_trim" | "string_repeat" | "string_replace" |
+                "char_at" | "read_input" | "read_file"
+            ),
+            _ => false,
+        }
+    }
+
     fn gen_statement(&mut self, stmt: &Stmt, cleanup_label: &str, frame_size: i64) -> Result<(), String> {
         match &stmt.node {
             StmtNode::Display(expr) => {
@@ -270,8 +284,8 @@ impl NativeCodegen {
                 self.emit("    sub sp, sp, #16");
                 self.emit("    str x8, [sp]");
 
-                // Load format string into x0
-                if matches!(expr.node, ExprNode::StringLiteral(_)) {
+                // Load format string into x0 — use %s for string exprs, %lld for integers
+                if Self::is_string_expr(expr) {
                     if self.is_macos {
                         self.emit("    adrp x0, _fmt_str@PAGE");
                         self.emit("    add x0, x0, _fmt_str@PAGEOFF");
