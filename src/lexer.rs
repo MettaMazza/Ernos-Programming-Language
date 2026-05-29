@@ -148,15 +148,26 @@ impl<'a> Lexer<'a> {
                 }
                 raw_tokens.push((RawToken::Word(s), span));
             } else if c == '"' {
-                // Check if this is an f-string (f"...")
-                let is_fstring = if let Some((RawToken::Word(w), _)) = raw_tokens.last() {
-                    w == "f"
-                } else {
-                    false
+                // Check if this is an f-string (f"..." or f "...")
+                // Look back past any Spaces tokens to find the preceding Word
+                let is_fstring = {
+                    let mut found = false;
+                    for rtok in raw_tokens.iter().rev() {
+                        match &rtok.0 {
+                            RawToken::Spaces(_) => continue,
+                            RawToken::Word(w) if w == "f" => { found = true; break; }
+                            _ => break,
+                        }
+                    }
+                    found
                 };
-                // If f-string, remove the 'f' word token
+                // If f-string, remove the 'f' word token (and any trailing Spaces)
                 if is_fstring {
-                    raw_tokens.pop();
+                    // Remove trailing Spaces first, then the 'f' Word
+                    while let Some((RawToken::Spaces(_), _)) = raw_tokens.last() {
+                        raw_tokens.pop();
+                    }
+                    raw_tokens.pop(); // remove Word("f")
                 }
                 
                 self.advance(); // consume first quote
