@@ -2798,7 +2798,7 @@ int main(int argc, char** argv) {
             self.out.push_str("    fut->chan = create_channel();\n");
             self.out.push_str("    fut->completed = 0;\n");
             self.out.push_str("    fut->value = 0;\n");
-            self.out.push_str("    ep_gc_register(fut, EP_OBJ_STRUCT);\n");
+            self.out.push_str("    { EpGCObject* _go = ep_gc_register(fut, EP_OBJ_STRUCT); if(_go) _go->num_fields = 3; }\n");
             self.out.push_str(&format!("    {}_async_args* args = ({}_async_args*)malloc(sizeof({}_async_args));\n", name, name, name));
             self.out.push_str("    args->fut = fut;\n");
             for (j, param) in func.params.iter().enumerate() {
@@ -2817,6 +2817,69 @@ int main(int argc, char** argv) {
             name.clone()
         };
         self.out.push_str(&format!("long long {}({}) {{\n", impl_name, params_decl.join(", ")));
+
+        let mut borrowed_vars = std::collections::HashSet::new();
+        for param in &func.params {
+            borrowed_vars.insert(param.0.clone());
+        }
+
+        fn is_borrow_expr(expr: &Expr, borrowed: &std::collections::HashSet<String>) -> bool {
+            match &expr.node {
+                ExprNode::Borrow(_) => true,
+                ExprNode::FieldAccess(_, _) => true,
+                ExprNode::Identifier(name) => borrowed.contains(name),
+                ExprNode::Call(name, _) => {
+                    let name_lower = name.to_lowercase();
+                    name_lower.contains("get") || name_lower.contains("peek")
+                }
+                ExprNode::MethodCall(_, name, _) => {
+                    let name_lower = name.to_lowercase();
+                    name_lower.contains("get") || name_lower.contains("peek")
+                }
+                _ => false,
+            }
+        }
+
+        fn scan_stmts_for_borrows(
+            stmts: &[Stmt],
+            borrowed: &mut std::collections::HashSet<String>,
+        ) {
+            for stmt in stmts {
+                match &stmt.node {
+                    StmtNode::Set(name, expr, _) => {
+                        if is_borrow_expr(expr, borrowed) {
+                            borrowed.insert(name.clone());
+                        } else {
+                            borrowed.remove(name);
+                        }
+                    }
+                    StmtNode::If(_, then_branch, else_branch) => {
+                        scan_stmts_for_borrows(then_branch, borrowed);
+                        if let Some(else_stmts) = else_branch {
+                            scan_stmts_for_borrows(else_stmts, borrowed);
+                        }
+                    }
+                    StmtNode::RepeatWhile(_, body) => {
+                        scan_stmts_for_borrows(body, borrowed);
+                    }
+                    StmtNode::ForEach(loop_var, _, body) => {
+                        borrowed.insert(loop_var.clone());
+                        scan_stmts_for_borrows(body, borrowed);
+                    }
+                    StmtNode::Match(_, arms) => {
+                        for (_, bindings, body) in arms {
+                            for binding in bindings {
+                                borrowed.insert(binding.clone());
+                            }
+                            scan_stmts_for_borrows(body, borrowed);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        scan_stmts_for_borrows(&func.body, &mut borrowed_vars);
         
         for (var_name, _) in &var_types {
             let is_param = func.params.iter().any(|p| &p.0 == var_name);
@@ -2832,9 +2895,10 @@ int main(int argc, char** argv) {
         let mut gc_root_count = 0;
         for (var_name, _) in &var_types {
             let is_param = func.params.iter().any(|p| &p.0 == var_name);
-            if !is_param {
+            let is_global = self.global_constants.contains(var_name);
+            if !is_param && !is_global {
                 let t = var_types.get(var_name);
-                let is_tracked = matches!(t, Some(Type::List) | Some(Type::DynStr) | Some(Type::Struct(_)) | Some(Type::Enum(_)));
+                let is_tracked = t.map(|ty| is_tracked(ty)).unwrap_or(false);
                 if is_tracked {
                     self.out.push_str(&format!("    ep_gc_push_root(&{});\n", Self::sanitize_c_name(var_name)));
                     gc_root_count += 1;
@@ -2844,7 +2908,7 @@ int main(int argc, char** argv) {
         // Also push params that are tracked
         for param in &func.params {
             let t = var_types.get(&param.0);
-            let is_tracked = matches!(t, Some(Type::List) | Some(Type::DynStr) | Some(Type::Struct(_)) | Some(Type::Enum(_)));
+            let is_tracked = t.map(|ty| is_tracked(ty)).unwrap_or(false);
             if is_tracked {
                 self.out.push_str(&format!("    ep_gc_push_root(&{});\n", param.0));
                 gc_root_count += 1;
@@ -2888,7 +2952,9 @@ int main(int argc, char** argv) {
         let func_ret_type = self.func_return_types.get(&func.name).cloned();
         for (var_name, _) in &var_types {
             let is_param = func.params.iter().any(|p| &p.0 == var_name);
-            if !is_param {
+            let is_global = self.global_constants.contains(var_name);
+            let is_borrowed = borrowed_vars.contains(var_name);
+            if !is_param && !is_global && !is_borrowed {
                 let t = var_types.get(var_name);
                 // Skip freeing if this local has the same struct/enum type as the return type
                 // because it may hold the value being returned via ret_val
@@ -5933,6 +5999,16 @@ long long ep_net_recv_bytes(long long fd, long long count) {
     buf[total] = '\0';
     ep_gc_register(buf, EP_OBJ_STRING);
     return (long long)buf;
+}
+
+long long ep_get_args(void) {
+    long long list_ptr = create_list();
+    for (int i = 0; i < ep_argc; i++) {
+        char* arg_copy = strdup(ep_argv[i]);
+        ep_gc_register(arg_copy, EP_OBJ_STRING);
+        append_list(list_ptr, (long long)arg_copy);
+    }
+    return list_ptr;
 }
 
 "#;
