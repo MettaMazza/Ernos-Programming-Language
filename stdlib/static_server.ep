@@ -82,7 +82,7 @@ define serve_static with port and root_dir:
     set server to start_server(port)
     
     repeat while 1 == 1:
-        receive request from server
+        set request to receive from server
         set client_fd to get_list(request and 0)
         set req_str to get_list(request and 1)
         

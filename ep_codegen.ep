@@ -131,7 +131,21 @@ define create_codegen_state:
     set ok to append_list(state and 0)                 # current_return_type (5)
     set ok to append_list(state and (create_list() + 0)) # spawn_list (6)
     set ok to append_list(state and 0)                 # spawn_index (7)
+    set ok to append_list(state and (create_list() + 0)) # current_borrowed_keys (8)
+    set ok to append_list(state and (create_list() + 0)) # current_borrowed_values (9)
     return state
+
+define get_codegen_borrowed_keys with state:
+    return get_list(state and 8)
+
+define set_codegen_borrowed_keys with state and keys:
+    return set_list(state and 8 and keys)
+
+define get_codegen_borrowed_values with state:
+    return get_list(state and 9)
+
+define set_codegen_borrowed_values with state and values:
+    return set_list(state and 9 and values)
 
 define get_codegen_spawn_list with state:
     return get_list(state and 6)
@@ -373,6 +387,103 @@ define infer_type with state and expr and var_keys and var_values:
 
 # Variable offset collection is no longer needed for C transpilation
 
+define is_global_var with name:
+    set len to string_length(name)
+    if len == 0:
+        return 0
+    set idx to 0
+    repeat while idx < len:
+        set ch to get_character(name and idx)
+        if ch >= 97 && ch <= 122:
+            return 0
+        set idx to idx + 1
+    return 1
+
+define string_contains with s and sub:
+    set len to string_length(s)
+    set sub_len to string_length(sub)
+    if sub_len > len:
+        return 0
+    if sub_len == 0:
+        return 1
+        
+    set limit to len - sub_len + 1
+    set i to 0
+    repeat while i < limit:
+        set match to 1
+        set j to 0
+        repeat while j < sub_len && match == 1:
+            set c1 to get_character(s and i + j)
+            set c2 to get_character(sub and j)
+            if c1 != c2:
+                set match to 0
+            set j to j + 1
+        if match == 1:
+            return 1
+        set i to i + 1
+    return 0
+
+define is_borrow_expr with expr and borrowed_keys and borrowed_values:
+    set type to get_list(expr and 0)
+    
+    if type == 20: # NODE_BORROW
+        return 1
+        
+    if type == 6: # NODE_CALL
+        set func_name to get_list(expr and 1)
+        if string_contains(func_name and "get") == 1 || string_contains(func_name and "peek") == 1:
+            return 1
+            
+    if type == 3: # NODE_IDENT
+        set name to get_list(expr and 1)
+        set is_borrowed to map_get(borrowed_keys and borrowed_values and name)
+        if is_borrowed == 1:
+            return 1
+            
+    return 0
+
+define scan_stmts_for_borrows with stmts and borrowed_keys and borrowed_values:
+    set len to length_list(stmts)
+    set idx to 0
+    repeat while idx < len:
+        set stmt to get_list(stmts and idx)
+        set type to get_list(stmt and 0)
+        
+        if type == 7: # NODE_SET
+            set var_name to get_list(stmt and 1)
+            set expr to get_list(stmt and 2)
+            set is_borrow to is_borrow_expr(expr and borrowed_keys and borrowed_values)
+            if is_borrow == 1:
+                set ok to map_put(borrowed_keys and borrowed_values and var_name and 1)
+            else:
+                set ok to map_put(borrowed_keys and borrowed_values and var_name and 0)
+                
+        if type == 10: # NODE_IF
+            set then_b to get_list(stmt and 2)
+            set ok to scan_stmts_for_borrows(then_b and borrowed_keys and borrowed_values)
+            set else_b to get_list(stmt and 3)
+            if else_b != 0:
+                set ok to scan_stmts_for_borrows(else_b and borrowed_keys and borrowed_values)
+                
+        if type == 11: # NODE_REPEAT_WHILE
+            set body to get_list(stmt and 2)
+            set ok to scan_stmts_for_borrows(body and borrowed_keys and borrowed_values)
+            
+        set idx to idx + 1
+    return 0
+
+define collect_borrowed_vars with stmts and params and borrowed_keys and borrowed_values:
+    set p_len to length_list(params)
+    set idx to 0
+    repeat while idx < p_len:
+        set p_node to get_list(params and idx)
+        set p_name to get_list(p_node and 0)
+        set ok to map_put(borrowed_keys and borrowed_values and p_name and 1)
+        set idx to idx + 1
+        
+    set ok to scan_stmts_for_borrows(stmts and borrowed_keys and borrowed_values)
+    return 0
+
 # Generator Functions
 define gen_function with state and func:
     set name to get_list(func and 1)
@@ -521,6 +632,12 @@ define gen_function with state and func:
     set header to string_concat(header and ") {\n")
     set ok to emit(state and header)
     
+    set borrowed_keys to create_list() + 0
+    set borrowed_values to create_list() + 0
+    set ok to collect_borrowed_vars(body and params and borrowed_keys and borrowed_values)
+    set ok to set_codegen_borrowed_keys(state and borrowed_keys)
+    set ok to set_codegen_borrowed_values(state and borrowed_values)
+    
     # Declare local variables (not in params)
     set num_vars to length_list(var_types_keys)
     set idx to 0
@@ -536,11 +653,13 @@ define gen_function with state and func:
             set p_i to p_i + 1
             
         if is_param == 0:
-            # Declare: long long var_name = 0;
-            set decl to "    long long "
-            set decl to string_concat(decl and var_name)
-            set decl to string_concat(decl and " = 0;\n")
-            set ok to emit(state and decl)
+            set is_global to is_global_var(var_name)
+            if is_global == 0:
+                # Declare: long long var_name = 0;
+                set decl to "    long long "
+                set decl to string_concat(decl and var_name)
+                set decl to string_concat(decl and " = 0;\n")
+                set ok to emit(state and decl)
         set idx to idx + 1
         
     set ok to emit(state and "    long long ret_val = 0;\n\n")
@@ -559,13 +678,15 @@ define gen_function with state and func:
                 set is_p to 1
             set p_i to p_i + 1
         if is_p == 0:
-            set t to map_get(var_types_keys and var_types_values and var_name)
-            if t == 3 || t == 4: # TYPE_DYNSTR or TYPE_LIST
-                set root_line to "    ep_gc_push_root(&"
-                set root_line to string_concat(root_line and var_name)
-                set root_line to string_concat(root_line and ");\n")
-                set ok to emit(state and root_line)
-                set gc_root_count to gc_root_count + 1
+            set is_global to is_global_var(var_name)
+            if is_global == 0:
+                set t to map_get(var_types_keys and var_types_values and var_name)
+                if t == 3 || t == 4: # TYPE_DYNSTR or TYPE_LIST
+                    set root_line to "    ep_gc_push_root(&"
+                    set root_line to string_concat(root_line and var_name)
+                    set root_line to string_concat(root_line and ");\n")
+                    set ok to emit(state and root_line)
+                    set gc_root_count to gc_root_count + 1
         set idx to idx + 1
         
     set ok to emit(state and "    ep_gc_maybe_collect();\n\n")
@@ -599,12 +720,15 @@ define gen_function with state and func:
             set p_i to p_i + 1
             
         if is_param == 0:
-            set t to map_get(var_types_keys and var_types_values and var_name)
-            if t == 4: # TYPE_LIST
-                set cleanup_line to "    free_list("
-                set cleanup_line to string_concat(cleanup_line and var_name)
-                set cleanup_line to string_concat(cleanup_line and ");\n")
-                set ok to emit(state and cleanup_line)
+            set is_global to is_global_var(var_name)
+            set is_borrowed to map_get(borrowed_keys and borrowed_values and var_name)
+            if is_global == 0 && is_borrowed == 0:
+                set t to map_get(var_types_keys and var_types_values and var_name)
+                if t == 4: # TYPE_LIST
+                    set cleanup_line to "    free_list("
+                    set cleanup_line to string_concat(cleanup_line and var_name)
+                    set cleanup_line to string_concat(cleanup_line and ");\n")
+                    set ok to emit(state and cleanup_line)
         set idx to idx + 1
         
     set ok to emit(state and "    return ret_val;\n}\n\n")
@@ -620,7 +744,11 @@ define gen_statement with state and stmt and var_keys and var_values:
         
         set expr_str to gen_expr(state and expr and var_keys and var_values)
         
-        if t == 4: # TYPE_LIST
+        set is_global to is_global_var(name)
+        set borrowed_keys to get_codegen_borrowed_keys(state)
+        set borrowed_values to get_codegen_borrowed_values(state)
+        set is_borrowed to map_get(borrowed_keys and borrowed_values and name)
+        if t == 4 && is_global == 0 && is_borrowed == 0: # TYPE_LIST
             set ok to emit(state and "    {\n")
             
             set line to "        long long tmp_val = "

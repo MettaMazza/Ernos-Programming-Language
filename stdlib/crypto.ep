@@ -45,7 +45,7 @@ define crypto_sha256 with s:
     set ok to append_list(hash_list and 0)
     
     set hash_ptr to get_list_data_ptr(hash_list)
-    set dummy to SHA256(s and len and hash_ptr)
+    set dummy to SHA256(str_to_ptr(s) and len and hash_ptr)
     
     set hex_res to ""
     set word_idx to 0
@@ -66,7 +66,7 @@ define crypto_md5 with s:
     set ok to append_list(hash_list and 0)
     
     set hash_ptr to get_list_data_ptr(hash_list)
-    set dummy to MD5(s and len and hash_ptr)
+    set dummy to MD5(str_to_ptr(s) and len and hash_ptr)
     
     set hex_res to ""
     set word_idx to 0
