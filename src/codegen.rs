@@ -418,6 +418,7 @@ impl Codegen {
         self.func_return_types.insert("ep_time_ms".to_string(), Type::Int);
         self.func_return_types.insert("ep_uuid_v4".to_string(), Type::DynStr);
         self.func_return_types.insert("ep_base64_encode".to_string(), Type::DynStr);
+        self.func_return_types.insert("ep_os_name".to_string(), Type::Str);
         self.func_return_types.insert("create_channel".to_string(), Type::Int);
 
         // Structured Concurrency builtins

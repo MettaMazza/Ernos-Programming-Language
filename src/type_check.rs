@@ -931,6 +931,9 @@ impl TypeChecker {
         self.func_types.insert("ep_time_month".into(), (vec![MonoType::Int], MonoType::Int));
         self.func_types.insert("ep_time_day".into(), (vec![MonoType::Int], MonoType::Int));
 
+        // Platform
+        self.func_types.insert("ep_os_name".into(), (vec![], MonoType::Str));
+
         // FFI pointer/byte builtins
         self.func_types.insert("str_to_ptr".into(), (vec![MonoType::Str], MonoType::Int));
         self.func_types.insert("ptr_to_str".into(), (vec![MonoType::Int], MonoType::DynStr));
