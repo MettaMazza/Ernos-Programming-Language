@@ -9,6 +9,7 @@ enum Type {
     Str,
     DynStr,
     List,
+    Map,
     RefList,
     RefStr,
     Struct(String),
@@ -22,7 +23,7 @@ enum OwnerState {
 }
 
 fn is_tracked(t: &Type) -> bool {
-    matches!(t, Type::List | Type::Str | Type::DynStr | Type::RefList | Type::RefStr | Type::Struct(_) | Type::Enum(_))
+    matches!(t, Type::List | Type::Map | Type::Str | Type::DynStr | Type::RefList | Type::RefStr | Type::Struct(_) | Type::Enum(_))
 }
 
 /// Whether a local variable needs to be registered as a GC root.
@@ -325,7 +326,7 @@ impl Codegen {
         self.func_return_types.insert("ep_sqlite3_close".to_string(), Type::Int);
         self.func_return_types.insert("ep_sqlite3_exec".to_string(), Type::Int);
         self.func_return_types.insert("free_list".to_string(), Type::Int);
-        self.func_return_types.insert("create_map".to_string(), Type::Int);
+        self.func_return_types.insert("create_map".to_string(), Type::Map);
         self.func_return_types.insert("map_insert".to_string(), Type::Int);
         self.func_return_types.insert("map_get_val".to_string(), Type::Int);
         self.func_return_types.insert("map_contains".to_string(), Type::Int);
@@ -1275,7 +1276,7 @@ impl Codegen {
 
                     if let ExprNode::Identifier(name) = &expr.node {
                         let t = var_types.get(name);
-                        if t == Some(&Type::List) {
+                        if t == Some(&Type::List) || t == Some(&Type::Map) {
                             self.out.push_str(&format!("    {} = 0;\n", name));
                         } else if matches!(t, Some(Type::Enum(_))) {
                             self.out.push_str(&format!("    {} = 0;\n", name));
@@ -1361,7 +1362,8 @@ impl Codegen {
                 let val_str = self.gen_expr(val, var_types)?;
                 self.out.push_str(&format!("    send_channel({}, {});\n", chan_str, val_str));
                 if let ExprNode::Identifier(name) = &val.node {
-                    if var_types.get(name) == Some(&Type::List) {
+                    let vt = var_types.get(name);
+                    if vt == Some(&Type::List) || vt == Some(&Type::Map) {
                         self.out.push_str(&format!("    {} = 0;\n", name));
                     }
                 }
@@ -3391,7 +3393,7 @@ int main(int argc, char** argv) {{
 
         // GC safe point: collect only if this function uses heap-allocated data
         let needs_gc = gc_root_count > 0 || var_types.values().any(|t| 
-            matches!(t, Type::List | Type::DynStr | Type::Struct(_) | Type::Enum(_) | Type::RefList)
+            matches!(t, Type::List | Type::Map | Type::DynStr | Type::Struct(_) | Type::Enum(_) | Type::RefList)
         );
         if needs_gc {
             self.out.push_str("    ep_gc_maybe_collect();\n\n");
@@ -3444,6 +3446,9 @@ int main(int argc, char** argv) {{
                 }
                 if t == Some(&Type::List) {
                     self.out.push_str(&format!("    free_list({});\n", var_name));
+                    self.out.push_str(&format!("    {} = 0;\n", var_name));
+                } else if t == Some(&Type::Map) {
+                    self.out.push_str(&format!("    free_map({});\n", var_name));
                     self.out.push_str(&format!("    {} = 0;\n", var_name));
                 } else if let Some(Type::Struct(sname)) = t {
                     if sname == "Map" {
