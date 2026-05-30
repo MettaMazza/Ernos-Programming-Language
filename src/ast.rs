@@ -44,6 +44,7 @@ pub struct StructDef {
     pub name: String,
     pub type_params: Vec<String>,
     pub fields: Vec<(String, TypeAnnotation, Option<Expr>)>,
+    pub doc_comment: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -51,6 +52,7 @@ pub struct EnumDef {
     pub name: String,
     pub type_params: Vec<String>,
     pub variants: Vec<(String, Vec<(String, TypeAnnotation)>)>,
+    pub doc_comment: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -148,6 +150,7 @@ pub struct Function {
     pub return_type: Option<TypeAnnotation>,
     pub body: Vec<Stmt>,
     pub is_async: bool,
+    pub doc_comment: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -164,12 +167,14 @@ pub struct MethodDef {
     pub params: Vec<(String, bool, Option<TypeAnnotation>)>,
     pub return_type: Option<TypeAnnotation>,
     pub body: Vec<Stmt>,
+    pub doc_comment: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TraitDef {
     pub name: String,
     pub method_signatures: Vec<(String, Vec<(String, bool, Option<TypeAnnotation>)>, Option<TypeAnnotation>)>,
+    pub doc_comment: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

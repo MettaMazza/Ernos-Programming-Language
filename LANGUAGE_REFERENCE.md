@@ -302,6 +302,36 @@ define main:
 
 > **Note:** Channel creation uses either `channel` (keyword) or `create_channel()` (function call). Send syntax is `send value to channel`. Receive syntax is `receive from channel`.
 
+### Structured Concurrency (Task Groups)
+Ernos supports structured concurrency using Task Groups, timeouts, cancellations, and cooperative async sleeping:
+
+```ernos
+import "stdlib/structured" as s
+
+async define worker with id as Int and val as Int returning Int:
+    set dummy to await sleep_ms(50)
+    display f"Worker {id} done"
+    return val
+
+define main:
+    set group to s_create_group()
+    s_add_task(group and worker(1 and 100))
+    s_add_task(group and worker(2 and 200))
+    
+    # Wait for all tasks to complete
+    set results to s_wait_group(group)
+    display get_list(results and 0)  # 100
+    display get_list(results and 1)  # 200
+    return 0
+```
+
+- `s_create_group()`: Returns a new task group handler.
+- `s_add_task(group and fut)`: Spawns/adds an async future task to the group.
+- `s_wait_group(group)`: Waits until all tasks in the group complete. If any task returns a negative error code (e.g. `-1`), all other running tasks in the group are cancelled, and a list of results is returned.
+- `s_timeout(ms and fut)`: Returns the future's result if it finishes within `ms`, otherwise cancels the future and returns `-1`.
+- `s_cancel(fut)`: Aborts execution of the task corresponding to `fut`.
+- `sleep_ms(ms)`: A non-blocking cooperative async sleep function that yields back to the scheduler event loop for `ms` milliseconds.
+
 ---
 
 ## 9. Ownership & Borrowing
@@ -521,6 +551,67 @@ gcc program_compiled.c -O2 -o program -lpthread
 | `List of T` | Dynamic array | `create_list()` |
 | `StructName` | Named struct | `create Point: ...` |
 | `EnumName` | Tagged union | `Ok with 42` |
+
+---
+
+## 15. Iterator Protocol
+
+ErnosPlain supports custom iterators and iteration protocols using the `Iterator` trait and `IterResult` choice type defined in `collections`.
+
+### Defining an Iterator
+
+Any structure implementing the `Iterator` trait can be iterated over in a `for each` loop:
+
+```ernos
+import "collections"
+
+define structure RangeIterator:
+    field current as Int
+    field limit as Int
+
+implement Iterator for RangeIterator:
+    define next returning IterResult:
+        if self.current < self.limit:
+            set val to self.current
+            set self.current to self.current + 1
+            return Next with val
+        else:
+            return Done
+
+define main:
+    set iter to create RangeIterator:
+        current is 0
+        limit is 5
+    
+    for each num in iter:
+        display num    # Prints 0, 1, 2, 3, 4
+    
+    return 0
+```
+
+---
+
+## 16. Doc Comments & API Documentation
+
+ErnosPlain supports generating API documentation from triple-hash (`###`) doc comments:
+
+### Writing Doc Comments
+
+Place `###` doc comments immediately before the declaration of functions, structures, choices (enums), or traits:
+
+```ernos
+### Calculates the square of a given integer.
+define square with n as Int returning Int:
+    return n * n
+```
+
+### Generating Documentation
+
+Use the `doc` CLI subcommand to automatically scan files and compile markdown API summaries:
+
+```bash
+ernos doc my_program.ep -o api_docs.md
+```
 
 ---
 

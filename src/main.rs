@@ -11,7 +11,9 @@ pub mod optimizer;
 pub mod arm64;
 pub mod native_codegen;
 pub mod x86_64_codegen;
+pub mod llvm_codegen;
 pub mod bind_c;
+pub mod lsp;
 pub mod transpile_py;
 pub mod transpile_c;
 pub mod transpile_js;
@@ -31,7 +33,7 @@ use std::path::{Path, PathBuf};
 use std::collections::HashSet;
 
 fn resolve_import_path(current_file: &Path, import_path: &str) -> PathBuf {
-    let stdlib_modules = ["math", "hash", "net", "json", "string", "sql", "gui", "crypto", "fs", "http", "collections", "sort", "datetime", "os", "test", "log", "sync", "regex", "csv", "websocket", "static_server", "toml", "select"];
+    let stdlib_modules = ["math", "hash", "net", "json", "string", "sql", "gui", "crypto", "fs", "http", "collections", "sort", "datetime", "os", "test", "log", "sync", "regex", "csv", "websocket", "static_server", "toml", "select", "structured"];
     if stdlib_modules.contains(&import_path) {
         let stdlib_path = Path::new("stdlib").join(format!("{}.ep", import_path));
         if stdlib_path.exists() {
@@ -45,13 +47,41 @@ fn resolve_import_path(current_file: &Path, import_path: &str) -> PathBuf {
                 }
             }
         }
-        // No hardcoded fallback — stdlib must be in CWD or alongside the compiler binary
     }
 
     let mut resolved = current_file.parent().unwrap_or(Path::new("")).join(import_path);
     if !resolved.exists() && !import_path.ends_with(".ep") {
         resolved.set_extension("ep");
     }
+    if resolved.exists() {
+        return resolved;
+    }
+
+    // Try resolving from local packages directory 'ernos_modules'
+    // 1. Relative to the current source file being compiled
+    if let Some(parent) = current_file.parent() {
+        let rel_modules = parent.join("ernos_modules").join(import_path);
+        let src_lib = rel_modules.join("src").join("lib.ep");
+        if src_lib.exists() {
+            return src_lib;
+        }
+        let lib_ep = rel_modules.join("lib.ep");
+        if lib_ep.exists() {
+            return lib_ep;
+        }
+    }
+
+    // 2. Relative to CWD
+    let ernos_modules_path = Path::new("ernos_modules").join(import_path);
+    let src_lib = ernos_modules_path.join("src").join("lib.ep");
+    if src_lib.exists() {
+        return src_lib;
+    }
+    let lib_ep = ernos_modules_path.join("lib.ep");
+    if lib_ep.exists() {
+        return lib_ep;
+    }
+
     resolved
 }
 
@@ -88,9 +118,11 @@ fn parse_all_modules(
     let mut parser = parser::Parser::new(tokens);
     let program = match parser.parse_program() {
         Ok(prog) => prog,
-        Err(e) => {
-            print_diagnostic(canonical_path.to_str().unwrap_or(""), &source, &e.message, e.span.line, e.span.col);
-            return Err("Parser error".to_string());
+        Err(errors) => {
+            for e in &errors {
+                print_diagnostic(canonical_path.to_str().unwrap_or(""), &source, &e.message, e.span.line, e.span.col);
+            }
+            return Err(format!("{} parse error(s)", errors.len()));
         }
     };
 
@@ -156,11 +188,470 @@ fn parse_all_modules(
     Ok(())
 }
 
+struct PackageManifest {
+    name: String,
+    version: String,
+    dependencies: Vec<(String, String)>,
+}
+
+fn parse_manifest(content: &str) -> Result<PackageManifest, String> {
+    let mut name = String::new();
+    let mut version = String::new();
+    let mut dependencies = Vec::new();
+    let mut section = "";
+
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            section = &line[1..line.len() - 1];
+            continue;
+        }
+        if let Some(idx) = line.find('=') {
+            let key = line[..idx].trim();
+            let mut val = line[idx + 1..].trim();
+            if (val.starts_with('"') && val.ends_with('"')) || (val.starts_with('\'') && val.ends_with('\'')) {
+                val = &val[1..val.len() - 1];
+            }
+            match section {
+                "package" => {
+                    if key == "name" {
+                        name = val.to_string();
+                    } else if key == "version" {
+                        version = val.to_string();
+                    }
+                }
+                "dependencies" => {
+                    dependencies.push((key.to_string(), val.to_string()));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if name.is_empty() {
+        return Err("Manifest missing package name".to_string());
+    }
+    Ok(PackageManifest { name, version, dependencies })
+}
+
+fn format_type_annotation(ta: &ast::TypeAnnotation) -> String {
+    match ta {
+        ast::TypeAnnotation::Int => "Int".to_string(),
+        ast::TypeAnnotation::Float => "Float".to_string(),
+        ast::TypeAnnotation::Bool => "Bool".to_string(),
+        ast::TypeAnnotation::Str => "Str".to_string(),
+        ast::TypeAnnotation::DynStr => "DynStr".to_string(),
+        ast::TypeAnnotation::List => "List".to_string(),
+        ast::TypeAnnotation::UserDefined(name) => name.clone(),
+        ast::TypeAnnotation::Generic(name, params) => {
+            if params.is_empty() {
+                name.clone()
+            } else {
+                let params_str: Vec<_> = params.iter().map(format_type_annotation).collect();
+                format!("{} of {}", name, params_str.join(" and "))
+            }
+        }
+    }
+}
+
+fn doc_gen_module(
+    file_path: &Path,
+    parsed_files: &mut HashSet<PathBuf>,
+    output_dir: &Path,
+) -> Result<(), String> {
+    let canonical_path = file_path.canonicalize().map_err(|e| format!("Could not canonicalize path '{}': {}", file_path.display(), e))?;
+    if parsed_files.contains(&canonical_path) {
+        return Ok(());
+    }
+    parsed_files.insert(canonical_path.clone());
+
+    let source = fs::read_to_string(&canonical_path).map_err(|e| format!("Error reading file '{}': {}", canonical_path.display(), e))?;
+    
+    let mut lexer = lexer::Lexer::new(&source);
+    let tokens = match lexer.tokenize() {
+        Ok(toks) => toks,
+        Err(e) => {
+            print_diagnostic(canonical_path.to_str().unwrap_or(""), &source, &e.message, e.span.line, e.span.col);
+            return Err("Lexer error".to_string());
+        }
+    };
+
+    let mut parser = parser::Parser::new(tokens);
+    let program = match parser.parse_program() {
+        Ok(prog) => prog,
+        Err(errors) => {
+            for e in &errors {
+                print_diagnostic(canonical_path.to_str().unwrap_or(""), &source, &e.message, e.span.line, e.span.col);
+            }
+            return Err(format!("{} parse error(s)", errors.len()));
+        }
+    };
+
+    // Recursively parse imports first
+    for (imp, _) in &program.imports {
+        let resolved_path = resolve_import_path(&canonical_path, imp);
+        if resolved_path.exists() {
+            doc_gen_module(&resolved_path, parsed_files, output_dir)?;
+        }
+    }
+
+    // Now document the current file
+    let mut markdown = String::new();
+    let filename = canonical_path.file_name().and_then(|s| s.to_str()).unwrap_or("module.ep");
+    markdown.push_str(&format!("# API Reference: {}\n\n", filename));
+
+    let mut has_docs = false;
+
+    // 1. Structures
+    let documented_structs: Vec<_> = program.struct_defs.iter().filter(|s| s.doc_comment.is_some()).collect();
+    if !documented_structs.is_empty() {
+        has_docs = true;
+        markdown.push_str("## Structures\n\n");
+        for sd in documented_structs {
+            markdown.push_str(&format!("### `structure {}`\n\n", sd.name));
+            if let Some(ref doc) = sd.doc_comment {
+                markdown.push_str(&format!("{}\n\n", doc));
+            }
+            markdown.push_str("**Fields:**\n");
+            for (fname, ftype, default_val) in &sd.fields {
+                let ftype_str = format_type_annotation(ftype);
+                let default_str = if let Some(ref def) = default_val {
+                    format!(" (default: {:?})", def)
+                } else {
+                    "".to_string()
+                };
+                markdown.push_str(&format!("- `{}` as `{}`{}\n", fname, ftype_str, default_str));
+            }
+            markdown.push_str("\n");
+        }
+    }
+
+    // 2. Choices (Enums)
+    let documented_enums: Vec<_> = program.enum_defs.iter().filter(|e| e.doc_comment.is_some()).collect();
+    if !documented_enums.is_empty() {
+        has_docs = true;
+        markdown.push_str("## Choices\n\n");
+        for ed in documented_enums {
+            markdown.push_str(&format!("### `choice {}`\n\n", ed.name));
+            if let Some(ref doc) = ed.doc_comment {
+                markdown.push_str(&format!("{}\n\n", doc));
+            }
+            markdown.push_str("**Variants:**\n");
+            for (vname, fields) in &ed.variants {
+                if fields.is_empty() {
+                    markdown.push_str(&format!("- `variant {}`\n", vname));
+                } else {
+                    let fields_str: Vec<_> = fields.iter().map(|(fname, ftype)| {
+                        format!("`{}` as `{}`", fname, format_type_annotation(ftype))
+                    }).collect();
+                    markdown.push_str(&format!("- `variant {}` with {}\n", vname, fields_str.join(" and ")));
+                }
+            }
+            markdown.push_str("\n");
+        }
+    }
+
+    // 3. Traits
+    let documented_traits: Vec<_> = program.trait_defs.iter().filter(|t| t.doc_comment.is_some()).collect();
+    if !documented_traits.is_empty() {
+        has_docs = true;
+        markdown.push_str("## Traits\n\n");
+        for td in documented_traits {
+            markdown.push_str(&format!("### `trait {}`\n\n", td.name));
+            if let Some(ref doc) = td.doc_comment {
+                markdown.push_str(&format!("{}\n\n", doc));
+            }
+            markdown.push_str("**Methods:**\n");
+            for (mname, params, ret_type) in &td.method_signatures {
+                let params_str: Vec<_> = params.iter().map(|(pname, is_borrow, ptype)| {
+                    let borrow_prefix = if *is_borrow { "borrow " } else { "" };
+                    let type_suffix = if let Some(ref pt) = ptype {
+                        format!(" as {}", format_type_annotation(pt))
+                    } else {
+                        "".to_string()
+                    };
+                    format!("{}{}{}", borrow_prefix, pname, type_suffix)
+                }).collect();
+                let ret_str = if let Some(ref rt) = ret_type {
+                    format!(" returning {}", format_type_annotation(rt))
+                } else {
+                    "".to_string()
+                };
+                let with_str = if params_str.is_empty() {
+                    "".to_string()
+                } else {
+                    format!(" with {}", params_str.join(" and "))
+                };
+                markdown.push_str(&format!("- `define {}{}{}`\n", mname, with_str, ret_str));
+            }
+            markdown.push_str("\n");
+        }
+    }
+
+    // 4. Functions
+    let documented_funcs: Vec<_> = program.functions.iter().filter(|f| f.doc_comment.is_some()).collect();
+    if !documented_funcs.is_empty() {
+        has_docs = true;
+        markdown.push_str("## Functions\n\n");
+        for f in documented_funcs {
+            let async_prefix = if f.is_async { "async " } else { "" };
+            let params_str: Vec<_> = f.params.iter().map(|(pname, is_borrow, ptype)| {
+                let borrow_prefix = if *is_borrow { "borrow " } else { "" };
+                let type_suffix = if let Some(ref pt) = ptype {
+                    format!(" as {}", format_type_annotation(pt))
+                } else {
+                    "".to_string()
+                };
+                format!("{}{}{}", borrow_prefix, pname, type_suffix)
+            }).collect();
+            let ret_str = if let Some(ref rt) = f.return_type {
+                format!(" returning {}", format_type_annotation(rt))
+            } else {
+                "".to_string()
+            };
+            let with_str = if params_str.is_empty() {
+                "".to_string()
+            } else {
+                format!(" with {}", params_str.join(" and "))
+            };
+            markdown.push_str(&format!("### `{}define {}{}{}`\n\n", async_prefix, f.name, with_str, ret_str));
+            if let Some(ref doc) = f.doc_comment {
+                markdown.push_str(&format!("{}\n\n", doc));
+            }
+        }
+    }
+
+    // 5. Methods
+    let documented_methods: Vec<_> = program.method_defs.iter().filter(|m| m.doc_comment.is_some()).collect();
+    if !documented_methods.is_empty() {
+        has_docs = true;
+        markdown.push_str("## Methods\n\n");
+        for m in documented_methods {
+            let params_str: Vec<_> = m.params.iter().map(|(pname, is_borrow, ptype)| {
+                let borrow_prefix = if *is_borrow { "borrow " } else { "" };
+                let type_suffix = if let Some(ref pt) = ptype {
+                    format!(" as {}", format_type_annotation(pt))
+                } else {
+                    "".to_string()
+                };
+                format!("{}{}{}", borrow_prefix, pname, type_suffix)
+            }).collect();
+            let ret_str = if let Some(ref rt) = m.return_type {
+                format!(" returning {}", format_type_annotation(rt))
+            } else {
+                "".to_string()
+            };
+            let with_str = if params_str.is_empty() {
+                "".to_string()
+            } else {
+                format!(" with {}", params_str.join(" and "))
+            };
+            markdown.push_str(&format!("### `define {} on {}{}{}`\n\n", m.name, m.struct_name, with_str, ret_str));
+            if let Some(ref doc) = m.doc_comment {
+                markdown.push_str(&format!("{}\n\n", doc));
+            }
+        }
+    }
+
+    if has_docs {
+        let out_file_stem = canonical_path.file_stem().and_then(|s| s.to_str()).unwrap_or("module");
+        let out_file_path = output_dir.join(format!("{}.md", out_file_stem));
+        fs::write(&out_file_path, &markdown).map_err(|e| format!("Error writing doc file '{}': {}", out_file_path.display(), e))?;
+        println!("Generated documentation for {} -> {}", filename, out_file_path.display());
+    }
+
+    Ok(())
+}
+
+fn handle_package_command(args: &[String]) {
+    if args.len() < 3 {
+        eprintln!("Usage: ernos package <init|install|publish>");
+        std::process::exit(1);
+    }
+    let sub = &args[2];
+    match sub.as_str() {
+        "init" => {
+            let cur_dir = env::current_dir().unwrap_or_else(|_| PathBuf::from("ernos_package"));
+            let name = cur_dir.file_name().and_then(|n| n.to_str()).unwrap_or("ernos_package");
+            let manifest_content = format!(
+                "[package]\nname = \"{}\"\nversion = \"0.1.0\"\ndescription = \"An ErnosPlain package\"\n\n[dependencies]\n",
+                name
+            );
+            let toml_path = Path::new("ernos.toml");
+            if toml_path.exists() {
+                eprintln!("Error: ernos.toml already exists!");
+                std::process::exit(1);
+            }
+            fs::write(toml_path, manifest_content).expect("Failed to write ernos.toml");
+            fs::create_dir_all("src").expect("Failed to create src dir");
+            let lib_path = Path::new("src").join("lib.ep");
+            if !lib_path.exists() {
+                fs::write(&lib_path, "define greet:\n    display \"Hello from package!\"\n    return 0\n").expect("Failed to write src/lib.ep");
+            }
+            println!("Initialized package '{}' in current directory.", name);
+        }
+        "publish" => {
+            let toml_content = fs::read_to_string("ernos.toml")
+                .unwrap_or_else(|_| {
+                    eprintln!("Error: ernos.toml not found in current directory!");
+                    std::process::exit(1);
+                });
+            let manifest = parse_manifest(&toml_content).unwrap_or_else(|e| {
+                eprintln!("Error parsing manifest: {}", e);
+                std::process::exit(1);
+            });
+            let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            let reg_dir = Path::new(&home).join(".ernos_registry").join(&manifest.name).join(&manifest.version);
+            fs::create_dir_all(&reg_dir).expect("Failed to create registry dir");
+            fs::copy("ernos.toml", reg_dir.join("ernos.toml")).expect("Failed to copy ernos.toml");
+            if Path::new("src").exists() {
+                let dst_src = reg_dir.join("src");
+                fs::create_dir_all(&dst_src).expect("Failed to create src dir in registry");
+                if let Ok(entries) = fs::read_dir("src") {
+                    for entry in entries {
+                        if let Ok(entry) = entry {
+                            let path = entry.path();
+                            if path.is_file() {
+                                let filename = path.file_name().unwrap();
+                                fs::copy(&path, dst_src.join(filename)).expect("Failed to copy file");
+                            }
+                        }
+                    }
+                }
+            } else if Path::new("lib.ep").exists() {
+                fs::copy("lib.ep", reg_dir.join("lib.ep")).expect("Failed to copy lib.ep");
+            }
+            println!("Successfully published package '{}' version {} to local registry.", manifest.name, manifest.version);
+        }
+        "install" => {
+            let toml_content = fs::read_to_string("ernos.toml")
+                .unwrap_or_else(|_| {
+                    eprintln!("Error: ernos.toml not found in current directory!");
+                    std::process::exit(1);
+                });
+            let manifest = parse_manifest(&toml_content).unwrap_or_else(|e| {
+                eprintln!("Error parsing manifest: {}", e);
+                std::process::exit(1);
+            });
+            
+            fs::create_dir_all("ernos_modules").expect("Failed to create ernos_modules");
+            for (dep_name, dep_ver) in &manifest.dependencies {
+                let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+                let reg_dep_dir = Path::new(&home).join(".ernos_registry").join(dep_name).join(dep_ver);
+                if !reg_dep_dir.exists() {
+                    eprintln!("Error: Dependency '{}' version '{}' not found in registry!", dep_name, dep_ver);
+                    std::process::exit(1);
+                }
+                let target_dir = Path::new("ernos_modules").join(dep_name);
+                if target_dir.exists() {
+                    let _ = fs::remove_dir_all(&target_dir);
+                }
+                fs::create_dir_all(&target_dir).expect("Failed to create module dir");
+                
+                fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), String> {
+                    if !dst.exists() {
+                        fs::create_dir_all(dst).map_err(|e| e.to_string())?;
+                    }
+                    for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
+                        let entry = entry.map_err(|e| e.to_string())?;
+                        let path = entry.path();
+                        let dest_path = dst.join(entry.file_name());
+                        if path.is_dir() {
+                            copy_dir_all(&path, &dest_path)?;
+                        } else {
+                            fs::copy(&path, &dest_path).map_err(|e| e.to_string())?;
+                        }
+                    }
+                    Ok(())
+                }
+                copy_dir_all(&reg_dep_dir, &target_dir).unwrap_or_else(|e| {
+                    eprintln!("Failed to copy package contents: {}", e);
+                    std::process::exit(1);
+                });
+                println!("Installed dependency: {} ({})", dep_name, dep_ver);
+            }
+            println!("All dependencies installed successfully.");
+        }
+        _ => {
+            eprintln!("Unknown package command: {}", sub);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn find_wasi_sysroot() -> Option<String> {
+    let paths = [
+        "/opt/homebrew/Cellar/wasi-libc/32/share/wasi-sysroot",
+        "/opt/homebrew/opt/wasi-libc/share/wasi-sysroot",
+        "/usr/local/share/wasi-sysroot",
+        "/usr/share/wasi-sysroot",
+    ];
+    for p in &paths {
+        if Path::new(p).exists() {
+            return Some(p.to_string());
+        }
+    }
+    // Check if homebrew has wasi-libc dynamically
+    if let Ok(output) = Command::new("brew").args(["--prefix", "wasi-libc"]).output() {
+        if output.status.success() {
+            let prefix = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let p = format!("{}/share/wasi-sysroot", prefix);
+            if Path::new(&p).exists() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         print_usage();
         std::process::exit(1);
+    }
+
+    // Handle package manager subcommand
+    if args[1] == "package" {
+        handle_package_command(&args);
+        return;
+    }
+
+    // Handle doc subcommand
+    if args[1] == "doc" || args[1] == "--doc" {
+        if args.len() < 3 {
+            eprintln!("Usage: ernos doc <filename.ep> [-o output_dir]");
+            std::process::exit(1);
+        }
+        let entry_file = &args[2];
+        
+        let output_dir_str = if let Some(idx) = args.iter().position(|a| a == "-o") {
+            args.get(idx + 1).cloned().unwrap_or_else(|| "docs".to_string())
+        } else {
+            "docs".to_string()
+        };
+        let output_dir = Path::new(&output_dir_str);
+        if let Err(e) = fs::create_dir_all(output_dir) {
+            eprintln!("Error creating output directory '{}': {}", output_dir.display(), e);
+            std::process::exit(1);
+        }
+
+        let mut parsed_files = HashSet::new();
+        if let Err(e) = doc_gen_module(Path::new(entry_file), &mut parsed_files, output_dir) {
+            eprintln!("Documentation generation failed: {}", e);
+            std::process::exit(1);
+        }
+        println!("Documentation generated successfully in '{}'.", output_dir.display());
+        return;
+    }
+
+    // Handle LSP mode
+    if args[1] == "lsp" || args[1] == "--lsp" {
+        lsp::run_lsp();
+        return;
     }
 
     // Handle REPL mode
@@ -306,8 +797,10 @@ fn main() {
         let mut par = parser::Parser::new(tokens);
         let program = match par.parse_program() {
             Ok(prog) => prog,
-            Err(e) => {
-                eprintln!("Parser error: {}", e.message);
+            Err(errors) => {
+                for e in &errors {
+                    eprintln!("Parser error at line {}:{}: {}", e.span.line, e.span.col, e.message);
+                }
                 std::process::exit(1);
             }
         };
@@ -593,7 +1086,7 @@ fn main() {
     }
 
     // Validate compile flags — reject unknown --flags instead of silently ignoring them
-    let known_flags = ["--native", "--release", "--debug", "--asan", "--sanitize"];
+    let known_flags = ["--native", "--llvm", "--release", "--debug", "--asan", "--sanitize", "--wasm"];
     let start_idx = if is_test_mode { 3 } else { 2 }; // skip binary name + source/test arg
     for arg in args.iter().skip(start_idx) {
         if arg.starts_with("--") && !known_flags.contains(&arg.as_str()) {
@@ -603,8 +1096,16 @@ fn main() {
         }
     }
 
-    // Check if native backend is requested
-    let use_native = args.iter().any(|a| a == "--native");
+    let use_wasm = args.iter().any(|a| a == "--wasm");
+    if use_wasm && args.iter().any(|a| a == "--native") {
+        eprintln!("Error: Cannot specify both --native and --wasm.");
+        std::process::exit(1);
+    }
+
+    // Check if native/LLVM backend is requested or auto-detected
+    let llc_available = Command::new("llc").arg("--version").output().is_ok();
+    let use_llvm = !use_wasm && (args.iter().any(|a| a == "--llvm") || (llc_available && !args.iter().any(|a| a == "--native")));
+    let use_native = !use_wasm && args.iter().any(|a| a == "--native");
 
     if use_native {
         let arch = std::env::consts::ARCH;
@@ -773,53 +1274,37 @@ fn main() {
             opt_stats.constants_folded, opt_stats.dead_stmts_eliminated);
     }
 
-    println!("[2/3] Generating C Code...");
-
-    // Code generation (C backend)
-    let mut codegen = codegen::Codegen::new();
-    codegen.is_test_mode = is_test_mode;
-    let assembly = match codegen.generate(&program) {
-        Ok(asm) => asm,
-        Err(e) => {
-            eprintln!("Code Generation Error: {}", e);
-            std::process::exit(1);
+    let output_executable = if use_wasm {
+        if stem.ends_with(".wasm") {
+            stem.clone()
+        } else {
+            format!("{}.wasm", stem)
         }
-    };
-
-    // Write temporary C source file
-    let c_path_str = format!("{}_compiled.c", stem);
-    let c_path = Path::new(&c_path_str);
-    if let Err(e) = fs::write(c_path, &assembly) {
-        eprintln!("Error writing compiled C file: {}", e);
-        std::process::exit(1);
-    }
-
-    println!("[3/3] Compiling and Linking via Clang...");
-
-    // Run clang to compile and link the transpiled C file
-    let output_executable = if stem.contains('/') {
+    } else if stem.contains('/') {
         stem.clone()
     } else {
         format!("./{}", stem)
     };
-    
+
     let mut link_flags = Vec::new();
-    link_flags.push("-lpthread");
-    // dlopen/dlsym/dlclose require -ldl on Linux (macOS has it in libSystem)
-    if std::env::consts::OS != "macos" {
-        link_flags.push("-ldl");
-    }
-    for path in &parsed_files {
-        let path_str = path.to_string_lossy();
-        if path_str.ends_with("sql.ep") {
-            link_flags.push("-lsqlite3");
+    if !use_wasm {
+        link_flags.push("-lpthread");
+        // dlopen/dlsym/dlclose require -ldl on Linux (macOS has it in libSystem)
+        if std::env::consts::OS != "macos" {
+            link_flags.push("-ldl");
         }
-        if path_str.ends_with("gui.ep") {
-            link_flags.push("-lraylib");
-        }
-        if path_str.ends_with("crypto.ep") {
-            link_flags.push("-L/opt/homebrew/opt/openssl/lib");
-            link_flags.push("-lcrypto");
+        for path in &parsed_files {
+            let path_str = path.to_string_lossy();
+            if path_str.ends_with("sql.ep") {
+                link_flags.push("-lsqlite3");
+            }
+            if path_str.ends_with("gui.ep") {
+                link_flags.push("-lraylib");
+            }
+            if path_str.ends_with("crypto.ep") {
+                link_flags.push("-L/opt/homebrew/opt/openssl/lib");
+                link_flags.push("-lcrypto");
+            }
         }
     }
 
@@ -839,44 +1324,335 @@ fn main() {
         vec![]
     };
 
-    let mut clang_cmd = Command::new("clang");
-    clang_cmd.arg(&c_path_str)
-             .arg("-o")
-             .arg(&stem);
-    for flag in &opt_level {
-        clang_cmd.arg(flag);
-    }
-    for flag in &sanitizer_flags {
-        clang_cmd.arg(flag);
-    }
-    for flag in link_flags {
-        clang_cmd.arg(flag);
-    }
-    let clang_status = clang_cmd.status();
-
-    // Clean up temporary files
-    // let _ = fs::remove_file(c_path);
-
-    match clang_status {
-        Ok(status) if status.success() => {
-            #[cfg(target_os = "macos")]
-            {
-                let _ = Command::new("codesign")
-                    .arg("--force")
-                    .arg("-s")
-                    .arg("-")
-                    .arg(&stem)
-                    .status();
+    if use_llvm {
+        println!("[2/3] Generating LLVM IR...");
+        println!("[3/3] Compiling and Linking via Clang (LLVM IR backend)...");
+        match llvm_codegen::LLVMCodegen::compile(
+            &program,
+            &stem,
+            is_test_mode,
+            &opt_level,
+            &sanitizer_flags,
+            &link_flags,
+        ) {
+            Ok(ll_path) => {
+                #[cfg(target_os = "macos")]
+                {
+                    let _ = Command::new("codesign")
+                        .arg("--force")
+                        .arg("-s")
+                        .arg("-")
+                        .arg(&stem)
+                        .status();
+                }
+                println!("\nSuccessfully compiled into native binary: {}", output_executable);
+                println!("  LLVM IR text file written to: {}", ll_path);
             }
-            println!("\nSuccessfully compiled into native binary: {}", output_executable);
+            Err(e) => {
+                eprintln!("LLVM IR Compilation Error: {}", e);
+                std::process::exit(1);
+            }
         }
-        Ok(status) => {
-            eprintln!("Error: Clang compilation failed with exit code: {}", status);
+    } else {
+        println!("[2/3] Generating C Code...");
+
+        // Code generation (C backend)
+        let mut codegen = codegen::Codegen::new();
+        codegen.is_test_mode = is_test_mode;
+        let assembly = match codegen.generate(&program) {
+            Ok(asm) => asm,
+            Err(e) => {
+                eprintln!("Code Generation Error: {}", e);
+                std::process::exit(1);
+            }
+        };
+
+        // Write temporary C source file
+        let c_path_str = format!("{}_compiled.c", stem);
+        let c_path = Path::new(&c_path_str);
+        if let Err(e) = fs::write(c_path, &assembly) {
+            eprintln!("Error writing compiled C file: {}", e);
             std::process::exit(1);
         }
-        Err(e) => {
-            eprintln!("Error invoking Clang: {}", e);
-            std::process::exit(1);
+
+        println!("[3/3] Compiling and Linking via Clang...");
+
+        let mut clang_cmd = Command::new("clang");
+        clang_cmd.arg(&c_path_str)
+                 .arg("-o")
+                 .arg(&output_executable);
+        if use_wasm {
+            clang_cmd.arg("--target=wasm32-wasi");
+            clang_cmd.arg("-D_WASI_EMULATED_SIGNAL");
+            clang_cmd.arg("-lwasi-emulated-signal");
+            clang_cmd.arg("-D_WASI_EMULATED_GETPID");
+            clang_cmd.arg("-lwasi-emulated-getpid");
+            if let Some(sysroot) = find_wasi_sysroot() {
+                clang_cmd.arg(format!("--sysroot={}", sysroot));
+            } else {
+                eprintln!("Warning: wasi-sysroot not found. WebAssembly compilation might fail.");
+                eprintln!("Please install it via: brew install wasi-libc");
+            }
+        }
+        for flag in &opt_level {
+            clang_cmd.arg(flag);
+        }
+        for flag in &sanitizer_flags {
+            clang_cmd.arg(flag);
+        }
+        for flag in &link_flags {
+            clang_cmd.arg(flag);
+        }
+        let clang_status = clang_cmd.status();
+
+        match clang_status {
+            Ok(status) if status.success() => {
+                #[cfg(target_os = "macos")]
+                {
+                    if !use_wasm {
+                        let _ = Command::new("codesign")
+                            .arg("--force")
+                            .arg("-s")
+                            .arg("-")
+                            .arg(&stem)
+                            .status();
+                    }
+                }
+                if use_wasm {
+                    // Generate HTML and JS wrappers
+                    let wasm_filename = Path::new(&output_executable)
+                        .file_name()
+                        .and_then(|f| f.to_str())
+                        .unwrap_or("program.wasm");
+                    
+                    let html_content = format!(
+                        r#"<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>ErnosPlain WebAssembly Runner</title>
+    <style>
+        body {{
+            font-family: 'Outfit', 'Inter', sans-serif;
+            background: #0f172a;
+            color: #f8fafc;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2rem;
+            margin: 0;
+            min-height: 100vh;
+        }}
+        h1 {{
+            color: #38bdf8;
+            margin-bottom: 0.5rem;
+        }}
+        .container {{
+            width: 100%;
+            max-width: 800px;
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+            border: 1px solid #334155;
+        }}
+        #console {{
+            background: #020617;
+            color: #10b981;
+            font-family: 'Fira Code', 'Courier New', monospace;
+            padding: 1rem;
+            border-radius: 6px;
+            height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            border: 1px solid #1e293b;
+        }}
+        .status {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            font-size: 0.9rem;
+            color: #94a3b8;
+        }}
+        .badge {{
+            background: #0369a1;
+            color: #e0f2fe;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-weight: 600;
+        }}
+    </style>
+</head>
+<body>
+    <h1>ErnosPlain WebAssembly</h1>
+    <div class="container">
+        <div class="status">
+            <span>Status: <strong id="status-text" style="color: #34d399;">Loading...</strong></span>
+            <span class="badge">WASM Target</span>
+        </div>
+        <div id="console"></div>
+    </div>
+
+    <script>
+        const consoleEl = document.getElementById('console');
+        const statusEl = document.getElementById('status-text');
+
+        function print(text) {{
+            consoleEl.textContent += text;
+            consoleEl.scrollTop = consoleEl.scrollHeight;
+        }}
+
+        async function runWasm() {{
+            try {{
+                const response = await fetch('{wasm_file}');
+                const bytes = await response.arrayBuffer();
+                
+                let memory;
+                const wasiMock = {{
+                    fd_write: (fd, iovs, iovs_len, nwritten) => {{
+                        const view = new DataView(memory.buffer);
+                        let total = 0;
+                        let text = '';
+                        for (let i = 0; i < iovs_len; i++) {{
+                            const ptr = view.getUint32(iovs + i * 8, true);
+                            const len = view.getUint32(iovs + i * 8 + 4, true);
+                            const bytes = new Uint8Array(memory.buffer, ptr, len);
+                            text += new TextDecoder('utf-8').decode(bytes);
+                            total += len;
+                        }}
+                        view.setUint32(nwritten, total, true);
+                        print(text);
+                        return 0;
+                    }},
+                    proc_exit: (code) => {{
+                        statusEl.textContent = `Exited with code ${{code}}`;
+                        statusEl.style.color = code === 0 ? '#34d399' : '#f87171';
+                        return 0;
+                    }},
+                    fd_close: () => 0,
+                    fd_seek: () => 0,
+                    environ_sizes_get: (environ_count, environ_buf_size) => {{
+                        const view = new DataView(memory.buffer);
+                        view.setUint32(environ_count, 0, true);
+                        view.setUint32(environ_buf_size, 0, true);
+                        return 0;
+                    }},
+                    environ_get: () => 0,
+                    args_sizes_get: (argc_ptr, argv_buf_size) => {{
+                        const view = new DataView(memory.buffer);
+                        view.setUint32(argc_ptr, 0, true);
+                        view.setUint32(argv_buf_size, 0, true);
+                        return 0;
+                    }},
+                    args_get: () => 0,
+                    clock_time_get: (id, precision, time_out) => {{
+                        const view = new DataView(memory.buffer);
+                        const ms = Date.now();
+                        const ns = BigInt(ms) * 1000000n;
+                        view.setBigUint64(time_out, ns, true);
+                        return 0;
+                    }},
+                    sched_yield: () => 0,
+                    fd_fdstat_get: (fd, stat) => 0,
+                    fd_prestat_get: (fd, buf) => 8,
+                    fd_prestat_dir_name: () => 8
+                }};
+
+                const importObject = {{
+                    wasi_snapshot_preview1: wasiMock
+                }};
+
+                const {{ instance }} = await WebAssembly.instantiate(bytes, importObject);
+                memory = instance.exports.memory;
+                statusEl.textContent = 'Running...';
+                
+                if (instance.exports._start) {{
+                    instance.exports._start();
+                }} else if (instance.exports.main) {{
+                    instance.exports.main();
+                }}
+                
+                if (statusEl.textContent === 'Running...') {{
+                    statusEl.textContent = 'Completed (0)';
+                }}
+            }} catch (err) {{
+                statusEl.textContent = 'Error';
+                statusEl.style.color = '#f87171';
+                print(`\\nError: ${{err.message}}\\n${{err.stack}}`);
+            }}
+        }}
+
+        runWasm();
+    </script>
+</body>
+</html>"#,
+                        wasm_file = wasm_filename
+                    );
+
+                    let js_content = format!(
+                        r#"const fs = require('fs');
+const path = require('path');
+
+let WASI;
+try {{
+    WASI = require('wasi').WASI;
+}} catch (e) {{
+    try {{
+        const {{ WASI: NodeWASI }} = require('wasi');
+        WASI = NodeWASI;
+    }} catch (err) {{
+        console.error('WASI support not found. Please run with Node.js version >= 12.');
+        process.exit(1);
+    }}
+}}
+
+const wasmPath = path.join(__dirname, '{wasm_file}');
+if (!fs.existsSync(wasmPath)) {{
+    console.error(`Error: WebAssembly module not found at ${{wasmPath}}`);
+    process.exit(1);
+}}
+
+const wasi = new WASI({{
+    args: process.argv.slice(1),
+    env: process.env,
+    preopens: {{
+        '.': '.'
+    }}
+}});
+
+const importObject = {{
+    wasi_snapshot_preview1: wasi.wasiImport
+}};
+
+(async () => {{
+    const wasmBuffer = fs.readFileSync(wasmPath);
+    const {{ instance }} = await WebAssembly.instantiate(wasmBuffer, importObject);
+    wasi.start(instance);
+}})();"#,
+                        wasm_file = wasm_filename
+                    );
+
+                    let html_path = format!("{}.html", stem);
+                    let js_path = format!("{}.js", stem);
+                    let _ = fs::write(&html_path, html_content);
+                    let _ = fs::write(&js_path, js_content);
+
+                    println!("\nSuccessfully compiled into WebAssembly module: {}", output_executable);
+                    println!("  HTML runner generated at: {}", html_path);
+                    println!("  JS runner generated at: {}", js_path);
+                } else {
+                    println!("\nSuccessfully compiled into native binary: {}", output_executable);
+                }
+            }
+            Ok(status) => {
+                eprintln!("Error: Clang compilation failed with exit code: {}", status);
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("Error invoking Clang: {}", e);
+                std::process::exit(1);
+            }
         }
     }
 }
@@ -898,24 +1674,74 @@ fn print_diagnostic(file_path: &str, source: &str, message: &str, line: usize, c
     eprintln!("   \x1b[1;34m|\x1b[0m");
 }
 
-fn get_suggestion(message: &str) -> Option<&str> {
-    if message.contains("plas") {
-        Some("Did you mean 'plus'?")
-    } else if message.contains("minis") {
-        Some("Did you mean 'minus'?")
-    } else if message.contains("defin") {
-        Some("Did you mean 'define'?")
-    } else if message.contains("displayy") {
-        Some("Did you mean 'display'?")
-    } else if message.contains("repeate") {
-        Some("Did you mean 'repeat'?")
-    } else if message.contains("character: ','") {
-        Some("In Ernos, function arguments are separated by 'and', not commas.")
-    } else if message.contains("Unexpected statement start: Identifier") {
-        Some("Functions called as statements must be assigned to variables, e.g. 'set ok to func(...)'.")
-    } else {
-        None
+fn levenshtein_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let (m, n) = (a.len(), b.len());
+    let mut dp = vec![vec![0usize; n + 1]; m + 1];
+    for i in 0..=m { dp[i][0] = i; }
+    for j in 0..=n { dp[0][j] = j; }
+    for i in 1..=m {
+        for j in 1..=n {
+            let cost = if a[i-1] == b[j-1] { 0 } else { 1 };
+            dp[i][j] = (dp[i-1][j] + 1).min(dp[i][j-1] + 1).min(dp[i-1][j-1] + cost);
+        }
     }
+    dp[m][n]
+}
+
+fn find_closest_match<'a>(target: &str, candidates: &[&'a str], max_distance: usize) -> Option<&'a str> {
+    let mut best: Option<(&str, usize)> = None;
+    for &candidate in candidates {
+        let dist = levenshtein_distance(target, candidate);
+        if dist <= max_distance && dist > 0 {
+            if best.is_none() || dist < best.unwrap().1 {
+                best = Some((candidate, dist));
+            }
+        }
+    }
+    best.map(|(s, _)| s)
+}
+
+fn get_suggestion(message: &str) -> Option<String> {
+    // Keep specific suggestions for known patterns
+    if message.contains("character: ','") {
+        return Some("In Ernos, function arguments are separated by 'and', not commas.".to_string());
+    }
+    if message.contains("Unexpected statement start: Identifier") {
+        return Some("Functions called as statements must be assigned to variables, e.g. 'set ok to func(...)'.".to_string());
+    }
+
+    // Try Levenshtein matching against all ErnosPlain keywords
+    let keywords: &[&str] = &[
+        "set", "to", "define", "with", "return", "display",
+        "if", "else", "repeat", "while", "for", "each", "in",
+        "is", "equals", "plus", "minus", "multiplied", "divided", "modulo",
+        "greater", "less", "than", "not", "and", "also", "or",
+        "true", "false", "create", "structure", "field", "choice", "variant",
+        "check", "trait", "implement", "spawn", "channel", "send", "receive",
+        "async", "await", "borrow", "given", "break", "continue",
+        "import", "as", "returning", "of", "try", "from", "range",
+    ];
+
+    // Extract potential misspelled words from the error message
+    // Look for words in the message that might be misspellings
+    let words: Vec<&str> = message.split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|w| !w.is_empty() && w.len() >= 2)
+        .collect();
+
+    for word in &words {
+        let lower = word.to_lowercase();
+        let max_dist = if lower.len() <= 4 { 2 } else { 3 };
+        if let Some(closest) = find_closest_match(&lower, keywords, max_dist) {
+            // Don't suggest if the word is already a keyword
+            if lower != closest {
+                return Some(format!("Did you mean '{}'?", closest));
+            }
+        }
+    }
+
+    None
 }
 
 fn print_usage() {
@@ -926,15 +1752,20 @@ fn print_usage() {
     eprintln!("\x1b[1mUSAGE:\x1b[0m");
     eprintln!("  epc <filename.ep>               Compile to native binary");
     eprintln!("  epc <filename.ep> --native      Compile via native assembly (no Clang required)");
+    eprintln!("  epc <filename.ep> --llvm        Compile via LLVM IR backend (.ll)");
     eprintln!("  epc <filename.ep> --release     Compile with optimizations (O3+LTO)");
     eprintln!("  epc test <filename.ep>          Run as test");
     eprintln!();
     eprintln!("\x1b[1mDEV TOOLS:\x1b[0m");
+    eprintln!("  epc doc <filename.ep> [-o dir]  Generate markdown documentation");
     eprintln!("  epc --check <filename.ep>       Syntax check (no compilation)");
     eprintln!("  epc --format <filename.ep>      Auto-format source file");
     eprintln!("  epc --list-builtins             List all built-in functions");
     eprintln!("  epc --version                   Show version info");
     eprintln!("  epc --help                      Show this message");
+    eprintln!();
+    eprintln!("\x1b[1mEDITOR SUPPORT:\x1b[0m");
+    eprintln!("  epc lsp                         Start LSP server (for VS Code / editors)");
     eprintln!();
     eprintln!("\x1b[1mSAFETY:\x1b[0m");
     eprintln!("  epc <filename.ep> --asan         Compile with AddressSanitizer");
@@ -1174,8 +2005,10 @@ fn run_repl() {
         let mut parser_instance = parser::Parser::new(tokens);
         let mut program = match parser_instance.parse_program() {
             Ok(p) => p,
-            Err(e) => {
-                eprintln!("\x1b[31mParse error:\x1b[0m {}", e.message);
+            Err(errors) => {
+                for e in &errors {
+                    eprintln!("\x1b[31mParse error:\x1b[0m {}", e.message);
+                }
                 accumulated_lines.pop();
                 continue;
             }

@@ -110,6 +110,95 @@ impl MonoType {
             MonoType::Future(inner) => format!("Future of {}", inner.display_name()),
         }
     }
+
+    /// Returns true if this type can be safely sent to another thread (ownership transfer).
+    /// Types that are NOT Send:
+    /// - Ref(T): borrowed references point into another scope and cannot be transferred
+    /// - Var(id): unresolved type variables — conservatively treated as Send
+    ///
+    /// Types that ARE Send:
+    /// - All primitives (Int, Float, Bool, Str, DynStr, Unit, Never)
+    /// - Any (top type, used for heterogeneous containers — values are owned)
+    /// - List(T): owned list (mutable, but ownership transfers)
+    /// - Fun: closures capture by value in ErnosPlain, so they are Send
+    /// - Struct(name, args): owned struct value
+    /// - Enum(name, args): owned enum value
+    /// - Future(T): owned future handle
+    pub fn is_send(&self) -> bool {
+        match self {
+            // Primitives are always Send — they are plain values (long long)
+            MonoType::Int | MonoType::Float | MonoType::Bool 
+            | MonoType::Str | MonoType::DynStr | MonoType::Unit 
+            | MonoType::Never | MonoType::Any => true,
+
+            // Unresolved type variables — conservatively allow Send
+            // (will be resolved before codegen; if it resolves to Ref, the
+            //  borrow checker catches it via SEND_BORROW)
+            MonoType::Var(_) => true,
+
+            // Owned containers: Send if the elements are Send
+            // (prevents sending a List of borrowed references)
+            MonoType::List(elem) => elem.is_send(),
+
+            // Closures: ErnosPlain captures by value, so closures are Send
+            MonoType::Fun(_, _) => true,
+
+            // Struct/Enum: Send because they are fully owned values
+            // (all fields are owned — ErnosPlain structs cannot hold Ref fields)
+            MonoType::Struct(_, _) => true,
+            MonoType::Enum(_, _) => true,
+
+            // Borrowed references are NOT Send — they point into the borrower's scope
+            // and the referenced data may be freed when the scope exits
+            MonoType::Ref(_) => false,
+
+            // Futures: Send — they are owned handles to async results
+            MonoType::Future(_) => true,
+        }
+    }
+
+    /// Returns true if this type can be safely shared (by reference) between threads.
+    /// A type T is Sync if &T is Send.
+    /// In ErnosPlain, Ref(T) represents a shared reference.
+    /// Types that are NOT Sync:
+    /// - List(T): mutable container, not safe to share without synchronization
+    /// - Struct/Enum: mutable fields, not safe to share
+    /// Types that ARE Sync:
+    /// - All primitives (immutable values)
+    /// - Str (immutable string pointer)
+    pub fn is_sync(&self) -> bool {
+        match self {
+            // Primitives are Sync — they are immutable values
+            MonoType::Int | MonoType::Float | MonoType::Bool
+            | MonoType::Str | MonoType::Unit | MonoType::Never => true,
+
+            // DynStr: heap-allocated but in ErnosPlain strings are effectively immutable
+            // once created (no mutation API), so they are Sync
+            MonoType::DynStr => true,
+
+            // Any: conservatively Sync (might be a primitive at runtime)
+            MonoType::Any => true,
+
+            // Unresolved type variables — conservatively Sync
+            MonoType::Var(_) => true,
+
+            // Lists are NOT Sync — they are mutable containers
+            MonoType::List(_) => false,
+
+            // Closures: not Sync (could capture mutable state)
+            MonoType::Fun(_, _) => false,
+
+            // Structs/Enums: not Sync — fields can be mutated
+            MonoType::Struct(_, _) => false,
+            MonoType::Enum(_, _) => false,
+
+            // Borrowed references: Sync if the inner type is Sync
+            MonoType::Ref(inner) => inner.is_sync(),
+
+            // Futures: not Sync (one-shot consumption)
+            MonoType::Future(_) => false,
+        }
+    }
 }
 
 // ──────────────────────────────────────────────
@@ -346,6 +435,10 @@ pub struct TypeChecker {
     variant_to_enum: HashMap<String, String>,
     /// Method (struct_name, method_name) → (param types, return type)
     method_types: HashMap<(String, String), (Vec<MonoType>, MonoType)>,
+    /// Trait name → method signatures: (method_name, param_types, return_type)
+    trait_defs: HashMap<String, Vec<(String, Vec<MonoType>, MonoType)>>,
+    /// (trait_name, for_type)
+    trait_impls: std::collections::HashSet<(String, String)>,
     /// Collected errors (we continue checking even after errors)
     pub errors: Vec<TypeError>,
     /// Collected warnings
@@ -365,6 +458,8 @@ impl TypeChecker {
             enum_defs: HashMap::new(),
             variant_to_enum: HashMap::new(),
             method_types: HashMap::new(),
+            trait_defs: HashMap::new(),
+            trait_impls: std::collections::HashSet::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
             closure_names: std::collections::HashSet::new(),
@@ -415,7 +510,9 @@ impl TypeChecker {
             TypeAnnotation::DynStr => MonoType::DynStr,
             TypeAnnotation::List => MonoType::List(Box::new(self.fresh_var_immut())),
             TypeAnnotation::UserDefined(name) => {
-                if self.enum_defs.contains_key(name) {
+                if name == "Any" {
+                    MonoType::Any
+                } else if self.enum_defs.contains_key(name) {
                     MonoType::Enum(name.clone(), vec![])
                 } else {
                     MonoType::Struct(name.clone(), vec![])
@@ -560,6 +657,57 @@ impl TypeChecker {
                 (param_types, ret_type),
             );
         }
+
+        // Register trait definitions
+        for td in &program.trait_defs {
+            let methods: Vec<(String, Vec<MonoType>, MonoType)> = td.method_signatures.iter()
+                .map(|(name, params, ret_ann)| {
+                    let param_types: Vec<MonoType> = params.iter()
+                        .map(|(_, is_borrowed, ann)| {
+                            let base = if let Some(a) = ann {
+                                self.annotation_to_mono(a)
+                            } else {
+                                self.fresh_var()
+                            };
+                            if *is_borrowed { MonoType::Ref(Box::new(base)) } else { base }
+                        })
+                        .collect();
+                    let ret_type = if let Some(ann) = ret_ann {
+                        self.annotation_to_mono(ann)
+                    } else {
+                        MonoType::Unit
+                    };
+                    (name.clone(), param_types, ret_type)
+                })
+                .collect();
+            self.trait_defs.insert(td.name.clone(), methods);
+        }
+
+        // Register trait implementation methods as regular methods
+        for ti in &program.trait_impls {
+            self.trait_impls.insert((ti.trait_name.clone(), ti.for_type.clone()));
+            for func in &ti.methods {
+                let param_types: Vec<MonoType> = func.params.iter()
+                    .map(|(_, is_borrowed, ann)| {
+                        let base = if let Some(a) = ann {
+                            self.annotation_to_mono(a)
+                        } else {
+                            self.fresh_var()
+                        };
+                        if *is_borrowed { MonoType::Ref(Box::new(base)) } else { base }
+                    })
+                    .collect();
+                let ret_type = if let Some(ann) = &func.return_type {
+                    self.annotation_to_mono(ann)
+                } else {
+                    self.fresh_var()
+                };
+                self.method_types.insert(
+                    (ti.for_type.clone(), func.name.clone()),
+                    (param_types, ret_type),
+                );
+            }
+        }
     }
 
     fn register_builtins(&mut self) {
@@ -664,7 +812,23 @@ impl TypeChecker {
         self.func_types.insert("ep_dlcall9".into(), (vec![MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int], MonoType::Int));
         self.func_types.insert("ep_dlcall10".into(), (vec![MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int, MonoType::Int], MonoType::Int));
 
-        // Display helpers
+        // Float FFI: ep_dlcall_f* — call C functions that take/return doubles
+        self.func_types.insert("ep_dlcall_f0".into(), (vec![MonoType::Int], MonoType::Float));
+        self.func_types.insert("ep_dlcall_f1".into(), (vec![MonoType::Int, MonoType::Float], MonoType::Float));
+        self.func_types.insert("ep_dlcall_f2".into(), (vec![MonoType::Int, MonoType::Float, MonoType::Float], MonoType::Float));
+        self.func_types.insert("ep_dlcall_f3".into(), (vec![MonoType::Int, MonoType::Float, MonoType::Float, MonoType::Float], MonoType::Float));
+        self.func_types.insert("ep_dlcall_f4".into(), (vec![MonoType::Int, MonoType::Float, MonoType::Float, MonoType::Float, MonoType::Float], MonoType::Float));
+        self.func_types.insert("ep_dlcall_f5".into(), (vec![MonoType::Int, MonoType::Float, MonoType::Float, MonoType::Float, MonoType::Float, MonoType::Float], MonoType::Float));
+        self.func_types.insert("ep_dlcall_f6".into(), (vec![MonoType::Int, MonoType::Float, MonoType::Float, MonoType::Float, MonoType::Float, MonoType::Float, MonoType::Float], MonoType::Float));
+
+        // Float FFI: ep_dlcall_fd* — call C functions that take doubles but return int
+        self.func_types.insert("ep_dlcall_fd1".into(), (vec![MonoType::Int, MonoType::Float], MonoType::Int));
+        self.func_types.insert("ep_dlcall_fd2".into(), (vec![MonoType::Int, MonoType::Float, MonoType::Float], MonoType::Int));
+        self.func_types.insert("ep_dlcall_fd3".into(), (vec![MonoType::Int, MonoType::Float, MonoType::Float, MonoType::Float], MonoType::Int));
+
+        // Float/bits conversion utilities
+        self.func_types.insert("ep_double_to_bits".into(), (vec![MonoType::Float], MonoType::Int));
+        self.func_types.insert("ep_bits_to_double".into(), (vec![MonoType::Int], MonoType::Float));
         self.func_types.insert("display".into(), (vec![MonoType::Int], MonoType::Unit));
         self.func_types.insert("display_string".into(), (vec![MonoType::Str], MonoType::Unit));
         self.func_types.insert("ep_auto_to_string".into(), (vec![MonoType::Int], MonoType::DynStr));
@@ -674,6 +838,9 @@ impl TypeChecker {
         self.func_types.insert("free_list".into(), (vec![MonoType::List(Box::new(v12))], MonoType::Unit));
         self.func_types.insert("free_map".into(), (vec![MonoType::Int], MonoType::Unit));
         self.func_types.insert("free_deque".into(), (vec![MonoType::Int], MonoType::Unit));
+        self.func_types.insert("ep_gc_get_minor_count".into(), (vec![], MonoType::Int));
+        self.func_types.insert("ep_gc_get_major_count".into(), (vec![], MonoType::Int));
+        self.func_types.insert("ep_gc_get_nursery_count".into(), (vec![], MonoType::Int));
 
         // Map operations (continued)
         self.func_types.insert("map_size".into(), (vec![MonoType::Int], MonoType::Int));
@@ -692,10 +859,21 @@ impl TypeChecker {
         self.func_types.insert("deque_pop_back".into(), (vec![MonoType::Int], MonoType::Int));
         self.func_types.insert("deque_length".into(), (vec![MonoType::Int], MonoType::Int));
 
-        // Concurrency (continued)
         self.func_types.insert("channel_has_data".into(), (vec![MonoType::Int], MonoType::Int));
         self.func_types.insert("channel_try_recv".into(), (vec![MonoType::Int], MonoType::Int));
         self.func_types.insert("channel_select".into(), (vec![MonoType::Int], MonoType::Int));
+
+        // Structured Concurrency
+        self.func_types.insert("create_task_group".into(), (vec![], MonoType::Int));
+        let v_fut = self.fresh_var();
+        self.func_types.insert("add_task_group".into(), (vec![MonoType::Int, v_fut], MonoType::Unit));
+        let v_tg = self.fresh_var();
+        self.func_types.insert("wait_task_group".into(), (vec![MonoType::Int], MonoType::List(Box::new(v_tg))));
+        let v_timeout_fut = self.fresh_var();
+        self.func_types.insert("async_timeout".into(), (vec![MonoType::Int, v_timeout_fut], MonoType::Int));
+        let v_cancel_fut = self.fresh_var();
+        self.func_types.insert("cancel_task".into(), (vec![v_cancel_fut], MonoType::Unit));
+        self.func_types.insert("sleep_ms".into(), (vec![MonoType::Int], MonoType::Future(Box::new(MonoType::Int))));
 
         // File system
         self.func_types.insert("read_file_content".into(), (vec![MonoType::Str], MonoType::DynStr));
@@ -744,7 +922,7 @@ impl TypeChecker {
         self.func_types.insert("json_get_bool".into(), (vec![MonoType::Str, MonoType::Str], MonoType::Int));
 
         // SQLite
-        self.func_types.insert("sqlite_get_callback_ptr".into(), (vec![], MonoType::Int));
+        self.func_types.insert("sqlite_get_callback_ptr".into(), (vec![MonoType::Int], MonoType::Int));
 
         // Time (additional)
         self.func_types.insert("ep_time_now_ms".into(), (vec![], MonoType::Int));
@@ -779,6 +957,91 @@ impl TypeChecker {
 
         for md in &program.method_defs {
             self.check_method(md);
+        }
+
+        // Check trait implementations match their trait definitions
+        self.check_trait_impls(program);
+
+        // Check trait impl method bodies
+        for ti in &program.trait_impls {
+            for func in &ti.methods {
+                self.push_scope();
+                // Bind self
+                if self.enum_defs.contains_key(&ti.for_type) {
+                    self.define("self".into(), MonoType::Enum(ti.for_type.clone(), vec![]));
+                } else {
+                    self.define("self".into(), MonoType::Struct(ti.for_type.clone(), vec![]));
+                }
+                // Bind parameters
+                if let Some((param_types, _)) = self.method_types.get(&(ti.for_type.clone(), func.name.clone())).cloned() {
+                    for (i, (name, _, _)) in func.params.iter().enumerate() {
+                        if i < param_types.len() {
+                            self.define(name.clone(), param_types[i].clone());
+                        }
+                    }
+                }
+                for stmt in &func.body {
+                    self.check_stmt(stmt);
+                }
+                self.pop_scope();
+            }
+        }
+    }
+
+    /// Verify that trait implementations provide all required methods with correct signatures
+    fn check_trait_impls(&mut self, program: &Program) {
+        for ti in &program.trait_impls {
+            // Check the trait exists
+            let trait_methods = match self.trait_defs.get(&ti.trait_name).cloned() {
+                Some(methods) => methods,
+                None => {
+                    self.error(
+                        format!("Trait '{}' is not defined", ti.trait_name),
+                        Span::default(),
+                    );
+                    continue;
+                }
+            };
+
+            // Check the target type exists
+            let type_exists = self.struct_defs.contains_key(&ti.for_type)
+                || self.enum_defs.contains_key(&ti.for_type);
+            if !type_exists {
+                self.error(
+                    format!("Type '{}' is not defined (implementing trait '{}')",
+                        ti.for_type, ti.trait_name),
+                    Span::default(),
+                );
+                continue;
+            }
+
+            // Check each required method is implemented
+            let impl_method_names: Vec<&str> = ti.methods.iter()
+                .map(|f| f.name.as_str())
+                .collect();
+
+            for (method_name, expected_params, _expected_ret) in &trait_methods {
+                if !impl_method_names.contains(&method_name.as_str()) {
+                    self.error(
+                        format!("Trait '{}' requires method '{}' but it is not implemented for '{}'",
+                            ti.trait_name, method_name, ti.for_type),
+                        Span::default(),
+                    );
+                    continue;
+                }
+
+                // Check parameter count matches
+                if let Some(func) = ti.methods.iter().find(|f| f.name == *method_name) {
+                    if func.params.len() != expected_params.len() {
+                        self.error(
+                            format!("Method '{}' in trait '{}' expects {} parameters but implementation for '{}' has {}",
+                                method_name, ti.trait_name, expected_params.len(),
+                                ti.for_type, func.params.len()),
+                            Span::default(),
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -937,11 +1200,36 @@ impl TypeChecker {
                         }
                     }
                 }
+                // Send safety: every argument to spawn must implement Send
+                // Borrowed references (Ref) cannot be sent across thread boundaries
+                for (i, arg_t) in arg_types.iter().enumerate() {
+                    let resolved = self.subst.apply(arg_t);
+                    if !resolved.is_send() {
+                        self.error_with_hint(
+                            format!("[E0036] cannot send {} across threads in spawn '{}' (argument {})",
+                                resolved.display_name(), func_name, i + 1),
+                            args[i].span,
+                            format!("type '{}' does not implement Send — borrowed references cannot cross thread boundaries. \
+                                    Consider passing an owned copy instead.", resolved.display_name()),
+                        );
+                    }
+                }
             }
 
             StmtNode::Send(chan, val) => {
                 let _chan_type = self.check_expr(chan);
-                let _val_type = self.check_expr(val);
+                let val_type = self.check_expr(val);
+                // Send safety: values sent through channels must implement Send
+                let resolved_val = self.subst.apply(&val_type);
+                if !resolved_val.is_send() {
+                    self.error_with_hint(
+                        format!("[E0036] cannot send {} through a channel",
+                            resolved_val.display_name()),
+                        val.span,
+                        format!("type '{}' does not implement Send — borrowed references cannot be sent through channels. \
+                                Consider sending an owned copy instead.", resolved_val.display_name()),
+                    );
+                }
             }
 
             StmtNode::FieldSet(obj, field_name, val) => {
@@ -977,7 +1265,35 @@ impl TypeChecker {
                 
                 if let MonoType::Enum(enum_name, _) = &resolved {
                     if let Some(variants) = self.enum_defs.get(enum_name).cloned() {
+                        // Exhaustiveness check: collect matched variant names
+                        let matched_variants: Vec<&str> = arms.iter()
+                            .map(|(vn, _, _)| vn.as_str())
+                            .collect();
+                        let has_wildcard = matched_variants.contains(&"_") || matched_variants.contains(&"default");
+
+                        if !has_wildcard {
+                            for (vname, _) in &variants {
+                                if !matched_variants.contains(&vname.as_str()) {
+                                    self.warnings.push(TypeError::with_hint(
+                                        format!("Non-exhaustive match: variant '{}' of enum '{}' is not handled",
+                                            vname, enum_name),
+                                        stmt.span,
+                                        format!("Add a case for '{}' or add a default/wildcard arm", vname),
+                                    ));
+                                }
+                            }
+                        }
+
                         for (variant_name, bindings, body) in arms {
+                            // Validate variant exists (skip wildcard)
+                            if variant_name != "_" && variant_name != "default" {
+                                if !variants.iter().any(|(vn, _)| vn == variant_name) {
+                                    self.error(
+                                        format!("'{}' is not a variant of enum '{}'", variant_name, enum_name),
+                                        stmt.span,
+                                    );
+                                }
+                            }
                             self.push_scope();
                             if let Some((_, fields)) = variants.iter().find(|(vn, _)| vn == variant_name) {
                                 for (i, binding) in bindings.iter().enumerate() {
@@ -1006,7 +1322,34 @@ impl TypeChecker {
                 
                 let elem_type = match &resolved {
                     MonoType::List(elem) => (**elem).clone(),
-                    _ => MonoType::Int, // range() returns Int elements
+                    _ => {
+                        let mut resolved_elem = MonoType::Int;
+                        let mut is_iter = false;
+                        if let MonoType::Struct(name, _) | MonoType::Enum(name, _) = &resolved {
+                            if self.trait_impls.contains(&("Iterator".to_string(), name.clone())) {
+                                is_iter = true;
+                                if let Some((_, ret_type)) = self.method_types.get(&(name.clone(), "next".to_string())).cloned() {
+                                    let resolved_ret = self.subst.apply(&ret_type);
+                                    if let MonoType::Enum(enum_name, _) = &resolved_ret {
+                                        if let Some(variants) = self.enum_defs.get(enum_name) {
+                                            if let Some((_, fields)) = variants.iter().find(|(vn, _)| vn == "Next") {
+                                                if let Some((_, field_type)) = fields.first() {
+                                                    resolved_elem = field_type.clone();
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if !is_iter && resolved != MonoType::Int && resolved != MonoType::Any {
+                            self.error(
+                                format!("Type '{}' is not iterable (must be a List or implement Iterator trait)", resolved.display_name()),
+                                iterable.span,
+                            );
+                        }
+                        resolved_elem
+                    }
                 };
                 
                 self.push_scope();
@@ -1419,5 +1762,42 @@ mod tests {
             "define add with a as Int and b as Int returning Int:\n    return a plus b\n\ndefine main:\n    set result to add(10 and 20)\n    display result\n    return 0"
         );
         assert!(errors.is_empty(), "Expected no errors, got: {:?}", errors);
+    }
+
+    fn check_source_full(source: &str) -> (Vec<TypeError>, Vec<TypeError>) {
+        let mut lexer = Lexer::new(source);
+        let tokens = lexer.tokenize().expect("Lexer error");
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_program().expect("Parser error");
+        TypeChecker::check_full(&program)
+    }
+
+    #[test]
+    fn test_trait_missing_method() {
+        let errors = check_source(
+            "define trait Printable:\n    define to_string returning Str\n\ndefine structure Point:\n    field x as Int\n\nimplement Printable for Point:\n    define wrong_name returning Str:\n        return \"hello\""
+        );
+        assert!(!errors.is_empty(), "Expected error for missing trait method");
+        assert!(errors[0].message.contains("requires method 'to_string'"),
+            "Expected missing method error, got: {}", errors[0].message);
+    }
+
+    #[test]
+    fn test_exhaustive_match_warning() {
+        let (errors, warnings) = check_source_full(
+            "define choice Color:\n    variant Red\n    variant Blue\n    variant Green\n\ndefine main:\n    set c to Red\n    check c:\n        if Red:\n            display 1\n    return 0"
+        );
+        assert!(errors.is_empty(), "Expected no errors, got: {:?}", errors);
+        assert!(!warnings.is_empty(), "Expected warnings for non-exhaustive match");
+        let has_exhaustive_warning = warnings.iter().any(|w| w.message.contains("Non-exhaustive"));
+        assert!(has_exhaustive_warning, "Expected exhaustive match warning, got: {:?}", warnings);
+    }
+
+    #[test]
+    fn test_trait_valid_impl() {
+        let errors = check_source(
+            "define trait Printable:\n    define to_string returning Str\n\ndefine structure Point:\n    field x as Int\n\nimplement Printable for Point:\n    define to_string returning Str:\n        return \"Point\""
+        );
+        assert!(errors.is_empty(), "Expected no errors for valid trait impl, got: {:?}", errors);
     }
 }

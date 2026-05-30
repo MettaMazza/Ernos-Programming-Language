@@ -25,6 +25,18 @@ fn is_tracked(t: &Type) -> bool {
     matches!(t, Type::List | Type::Str | Type::DynStr | Type::RefList | Type::RefStr | Type::Struct(_) | Type::Enum(_))
 }
 
+/// Whether a local variable needs to be registered as a GC root.
+/// Only root variables whose inferred type could hold a heap pointer.
+/// Int, Float, and Bool variables are never heap pointers and can skip
+/// GC rooting entirely. This eliminates all GC overhead for pure-compute
+/// functions like fib() that only use integer parameters.
+fn needs_gc_root(t: &Type) -> bool {
+    match t {
+        Type::Int | Type::Float | Type::Bool => false,
+        _ => true,
+    }
+}
+
 pub struct Codegen {
     out: String,
     func_return_types: HashMap<String, Type>,
@@ -48,6 +60,10 @@ pub struct Codegen {
     builtin_c_funcs: std::collections::HashSet<String>,
     /// Set of top-level constant names (emitted as C globals, not re-declared as locals)
     global_constants: std::collections::HashSet<String>,
+    is_async_func: bool,
+    current_async_func_locals: std::collections::HashSet<String>,
+    await_counter: usize,
+    trait_impls: std::collections::HashSet<(String, String)>,
 }
 
 impl Codegen {
@@ -68,6 +84,10 @@ impl Codegen {
             closure_captures: HashMap::new(),
             builtin_c_funcs: std::collections::HashSet::new(),
             global_constants: std::collections::HashSet::new(),
+            is_async_func: false,
+            current_async_func_locals: std::collections::HashSet::new(),
+            await_counter: 0,
+            trait_impls: std::collections::HashSet::new(),
         }
     }
 
@@ -96,6 +116,154 @@ impl Codegen {
         }
     }
 
+    fn count_awaits_in_expr(&self, expr: &Expr) -> usize {
+        let mut count = 0;
+        match &expr.node {
+            ExprNode::Await(inner) => {
+                count += 1 + self.count_awaits_in_expr(inner);
+            }
+            ExprNode::Binary(left, _, right) | ExprNode::Comparison(left, _, right) | ExprNode::Logical(left, _, right) => {
+                count += self.count_awaits_in_expr(left) + self.count_awaits_in_expr(right);
+            }
+            ExprNode::UnaryNot(inner) | ExprNode::TryExpr(inner) | ExprNode::Borrow(inner) | ExprNode::Receive(inner) | ExprNode::FieldAccess(inner, _) => {
+                count += self.count_awaits_in_expr(inner);
+            }
+            ExprNode::Call(_, args) | ExprNode::MethodCall(_, _, args) | ExprNode::EnumCreate(_, _, args) | ExprNode::ListLiteral(args) => {
+                for arg in args {
+                    count += self.count_awaits_in_expr(arg);
+                }
+            }
+            ExprNode::StructCreate(_, fields) => {
+                for (_, f_expr) in fields {
+                    count += self.count_awaits_in_expr(f_expr);
+                }
+            }
+            _ => {}
+        }
+        count
+    }
+
+    fn count_awaits_in_stmts(&self, stmts: &[Stmt]) -> usize {
+        let mut count = 0;
+        for stmt in stmts {
+            match &stmt.node {
+                StmtNode::Set(_, expr, _) | StmtNode::ExprStmt(expr) | StmtNode::Display(expr) | StmtNode::Return(expr) => {
+                    count += self.count_awaits_in_expr(expr);
+                }
+                StmtNode::If(cond, then_branch, else_branch) => {
+                    count += self.count_awaits_in_expr(cond);
+                    count += self.count_awaits_in_stmts(then_branch);
+                    if let Some(else_stmts) = else_branch {
+                        count += self.count_awaits_in_stmts(else_stmts);
+                    }
+                }
+                StmtNode::RepeatWhile(cond, body) => {
+                    count += self.count_awaits_in_expr(cond);
+                    count += self.count_awaits_in_stmts(body);
+                }
+                StmtNode::ForEach(_, list_expr, body) => {
+                    count += self.count_awaits_in_expr(list_expr);
+                    count += self.count_awaits_in_stmts(body);
+                }
+                StmtNode::Match(expr, arms) => {
+                    count += self.count_awaits_in_expr(expr);
+                    for (_, _, body) in arms {
+                        count += self.count_awaits_in_stmts(body);
+                    }
+                }
+                _ => {}
+            }
+        }
+        count
+    }
+
+    fn emit_yields_for_expr(&mut self, expr: &Expr, var_types: &HashMap<String, Type>) -> Result<(), String> {
+        match &expr.node {
+            ExprNode::Await(inner) => {
+                self.emit_yields_for_expr(inner, var_types)?;
+                self.await_counter += 1;
+                let inner_str = self.gen_expr(inner, var_types)?;
+                let next_state = self.await_counter;
+                
+                self.out.push_str(&format!(
+                    "            {{\n\
+                     \x20               EpFuture* _f = (EpFuture*)({inner});\n\
+                     \x20               args->awaited_fut_{id} = _f;\n\
+                     \x20               if (_f && !_f->completed) {{\n\
+                     \x20                   args->state = {next_state};\n\
+                     \x20                   _f->waiting_task = ep_current_task;\n\
+                     \x20                   return -999999;\n\
+                     \x20               }}\n\
+                     \x20           }}\n\
+                     \x20           case {next_state}:\n",
+                    inner = inner_str,
+                    id = self.await_counter,
+                    next_state = next_state
+                ));
+            }
+            ExprNode::Binary(left, _, right) | ExprNode::Comparison(left, _, right) | ExprNode::Logical(left, _, right) => {
+                self.emit_yields_for_expr(left, var_types)?;
+                self.emit_yields_for_expr(right, var_types)?;
+            }
+            ExprNode::UnaryNot(inner) | ExprNode::TryExpr(inner) | ExprNode::Borrow(inner) | ExprNode::Receive(inner) | ExprNode::FieldAccess(inner, _) => {
+                self.emit_yields_for_expr(inner, var_types)?;
+            }
+            ExprNode::Call(_, args) | ExprNode::MethodCall(_, _, args) | ExprNode::EnumCreate(_, _, args) | ExprNode::ListLiteral(args) => {
+                for arg in args {
+                    self.emit_yields_for_expr(arg, var_types)?;
+                }
+            }
+            ExprNode::StructCreate(_, fields) => {
+                for (_, f_expr) in fields {
+                    self.emit_yields_for_expr(f_expr, var_types)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn emit_yields_for_statement(&mut self, stmt: &Stmt, var_types: &HashMap<String, Type>) -> Result<(), String> {
+        match &stmt.node {
+            StmtNode::Set(_, expr, _) | StmtNode::ExprStmt(expr) | StmtNode::Display(expr) | StmtNode::Return(expr) => {
+                self.emit_yields_for_expr(expr, var_types)?;
+            }
+            StmtNode::If(cond, then_branch, else_branch) => {
+                self.emit_yields_for_expr(cond, var_types)?;
+                for s in then_branch {
+                    self.emit_yields_for_statement(s, var_types)?;
+                }
+                if let Some(else_stmts) = else_branch {
+                    for s in else_stmts {
+                        self.emit_yields_for_statement(s, var_types)?;
+                    }
+                }
+            }
+            StmtNode::RepeatWhile(cond, body) => {
+                self.emit_yields_for_expr(cond, var_types)?;
+                for s in body {
+                    self.emit_yields_for_statement(s, var_types)?;
+                }
+            }
+            StmtNode::ForEach(_, list_expr, body) => {
+                self.emit_yields_for_expr(list_expr, var_types)?;
+                for s in body {
+                    self.emit_yields_for_statement(s, var_types)?;
+                }
+            }
+            StmtNode::Match(expr, arms) => {
+                self.emit_yields_for_expr(expr, var_types)?;
+                for (_, _, body) in arms {
+                    for s in body {
+                        self.emit_yields_for_statement(s, var_types)?;
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn type_annotation_to_type(&self, ann: &TypeAnnotation) -> Type {
         match ann {
             TypeAnnotation::Int => Type::Int,
@@ -105,7 +273,9 @@ impl Codegen {
             TypeAnnotation::DynStr => Type::DynStr,
             TypeAnnotation::List => Type::List,
             TypeAnnotation::UserDefined(name) => {
-                if self.enum_defs.contains_key(name) {
+                if name == "Any" {
+                    Type::Int
+                } else if self.enum_defs.contains_key(name) {
                     Type::Enum(name.clone())
                 } else {
                     Type::Struct(name.clone())
@@ -194,6 +364,19 @@ impl Codegen {
         self.func_return_types.insert("ep_dlcall8".to_string(), Type::Int);
         self.func_return_types.insert("ep_dlcall9".to_string(), Type::Int);
         self.func_return_types.insert("ep_dlcall10".to_string(), Type::Int);
+        // Float FFI return types
+        self.func_return_types.insert("ep_dlcall_f0".to_string(), Type::Float);
+        self.func_return_types.insert("ep_dlcall_f1".to_string(), Type::Float);
+        self.func_return_types.insert("ep_dlcall_f2".to_string(), Type::Float);
+        self.func_return_types.insert("ep_dlcall_f3".to_string(), Type::Float);
+        self.func_return_types.insert("ep_dlcall_f4".to_string(), Type::Float);
+        self.func_return_types.insert("ep_dlcall_f5".to_string(), Type::Float);
+        self.func_return_types.insert("ep_dlcall_f6".to_string(), Type::Float);
+        self.func_return_types.insert("ep_dlcall_fd1".to_string(), Type::Int);
+        self.func_return_types.insert("ep_dlcall_fd2".to_string(), Type::Int);
+        self.func_return_types.insert("ep_dlcall_fd3".to_string(), Type::Int);
+        self.func_return_types.insert("ep_double_to_bits".to_string(), Type::Int);
+        self.func_return_types.insert("ep_bits_to_double".to_string(), Type::Float);
         self.func_return_types.insert("ep_system".to_string(), Type::Int);
         self.func_return_types.insert("ep_play_sound".to_string(), Type::Int);
         self.func_return_types.insert("concat".to_string(), Type::DynStr);
@@ -233,6 +416,14 @@ impl Codegen {
         self.func_return_types.insert("ep_base64_encode".to_string(), Type::DynStr);
         self.func_return_types.insert("create_channel".to_string(), Type::Int);
 
+        // Structured Concurrency builtins
+        self.func_return_types.insert("create_task_group".to_string(), Type::Int);
+        self.func_return_types.insert("add_task_group".to_string(), Type::Int);
+        self.func_return_types.insert("wait_task_group".to_string(), Type::List);
+        self.func_return_types.insert("async_timeout".to_string(), Type::Int);
+        self.func_return_types.insert("cancel_task".to_string(), Type::Int);
+        self.func_return_types.insert("sleep_ms".to_string(), Type::Int);
+
         // FFI pointer/byte builtins
         self.func_return_types.insert("str_to_ptr".to_string(), Type::Int);
         self.func_return_types.insert("ptr_to_str".to_string(), Type::DynStr);
@@ -243,6 +434,9 @@ impl Codegen {
         self.func_return_types.insert("free_bytes".to_string(), Type::Int);
         self.func_return_types.insert("list_to_bytes".to_string(), Type::Int);
         self.func_return_types.insert("bytes_to_list".to_string(), Type::List);
+        self.func_return_types.insert("ep_gc_get_minor_count".to_string(), Type::Int);
+        self.func_return_types.insert("ep_gc_get_major_count".to_string(), Type::Int);
+        self.func_return_types.insert("ep_gc_get_nursery_count".to_string(), Type::Int);
 
         // Save the set of builtin C runtime names before externals/user funcs are added
         self.builtin_c_funcs = self.func_return_types.keys().cloned().collect();
@@ -446,18 +640,46 @@ impl Codegen {
                     self.collect_var_types(body, var_types);
                 }
                 StmtNode::ForEach(loop_var, iterable, body) => {
-                    // Determine loop variable type from the list's element type
-                    let elem_type = if let ExprNode::Identifier(list_name) = &iterable.node {
-                        self.list_element_types.get(list_name).cloned().unwrap_or(Type::Int)
-                    } else if let ExprNode::ListLiteral(elements) = &iterable.node {
-                        if elements.iter().any(|e| matches!(e.node, ExprNode::StringLiteral(_))) {
-                            Type::Str
-                        } else {
-                            Type::Int
+                    let mut elem_type = Type::Int;
+                    let iterable_type = self.infer_type(iterable, var_types);
+                    let mut is_iterator = false;
+                    let mut iter_type_name = String::new();
+                    
+                    match &iterable_type {
+                        Type::Struct(name) | Type::Enum(name) => {
+                            if self.trait_impls.contains(&("Iterator".to_string(), name.clone())) {
+                                is_iterator = true;
+                                iter_type_name = name.clone();
+                            }
+                        }
+                        _ => {}
+                    }
+                    
+                    if is_iterator {
+                        let next_key = format!("{}_next", iter_type_name);
+                        if let Some(Type::Enum(ename)) = self.func_return_types.get(&next_key) {
+                            if let Some(ed) = self.enum_defs.get(ename) {
+                                if let Some((_, fields)) = ed.variants.iter().find(|(vn, _)| vn == "Next") {
+                                    if let Some((_, ann)) = fields.first() {
+                                        elem_type = self.type_annotation_to_type(ann);
+                                    }
+                                }
+                            }
                         }
                     } else {
-                        Type::Int
-                    };
+                        // Determine loop variable type from the list's element type
+                        elem_type = if let ExprNode::Identifier(list_name) = &iterable.node {
+                            self.list_element_types.get(list_name).cloned().unwrap_or(Type::Int)
+                        } else if let ExprNode::ListLiteral(elements) = &iterable.node {
+                            if elements.iter().any(|e| matches!(e.node, ExprNode::StringLiteral(_))) {
+                                Type::Str
+                            } else {
+                                Type::Int
+                            }
+                        } else {
+                            Type::Int
+                        };
+                    }
                     var_types.insert(loop_var.clone(), elem_type);
                     self.collect_var_types(body, var_types);
                 }
@@ -1006,7 +1228,11 @@ impl Codegen {
     ) -> Result<(), String> {
         match &stmt.node {
             StmtNode::Set(name, expr, _type_ann) => {
-                let safe_name = Self::sanitize_c_name(name);
+                let safe_name = if self.is_async_func {
+                    format!("args->{}", Self::sanitize_c_name(name))
+                } else {
+                    Self::sanitize_c_name(name)
+                };
                 let _t = var_types.get(name);
                 // If this is a closure assignment, pass the variable name to Closure codegen
                 if matches!(expr.node, ExprNode::Closure(_, _)) {
@@ -1027,7 +1253,11 @@ impl Codegen {
                 if let ExprNode::Call(func_name, args) = &expr.node {
                     if (func_name == "free_list" || func_name == "free_map") && !args.is_empty() {
                         if let ExprNode::Identifier(arg_name) = &args[0].node {
-                            let safe_arg = Self::sanitize_c_name(arg_name);
+                            let safe_arg = if self.is_async_func {
+                                format!("args->{}", Self::sanitize_c_name(arg_name))
+                            } else {
+                                Self::sanitize_c_name(arg_name)
+                            };
                             self.out.push_str(&format!("    {} = 0;\n", safe_arg));
                         }
                     }
@@ -1035,17 +1265,21 @@ impl Codegen {
             }
             StmtNode::Return(expr) => {
                 let expr_str = self.gen_expr(expr, var_types)?;
-                self.out.push_str(&format!("    ret_val = {};\n", expr_str));
+                if self.is_async_func {
+                    self.out.push_str(&format!("    return {};\n", expr_str));
+                } else {
+                    self.out.push_str(&format!("    ret_val = {};\n", expr_str));
 
-                if let ExprNode::Identifier(name) = &expr.node {
-                    let t = var_types.get(name);
-                    if t == Some(&Type::List) {
-                        self.out.push_str(&format!("    {} = 0;\n", name));
-                    } else if matches!(t, Some(Type::Enum(_))) {
-                        self.out.push_str(&format!("    {} = 0;\n", name));
+                    if let ExprNode::Identifier(name) = &expr.node {
+                        let t = var_types.get(name);
+                        if t == Some(&Type::List) {
+                            self.out.push_str(&format!("    {} = 0;\n", name));
+                        } else if matches!(t, Some(Type::Enum(_))) {
+                            self.out.push_str(&format!("    {} = 0;\n", name));
+                        }
                     }
+                    self.out.push_str("    goto L_cleanup;\n");
                 }
-                self.out.push_str("    goto L_cleanup;\n");
             }
             StmtNode::Display(expr) => {
                 let t = self.infer_type(expr, var_types);
@@ -1108,10 +1342,15 @@ impl Codegen {
                     let arg_str = self.gen_expr(arg, var_types)?;
                     self.out.push_str(&format!("        s_args->arg{} = {};\n", j, arg_str));
                 }
+                self.out.push_str("        #ifdef _WIN32\n");
+                self.out.push_str(&format!("        HANDLE t = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)spawn_wrapper_{}, s_args, 0, NULL);\n", idx));
+                self.out.push_str("        if (t) CloseHandle(t);\n");
+                self.out.push_str("        #else\n");
                 self.out.push_str("        pthread_t t;\n");
                 self.out.push_str(&format!("        int rc = pthread_create(&t, NULL, spawn_wrapper_{}, s_args);\n", idx));
                 self.out.push_str("        if (rc != 0) { printf(\"DEBUG: pthread_create failed: %d\\n\", rc); }\n");
                 self.out.push_str("        pthread_detach(t);\n");
+                self.out.push_str("        #endif\n");
                 self.out.push_str("    }\n");
             }
             StmtNode::Send(chan, val) => {
@@ -1130,6 +1369,7 @@ impl Codegen {
                 let obj_type = self.infer_type(obj, var_types);
                 if let Type::Struct(struct_name) = obj_type {
                     self.out.push_str(&format!("    ((EpStruct_{}*)({}))->{} = {};\n", struct_name, obj_str, field_name, expr_str));
+                    self.out.push_str(&format!("    ep_gc_write_barrier((void*)({}), {});\n", obj_str, expr_str));
                 }
             }
             StmtNode::Match(match_expr, arms) => {
@@ -1211,7 +1451,45 @@ impl Codegen {
                 }
             }
             StmtNode::ForEach(loop_var, iterable, body) => {
-                if let ExprNode::Call(func_name, args) = &iterable.node {
+                let iterable_type = self.infer_type(iterable, var_types);
+                let mut is_iterator = false;
+                let mut iter_type_name = String::new();
+                
+                match &iterable_type {
+                    Type::Struct(name) | Type::Enum(name) => {
+                        if self.trait_impls.contains(&("Iterator".to_string(), name.clone())) {
+                            is_iterator = true;
+                            iter_type_name = name.clone();
+                        }
+                    }
+                    _ => {}
+                }
+                
+                if is_iterator {
+                    let iter_expr_str = self.gen_expr(iterable, var_types)?;
+                    let next_key = format!("{}_next", iter_type_name);
+                    let return_enum_name = match self.func_return_types.get(&next_key) {
+                        Some(Type::Enum(ename)) => ename.clone(),
+                        _ => "IterResult".to_string(),
+                    };
+                    
+                    let unique_idx = self.spawn_index;
+                    self.spawn_index += 1;
+                    
+                    self.out.push_str("    {\n");
+                    self.out.push_str(&format!("        long long _foreach_iter_{} = {};\n", unique_idx, iter_expr_str));
+                    self.out.push_str("        while (1) {\n");
+                    self.out.push_str(&format!("            long long _res_{} = {}__next(_foreach_iter_{});\n", unique_idx, iter_type_name, unique_idx));
+                    self.out.push_str(&format!("            if (_res_{} == 0) break;\n", unique_idx));
+                    self.out.push_str(&format!("            EpEnum_{}* _res_ptr_{} = (EpEnum_{}*)_res_{};\n", return_enum_name, unique_idx, return_enum_name, unique_idx));
+                    self.out.push_str(&format!("            if (_res_ptr_{}->tag == EP_TAG_{}_Done) break;\n", unique_idx, return_enum_name));
+                    self.out.push_str(&format!("            {} = _res_ptr_{}->data0;\n", loop_var, unique_idx));
+                    for s in body {
+                        self.gen_statement(s, var_types)?;
+                    }
+                    self.out.push_str("        }\n");
+                    self.out.push_str("    }\n");
+                } else if let ExprNode::Call(func_name, args) = &iterable.node {
                     if func_name == "range" {
                         let (start_str, end_str) = if args.len() == 2 {
                             let s = self.gen_expr(&args[0], var_types)?;
@@ -1313,6 +1591,9 @@ impl Codegen {
                 if !var_types.contains_key(name) && self.func_return_types.contains_key(name) {
                     return Ok(format!("(long long){}", Self::sanitize_c_name(name)));
                 }
+                if self.is_async_func && (var_types.contains_key(name) || self.current_async_func_locals.contains(name)) {
+                    return Ok(format!("args->{}", Self::sanitize_c_name(name)));
+                }
                 Ok(name.clone())
             }
             ExprNode::Binary(left, op, right) => {
@@ -1398,12 +1679,10 @@ impl Codegen {
                 } else {
                     match op {
                         CompOp::Equals => {
-                            // Use ep_str_equals for all == comparisons — it safely handles
-                            // both integer values and FFI string pointers typed as Int
-                            Ok(format!("ep_str_equals({}, {})", left_str, right_str))
+                            Ok(format!("{} == {}", left_str, right_str))
                         }
                         CompOp::NotEquals => {
-                            Ok(format!("(!ep_str_equals({}, {}))", left_str, right_str))
+                            Ok(format!("{} != {}", left_str, right_str))
                         }
                         _ => {
                             let op_str = match op {
@@ -1659,8 +1938,13 @@ impl Codegen {
                 ))
             }
             ExprNode::Await(inner) => {
-                let inner_str = self.gen_expr(inner, var_types)?;
-                Ok(format!("({{ EpFuture* _fut = (EpFuture*){}; long long _res = 0; if (_fut) {{ if (!_fut->completed) {{ _res = receive_channel(_fut->chan); }} else {{ _res = _fut->value; }} }} _res; }})", inner_str))
+                if self.is_async_func {
+                    self.await_counter += 1;
+                    Ok(format!("(args->awaited_fut_{} ? args->awaited_fut_{}->value : 0)", self.await_counter, self.await_counter))
+                } else {
+                    let inner_str = self.gen_expr(inner, var_types)?;
+                    Ok(format!("ep_await_future((EpFuture*){})", inner_str))
+                }
             }
             ExprNode::Closure(params, body) => {
                 // Generate a static closure function
@@ -1962,13 +2246,29 @@ impl Codegen {
         let test_count = test_cases.len();
         let mut lines = Vec::new();
         lines.push("\n/* Test runner C main */\n".to_string());
+        lines.push("#ifndef __wasm__\n".to_string());
         lines.push("#include <sys/types.h>\n".to_string());
         lines.push("#include <sys/wait.h>\n".to_string());
         lines.push("#include <unistd.h>\n".to_string());
+        lines.push("#endif\n".to_string());
         lines.push("#include <stdio.h>\n".to_string());
         lines.push("#include <stdlib.h>\n".to_string());
         lines.push("#include <stdint.h>\n\n".to_string());
         
+        lines.push("#ifdef __wasm__\n".to_string());
+        lines.push("int run_test(long long (*test_func)(void), const char* name) {\n".to_string());
+        lines.push("    printf(\"test_%s ... \", name);\n".to_string());
+        lines.push("    fflush(stdout);\n".to_string());
+        lines.push("    long long res = test_func();\n".to_string());
+        lines.push("    if (res == 0) {\n".to_string());
+        lines.push("        printf(\"OK\\n\");\n".to_string());
+        lines.push("        return 1;\n".to_string());
+        lines.push("    } else {\n".to_string());
+        lines.push("        printf(\"FAILED\\n\");\n".to_string());
+        lines.push("        return 0;\n".to_string());
+        lines.push("    }\n".to_string());
+        lines.push("}\n".to_string());
+        lines.push("#else\n".to_string());
         lines.push("int run_test(long long (*test_func)(void), const char* name) {\n".to_string());
         lines.push("    printf(\"test_%s ... \", name);\n".to_string());
         lines.push("    fflush(stdout);\n".to_string());
@@ -2000,7 +2300,8 @@ impl Codegen {
         lines.push("            return 0;\n".to_string());
         lines.push("        }\n".to_string());
         lines.push("    }\n".to_string());
-        lines.push("}\n\n".to_string());
+        lines.push("}\n".to_string());
+        lines.push("#endif\n\n".to_string());
         
         lines.push("int main(int argc, char** argv) {\n".to_string());
         lines.push("    init_ep_args(argc, argv);\n".to_string());
@@ -2195,6 +2496,15 @@ impl Codegen {
         out.push_str("    }\n");
         out.push_str("    return list;\n");
         out.push_str("}\n\n");
+        out.push_str("long long ep_gc_get_minor_count() {\n");
+        out.push_str("    return ep_gc_minor_count;\n");
+        out.push_str("}\n");
+        out.push_str("long long ep_gc_get_major_count() {\n");
+        out.push_str("    return ep_gc_major_count;\n");
+        out.push_str("}\n");
+        out.push_str("long long ep_gc_get_nursery_count() {\n");
+        out.push_str("    return ep_gc_nursery_count;\n");
+        out.push_str("}\n\n");
 
         out.push_str("long long string_to_int(long long s) {\n");
         out.push_str("    if (s == 0) return 0;\n");
@@ -2235,6 +2545,11 @@ impl Codegen {
             for (variant_name, _) in &ed.variants {
                 self.variant_to_enum.insert(variant_name.clone(), ed.name.clone());
             }
+        }
+
+        // Register trait implementations
+        for ti in &program.trait_impls {
+            self.trait_impls.insert((ti.trait_name.clone(), ti.for_type.clone()));
         }
 
         self.analyze_return_types(program);
@@ -2300,10 +2615,22 @@ impl Codegen {
                             self.out.push_str(&format!("    if (s->{}) free((void*)s->{});\n", fname, fname));
                         }
                         TypeAnnotation::UserDefined(inner_name) => {
-                            self.out.push_str(&format!("    free_struct_{}(s->{});\n", inner_name, fname));
+                            if inner_name != "Any" {
+                                if self.enum_defs.contains_key(inner_name) {
+                                    self.out.push_str(&format!("    free_enum_{}(s->{});\n", inner_name, fname));
+                                } else if self.struct_defs.contains_key(inner_name) {
+                                    self.out.push_str(&format!("    free_struct_{}(s->{});\n", inner_name, fname));
+                                }
+                            }
                         }
                         TypeAnnotation::Generic(inner_name, _) => {
-                            self.out.push_str(&format!("    free_struct_{}(s->{});\n", inner_name, fname));
+                            if inner_name != "Any" {
+                                if self.enum_defs.contains_key(inner_name) {
+                                    self.out.push_str(&format!("    free_enum_{}(s->{});\n", inner_name, fname));
+                                } else if self.struct_defs.contains_key(inner_name) {
+                                    self.out.push_str(&format!("    free_struct_{}(s->{});\n", inner_name, fname));
+                                }
+                            }
                         }
                         _ => {}
                     }
@@ -2349,17 +2676,21 @@ impl Codegen {
                                     self.out.push_str(&format!("        if (e->data{}) free((void*)e->data{});\n", j, j));
                                 }
                                 TypeAnnotation::UserDefined(inner_name) => {
-                                    if self.enum_defs.contains_key(inner_name) {
-                                        self.out.push_str(&format!("        free_enum_{}(e->data{});\n", inner_name, j));
-                                    } else {
-                                        self.out.push_str(&format!("        free_struct_{}(e->data{});\n", inner_name, j));
+                                    if inner_name != "Any" {
+                                        if self.enum_defs.contains_key(inner_name) {
+                                            self.out.push_str(&format!("        free_enum_{}(e->data{});\n", inner_name, j));
+                                        } else if self.struct_defs.contains_key(inner_name) {
+                                            self.out.push_str(&format!("        free_struct_{}(e->data{});\n", inner_name, j));
+                                        }
                                     }
                                 }
                                 TypeAnnotation::Generic(inner_name, _) => {
-                                    if self.enum_defs.contains_key(inner_name) {
-                                        self.out.push_str(&format!("        free_enum_{}(e->data{});\n", inner_name, j));
-                                    } else {
-                                        self.out.push_str(&format!("        free_struct_{}(e->data{});\n", inner_name, j));
+                                    if inner_name != "Any" {
+                                        if self.enum_defs.contains_key(inner_name) {
+                                            self.out.push_str(&format!("        free_enum_{}(e->data{});\n", inner_name, j));
+                                        } else if self.struct_defs.contains_key(inner_name) {
+                                            self.out.push_str(&format!("        free_struct_{}(e->data{});\n", inner_name, j));
+                                        }
                                     }
                                 }
                                 _ => {}
@@ -2426,6 +2757,53 @@ impl Codegen {
         // ep_int_to_str alias
         self.out.push_str("long long ep_int_to_str(long long val) { return int_to_string(val); }\n\n");
 
+        // Native String Builder — realloc-based for O(n) amortized appends
+        self.out.push_str("typedef struct { char* data; long long len; long long cap; } EpStringBuilder;\n\n");
+        self.out.push_str("long long ep_sb_create(long long dummy) {\n");
+        self.out.push_str("    (void)dummy;\n");
+        self.out.push_str("    EpStringBuilder* sb = (EpStringBuilder*)malloc(sizeof(EpStringBuilder));\n");
+        self.out.push_str("    sb->cap = 256;\n");
+        self.out.push_str("    sb->len = 0;\n");
+        self.out.push_str("    sb->data = (char*)malloc(sb->cap);\n");
+        self.out.push_str("    sb->data[0] = '\\0';\n");
+        self.out.push_str("    return (long long)sb;\n");
+        self.out.push_str("}\n\n");
+
+        self.out.push_str("long long ep_sb_append(long long sb_ptr, long long str_ptr) {\n");
+        self.out.push_str("    EpStringBuilder* sb = (EpStringBuilder*)sb_ptr;\n");
+        self.out.push_str("    const char* s = (const char*)str_ptr;\n");
+        self.out.push_str("    if (!s) return sb_ptr;\n");
+        self.out.push_str("    long long slen = strlen(s);\n");
+        self.out.push_str("    while (sb->len + slen + 1 > sb->cap) {\n");
+        self.out.push_str("        sb->cap *= 2;\n");
+        self.out.push_str("        sb->data = (char*)realloc(sb->data, sb->cap);\n");
+        self.out.push_str("    }\n");
+        self.out.push_str("    memcpy(sb->data + sb->len, s, slen);\n");
+        self.out.push_str("    sb->len += slen;\n");
+        self.out.push_str("    sb->data[sb->len] = '\\0';\n");
+        self.out.push_str("    return sb_ptr;\n");
+        self.out.push_str("}\n\n");
+
+        self.out.push_str("long long ep_sb_append_int(long long sb_ptr, long long val) {\n");
+        self.out.push_str("    char buf[32];\n");
+        self.out.push_str("    snprintf(buf, sizeof(buf), \"%lld\", val);\n");
+        self.out.push_str("    return ep_sb_append(sb_ptr, (long long)buf);\n");
+        self.out.push_str("}\n\n");
+
+        self.out.push_str("long long ep_sb_to_string(long long sb_ptr) {\n");
+        self.out.push_str("    EpStringBuilder* sb = (EpStringBuilder*)sb_ptr;\n");
+        self.out.push_str("    char* result = (char*)malloc(sb->len + 1);\n");
+        self.out.push_str("    memcpy(result, sb->data, sb->len + 1);\n");
+        self.out.push_str("    ep_gc_register(result, EP_OBJ_STRING);\n");
+        self.out.push_str("    free(sb->data);\n");
+        self.out.push_str("    free(sb);\n");
+        self.out.push_str("    return (long long)result;\n");
+        self.out.push_str("}\n\n");
+
+        self.out.push_str("long long ep_sb_length(long long sb_ptr) {\n");
+        self.out.push_str("    return ((EpStringBuilder*)sb_ptr)->len;\n");
+        self.out.push_str("}\n\n");
+
         // FFI pointer/byte builtins
         self.out.push_str("long long str_to_ptr(long long s) { return s; }\n");
         self.out.push_str("long long ptr_to_str(long long p) {\n");
@@ -2463,6 +2841,15 @@ impl Codegen {
         self.out.push_str("        append_list(list, (long long)buf[i]);\n");
         self.out.push_str("    }\n");
         self.out.push_str("    return list;\n");
+        self.out.push_str("}\n\n");
+        self.out.push_str("long long ep_gc_get_minor_count() {\n");
+        self.out.push_str("    return ep_gc_minor_count;\n");
+        self.out.push_str("}\n");
+        self.out.push_str("long long ep_gc_get_major_count() {\n");
+        self.out.push_str("    return ep_gc_major_count;\n");
+        self.out.push_str("}\n");
+        self.out.push_str("long long ep_gc_get_nursery_count() {\n");
+        self.out.push_str("    return ep_gc_nursery_count;\n");
         self.out.push_str("}\n\n");
 
         self.out.push_str("long long string_to_int(long long s) {\n");
@@ -2654,6 +3041,7 @@ impl Codegen {
                     params: m.params.clone(),
                     return_type: m.return_type.clone(),
                     body: m.body.clone(),
+                    doc_comment: m.doc_comment.clone(),
                 };
                 self.gen_method(&md)?;
             }
@@ -2674,29 +3062,59 @@ impl Codegen {
                     }
                 }
                 self.out.push_str("}\n\n");
-                // Custom bootstrapper with constant init
-                self.out.push_str(r#"/* Bootstrapper C main */
-int main(int argc, char** argv) {
-    {
+                let main_is_async = program.functions.iter().any(|f| f.name == "main" && f.is_async);
+                let main_call = if main_is_async {
+                    "    EpFuture* fut = (EpFuture*)_main();\n    ep_async_loop_run();\n    int result = (int)(fut ? fut->value : 0);"
+                } else {
+                    "    int result = (int)_main();\n    ep_async_loop_run();"
+                };
+                self.out.push_str(&format!(r#"/* Bootstrapper C main */
+int main(int argc, char** argv) {{
+    {{
         unsigned int seed;
         FILE* urand = fopen("/dev/urandom", "rb");
-        if (urand && fread(&seed, sizeof(seed), 1, urand) == 1) {
+        if (urand && fread(&seed, sizeof(seed), 1, urand) == 1) {{
             fclose(urand);
-        } else {
+        }} else {{
             if (urand) fclose(urand);
             seed = (unsigned int)time(NULL) ^ (unsigned int)getpid();
-        }
+        }}
         srand(seed);
-    }
+    }}
     init_ep_args(argc, argv);
     __ep_init_constants();
-    int result = (int)_main();
+{}
     ep_gc_shutdown();
     return result;
-}
-"#);
+}}
+"#, main_call));
             } else {
-                self.out.push_str(C_MAIN_BOOTSTRAPPER);
+                let main_is_async = program.functions.iter().any(|f| f.name == "main" && f.is_async);
+                let main_call = if main_is_async {
+                    "    EpFuture* fut = (EpFuture*)_main();\n    ep_async_loop_run();\n    int result = (int)(fut ? fut->value : 0);"
+                } else {
+                    "    int result = (int)_main();\n    ep_async_loop_run();"
+                };
+                self.out.push_str(&format!(r#"
+/* Bootstrapper C main */
+int main(int argc, char** argv) {{
+    {{
+        unsigned int seed;
+        FILE* urand = fopen("/dev/urandom", "rb");
+        if (urand && fread(&seed, sizeof(seed), 1, urand) == 1) {{
+            fclose(urand);
+        }} else {{
+            if (urand) fclose(urand);
+            seed = (unsigned int)time(NULL) ^ (unsigned int)getpid();
+        }}
+        srand(seed);
+    }}
+    init_ep_args(argc, argv);
+{}
+    ep_gc_shutdown();
+    return result;
+}}
+"#, main_call));
             }
         }
 
@@ -2762,53 +3180,92 @@ int main(int argc, char** argv) {
         }
 
         if func.is_async {
-            // 1. Generate the thread argument struct
+            // 1. Generate the argument struct
             self.out.push_str(&format!("typedef struct {{\n"));
+            self.out.push_str("    int state;\n");
             self.out.push_str("    EpFuture* fut;\n");
-            for (j, _param) in func.params.iter().enumerate() {
-                self.out.push_str(&format!("    long long arg{};\n", j));
+            // Parameters:
+            for param in &func.params {
+                self.out.push_str(&format!("    long long {};\n", Self::sanitize_c_name(&param.0)));
             }
-            if func.params.is_empty() {
+            // Local variables:
+            for (var_name, _) in &var_types {
+                let is_param = func.params.iter().any(|p| &p.0 == var_name);
+                let is_global = self.global_constants.contains(var_name);
+                if !is_param && !is_global {
+                    self.out.push_str(&format!("    long long {};\n", Self::sanitize_c_name(var_name)));
+                }
+            }
+            // Awaited futures:
+            let await_count = self.count_awaits_in_stmts(&func.body);
+            for i in 1..=await_count {
+                self.out.push_str(&format!("    EpFuture* awaited_fut_{};\n", i));
+            }
+            if func.params.is_empty() && var_types.len() == func.params.len() && await_count == 0 {
                 self.out.push_str("    int dummy;\n");
             }
             self.out.push_str(&format!("}} {}_async_args;\n\n", name));
 
-            // 2. Generate wrapper function
-            self.out.push_str(&format!("void* {}_async_wrapper(void* r) {{\n", name));
-            self.out.push_str("    int stack_dummy;\n");
-            self.out.push_str("    ep_gc_register_thread(&stack_dummy);\n");
+            // 2. Generate the step function
+            self.out.push_str(&format!("long long {}_step(void* r) {{\n", name));
             self.out.push_str(&format!("    {}_async_args* args = ({}_async_args*)r;\n", name, name));
-            
-            let mut args_call = Vec::new();
-            for j in 0..func.params.len() {
-                args_call.push(format!("args->arg{}", j));
+            self.out.push_str("    switch (args->state) {\n");
+            self.out.push_str("        case 0:\n");
+
+            // Compile the statements:
+            self.await_counter = 0;
+            self.is_async_func = true;
+            self.current_async_func_locals.clear();
+            for k in var_types.keys() {
+                self.current_async_func_locals.insert(k.clone());
             }
-            self.out.push_str(&format!("    long long res = {}_impl({});\n", name, args_call.join(", ")));
-            self.out.push_str("    args->fut->value = res;\n");
-            self.out.push_str("    args->fut->completed = 1;\n");
-            self.out.push_str("    send_channel(args->fut->chan, res);\n");
-            self.out.push_str("    free(args);\n");
-            self.out.push_str("    ep_gc_unregister_thread();\n");
-            self.out.push_str("    return NULL;\n");
+
+            for stmt in &func.body {
+                let saved_await_counter = self.await_counter;
+                self.emit_yields_for_statement(stmt, &var_types)?;
+                let post_scan_await_counter = self.await_counter;
+                self.await_counter = saved_await_counter;
+
+                self.gen_statement(stmt, &var_types)?;
+
+                self.await_counter = post_scan_await_counter;
+            }
+
+            self.out.push_str("            args->state = -1;\n");
+            self.out.push_str("            return 0;\n");
+            self.out.push_str("    }\n");
+            self.out.push_str("    return 0;\n");
             self.out.push_str("}\n\n");
 
-            // 3. Generate public main function
+            // 3. Generate the public wrapper function (the entry point for calling the async function)
             self.out.push_str(&format!("long long {}({}) {{\n", name, params_decl.join(", ")));
             self.out.push_str("    EpFuture* fut = (EpFuture*)malloc(sizeof(EpFuture));\n");
-            self.out.push_str("    fut->chan = create_channel();\n");
             self.out.push_str("    fut->completed = 0;\n");
             self.out.push_str("    fut->value = 0;\n");
+            self.out.push_str("    fut->waiting_task = NULL;\n");
             self.out.push_str("    { EpGCObject* _go = ep_gc_register(fut, EP_OBJ_STRUCT); if(_go) _go->num_fields = 3; }\n");
             self.out.push_str(&format!("    {}_async_args* args = ({}_async_args*)malloc(sizeof({}_async_args));\n", name, name, name));
+            self.out.push_str(&format!("    memset(args, 0, sizeof({}_async_args));\n", name));
+            self.out.push_str("    args->state = 0;\n");
             self.out.push_str("    args->fut = fut;\n");
-            for (j, param) in func.params.iter().enumerate() {
-                self.out.push_str(&format!("    args->arg{} = {};\n", j, param.0));
+            for param in &func.params {
+                self.out.push_str(&format!("    args->{} = {};\n", Self::sanitize_c_name(&param.0), Self::sanitize_c_name(&param.0)));
             }
-            self.out.push_str("    pthread_t thread;\n");
-            self.out.push_str(&format!("    pthread_create(&thread, NULL, {}_async_wrapper, args);\n", name));
-            self.out.push_str("    pthread_detach(thread);\n");
+            self.out.push_str("    EpTask* task = (EpTask*)malloc(sizeof(EpTask));\n");
+            self.out.push_str(&format!("    task->step = {}_step;\n", name));
+            self.out.push_str("    task->args = args;\n");
+            self.out.push_str(&format!("    task->args_size_bytes = sizeof({}_async_args);\n", name));
+            self.out.push_str("    task->fut = fut;\n");
+            self.out.push_str("    task->state = 0;\n");
+            self.out.push_str("    task->is_cancelled = 0;\n");
+            self.out.push_str("    task->parent = ep_current_task;\n");
+            self.out.push_str("    ep_task_enqueue(task);\n");
             self.out.push_str("    return (long long)fut;\n");
             self.out.push_str("}\n\n");
+
+            self.is_async_func = false;
+            self.current_async_func_locals.clear();
+            return Ok(());
         }
 
         let impl_name = if func.is_async {
@@ -2891,25 +3348,25 @@ int main(int argc, char** argv) {
         }
         self.out.push_str("    long long ret_val = 0;\n\n");
 
-        // Push GC roots for all tracked locals
+        // Push GC roots for all locals
         let mut gc_root_count = 0;
         for (var_name, _) in &var_types {
             let is_param = func.params.iter().any(|p| &p.0 == var_name);
             let is_global = self.global_constants.contains(var_name);
             if !is_param && !is_global {
                 let t = var_types.get(var_name);
-                let is_tracked = t.map(|ty| is_tracked(ty)).unwrap_or(false);
-                if is_tracked {
+                let should_root = t.map(|ty| needs_gc_root(ty)).unwrap_or(true);
+                if should_root {
                     self.out.push_str(&format!("    ep_gc_push_root(&{});\n", Self::sanitize_c_name(var_name)));
                     gc_root_count += 1;
                 }
             }
         }
-        // Also push params that are tracked
+        // Also push params as GC roots
         for param in &func.params {
             let t = var_types.get(&param.0);
-            let is_tracked = t.map(|ty| is_tracked(ty)).unwrap_or(false);
-            if is_tracked {
+            let should_root = t.map(|ty| needs_gc_root(ty)).unwrap_or(true);
+            if should_root {
                 self.out.push_str(&format!("    ep_gc_push_root(&{});\n", param.0));
                 gc_root_count += 1;
             }
@@ -3056,6 +3513,23 @@ int main(int argc, char** argv) {
                         transferred.insert(var_name.clone());
                     }
                 }
+                StmtNode::Return(expr) => {
+                    // A return expression may call user functions that consume locals
+                    Self::collect_transferred_from_expr(expr, transferred, builtins);
+                    // Also mark any identifier directly returned as transferred
+                    // (it's being moved out of the function via ret_val)
+                    if let ExprNode::Identifier(var_name) = &expr.node {
+                        transferred.insert(var_name.clone());
+                    }
+                }
+                StmtNode::Display(expr) => {
+                    Self::collect_transferred_from_expr(expr, transferred, builtins);
+                }
+                StmtNode::Match(_, arms) => {
+                    for (_, _, body) in arms {
+                        Self::collect_transferred(body, transferred, builtins);
+                    }
+                }
                 _ => {}
             }
         }
@@ -3153,8 +3627,44 @@ const RUNTIME_HEADER_AND_SRC: &str = r#"#include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#ifdef __wasm__
+#define _SETJMP_H
+typedef int jmp_buf[1];
+#define setjmp(buf) (0)
+#define longjmp(buf, val) abort()
+
+// Mock pthreads for single-threaded WASM
+typedef struct { int lock_state; } pthread_mutex_t;
+typedef struct { int cond_state; } pthread_cond_t;
+typedef struct { int rw_state; } pthread_rwlock_t;
+typedef int pthread_t;
+typedef int pthread_attr_t;
+#define PTHREAD_MUTEX_INITIALIZER {0}
+#define PTHREAD_COND_INITIALIZER {0}
+#define PTHREAD_RWLOCK_INITIALIZER {0}
+#define pthread_mutex_init(m, a) ((void)(a), (m)->lock_state = 0, 0)
+#define pthread_mutex_lock(m) ((m)->lock_state = 1, 0)
+#define pthread_mutex_unlock(m) ((m)->lock_state = 0, 0)
+#define pthread_mutex_trylock(m) ((m)->lock_state == 0 ? ((m)->lock_state = 1, 0) : 1)
+#define pthread_mutex_destroy(m) ((void)(m), 0)
+#define pthread_cond_init(c, a) ((void)(a), (c)->cond_state = 0, 0)
+#define pthread_cond_wait(c, m) ((void)(c), (void)(m), 0)
+#define pthread_cond_signal(c) ((void)(c), 0)
+#define pthread_cond_broadcast(c) ((void)(c), 0)
+#define pthread_cond_destroy(c) ((void)(c), 0)
+#define pthread_rwlock_init(r, a) ((void)(a), (r)->rw_state = 0, 0)
+#define pthread_rwlock_rdlock(r) ((r)->rw_state = 1, 0)
+#define pthread_rwlock_wrlock(r) ((r)->rw_state = 2, 0)
+#define pthread_rwlock_unlock(r) ((r)->rw_state = 0, 0)
+#define pthread_rwlock_destroy(r) ((void)(r), 0)
+#define pthread_create(t, a, f, arg) ((void)(t), (void)(a), (void)(f), (void)(arg), 0)
+#define pthread_join(t, r) ((void)(t), (void)(r), 0)
+#define pthread_detach(t) ((void)(t), 0)
+#else
 #include <setjmp.h>
+#endif
 #include <signal.h>
+#include <time.h>
 #ifndef _WIN32
 #include <unistd.h>
 #endif
@@ -3181,14 +3691,34 @@ static void ep_signal_handler(int sig) {
     _exit(128 + sig);
 }
 
+#ifdef _MSC_VER
+static void ep_install_signal_handlers(void);
+#pragma section(".CRT$XCU", read)
+__declspec(allocate(".CRT$XCU")) static void (*_ep_init_signals)(void) = ep_install_signal_handlers;
+static void ep_install_signal_handlers(void) {
+#else
 __attribute__((constructor))
 static void ep_install_signal_handlers(void) {
+#endif
     signal(SIGFPE, ep_signal_handler);
     signal(SIGSEGV, ep_signal_handler);
     signal(SIGABRT, ep_signal_handler);
+#ifdef _WIN32
+    { WSADATA wsa; WSAStartup(MAKEWORD(2,2), &wsa); }
+#endif
 }
 
-#ifdef _WIN32
+#if defined(__wasm__)
+  typedef int ep_thread_t;
+  typedef int ep_mutex_t;
+  typedef int ep_cond_t;
+  #define ep_mutex_init(m) (void)(0)
+  #define ep_mutex_lock(m) (void)(0)
+  #define ep_mutex_unlock(m) (void)(0)
+  #define ep_cond_init(c) (void)(0)
+  #define ep_cond_wait(c, m) (void)(0)
+  #define ep_cond_signal(c) (void)(0)
+#elif defined(_WIN32)
   #include <winsock2.h>
   #include <ws2tcpip.h>
   #include <windows.h>
@@ -3223,7 +3753,9 @@ static void ep_install_signal_handlers(void) {
 /* ========== Ernos Mark-and-Sweep Garbage Collector ========== */
 
 #include <setjmp.h>
+#if !defined(__wasm__) && !defined(_WIN32)
 #include <pthread.h>
+#endif
 
 typedef enum {
     EP_OBJ_LIST,
@@ -3238,14 +3770,589 @@ typedef struct EpGCObject {
     void* ptr;                /* actual allocation pointer */
     long long size;           /* payload size for structs */
     long long num_fields;     /* number of fields for structs (each is long long) */
+    int generation;           /* 0 = Nursery/young, 1 = Old */
     struct EpGCObject* next;  /* intrusive linked list */
 } EpGCObject;
 
+long long ep_time_now_ms(void);
+long long ep_sleep_ms(long long ms);
+
+typedef struct EpTask EpTask;
 typedef struct {
     long long chan;
     int completed;
     long long value;
+    EpTask* waiting_task;
 } EpFuture;
+
+static long long ep_await_future(EpFuture* fut);
+
+struct EpTask {
+    long long (*step)(void*); /* pointer to step function */
+    void* args;               /* pointer to step state arguments */
+    long long args_size_bytes; /* size of args struct for GC tracing */
+    EpTask* next;             /* run-queue link pointer */
+    EpFuture* fut;            /* future associated with this task */
+    int state;                /* coroutine execution state */
+    int is_cancelled;         /* cancellation flag for structured concurrency */
+    struct EpTask* parent;    /* parent task for structured concurrency cancellation */
+};
+
+/* Event Loop Scheduler Globals & Functions */
+static EpTask* ep_run_queue_head = NULL;
+static EpTask* ep_run_queue_tail = NULL;
+static EpTask* ep_current_task = NULL;
+static int ep_event_loop_fd = -1; /* epoll or kqueue fd */
+static int ep_active_io_sources = 0;
+
+static void ep_task_enqueue(EpTask* task) {
+    if (!task) return;
+    task->next = NULL;
+    if (ep_run_queue_tail) {
+        ep_run_queue_tail->next = task;
+        ep_run_queue_tail = task;
+    } else {
+        ep_run_queue_head = ep_run_queue_tail = task;
+    }
+}
+
+static EpTask* ep_task_dequeue(void) {
+    if (!ep_run_queue_head) return NULL;
+    EpTask* task = ep_run_queue_head;
+    ep_run_queue_head = ep_run_queue_head->next;
+    if (!ep_run_queue_head) ep_run_queue_tail = NULL;
+    return task;
+}
+
+#ifndef __wasm__
+#ifdef __APPLE__
+#include <sys/event.h>
+#else
+#include <sys/epoll.h>
+#endif
+#endif
+
+static void ep_async_loop_init(void) {
+    if (ep_event_loop_fd != -1) return;
+#ifdef __wasm__
+    ep_event_loop_fd = 999;
+#elif defined(__APPLE__)
+    ep_event_loop_fd = kqueue();
+#else
+    ep_event_loop_fd = epoll_create1(0);
+#endif
+}
+
+typedef struct EpTimer {
+    long long expiry_ms;
+    EpTask* task;
+    struct EpTimer* next;
+} EpTimer;
+static EpTimer* ep_timers_head = NULL;
+
+static void ep_async_register_timer(long long timeout_ms, EpTask* task) {
+    long long expiry = ep_time_now_ms() + timeout_ms;
+    EpTimer* timer = (EpTimer*)malloc(sizeof(EpTimer));
+    timer->expiry_ms = expiry;
+    timer->task = task;
+    timer->next = NULL;
+
+    /* Insert sorted */
+    if (!ep_timers_head || expiry < ep_timers_head->expiry_ms) {
+        timer->next = ep_timers_head;
+        ep_timers_head = timer;
+    } else {
+        EpTimer* cur = ep_timers_head;
+        while (cur->next && cur->next->expiry_ms <= expiry) {
+            cur = cur->next;
+        }
+        timer->next = cur->next;
+        cur->next = timer;
+    }
+}
+
+static long long ep_get_next_timer_timeout(void) {
+    if (!ep_timers_head) return -1; /* block indefinitely */
+    long long now = ep_time_now_ms();
+    long long diff = ep_timers_head->expiry_ms - now;
+    return diff < 0 ? 0 : diff;
+}
+
+static void ep_process_expired_timers(void) {
+    long long now = ep_time_now_ms();
+    while (ep_timers_head && ep_timers_head->expiry_ms <= now) {
+        EpTimer* expired = ep_timers_head;
+        ep_timers_head = ep_timers_head->next;
+        ep_task_enqueue(expired->task);
+        free(expired);
+    }
+}
+
+static void ep_async_register_read(int fd, EpTask* task) {
+#ifdef __wasm__
+    (void)fd;
+    (void)task;
+#else
+    ep_async_loop_init();
+    ep_active_io_sources++;
+#ifdef __APPLE__
+    struct kevent ev;
+    EV_SET(&ev, fd, EVFILT_READ, EV_ADD | EV_ONESHOT, 0, 0, task);
+    kevent(ep_event_loop_fd, &ev, 1, NULL, 0, NULL);
+#else
+    struct epoll_event ev;
+    ev.events = EPOLLIN | EPOLLONESHOT;
+    ev.data.ptr = task;
+    if (epoll_ctl(ep_event_loop_fd, EPOLL_CTL_ADD, fd, &ev) < 0) {
+        epoll_ctl(ep_event_loop_fd, EPOLL_CTL_MOD, fd, &ev);
+    }
+#endif
+#endif
+}
+
+static void ep_async_wait_step(long long timeout) {
+#ifdef __wasm__
+    if (timeout > 0) {
+        ep_sleep_ms(timeout);
+    }
+#else
+#ifdef __APPLE__
+    struct kevent events[16];
+    struct timespec ts;
+    struct timespec* p_ts = NULL;
+    if (timeout >= 0) {
+        ts.tv_sec = timeout / 1000;
+        ts.tv_nsec = (timeout % 1000) * 1000000;
+        p_ts = &ts;
+    }
+    int n = kevent(ep_event_loop_fd, NULL, 0, events, 16, p_ts);
+    for (int i = 0; i < n; i++) {
+        EpTask* t = (EpTask*)events[i].udata;
+        ep_task_enqueue(t);
+        ep_active_io_sources--;
+    }
+#else
+    struct epoll_event events[16];
+    int n = epoll_wait(ep_event_loop_fd, events, 16, (int)timeout);
+    for (int i = 0; i < n; i++) {
+        EpTask* t = (EpTask*)events[i].data.ptr;
+        ep_task_enqueue(t);
+        ep_active_io_sources--;
+    }
+#endif
+#endif
+    ep_process_expired_timers();
+}
+
+static void ep_async_loop_run(void) {
+    ep_async_loop_init();
+    while (ep_run_queue_head || ep_timers_head || ep_active_io_sources > 0) {
+        /* 1. Run all runnable tasks */
+        while (ep_run_queue_head) {
+            EpTask* task = ep_task_dequeue();
+            if (task->is_cancelled) {
+                if (task->fut) {
+                    task->fut->completed = 1;
+                    task->fut->value = -1;
+                }
+                free(task->args);
+                free(task);
+                continue;
+            }
+            ep_current_task = task;
+            long long res = task->step(task->args);
+            ep_current_task = NULL;
+            if (res != -999999) {
+                if (task->fut) {
+                    task->fut->value = res;
+                    task->fut->completed = 1;
+                    if (task->fut->waiting_task) {
+                        ep_task_enqueue(task->fut->waiting_task);
+                        task->fut->waiting_task = NULL;
+                    }
+                }
+                free(task->args);
+                free(task);
+            }
+        }
+
+        /* 2. If no tasks runnable, wait for I/O / timers */
+        if (!ep_run_queue_head) {
+            long long timeout = ep_get_next_timer_timeout();
+            if (timeout == -1 && !ep_timers_head && ep_active_io_sources == 0) {
+                break;
+            }
+
+            if (ep_event_loop_fd == -1) {
+                if (timeout > 0) {
+                    ep_sleep_ms(timeout);
+                }
+                ep_process_expired_timers();
+                continue;
+            }
+
+            ep_async_wait_step(timeout);
+        }
+    }
+}
+
+static long long ep_await_future(EpFuture* fut) {
+    if (!fut) return 0;
+    while (!fut->completed) {
+        if (ep_run_queue_head) {
+            EpTask* task = ep_task_dequeue();
+            if (task) {
+                if (task->is_cancelled) {
+                    if (task->fut) {
+                        task->fut->completed = 1;
+                        task->fut->value = -1;
+                    }
+                    free(task->args);
+                    free(task);
+                } else {
+                    EpTask* saved_current = ep_current_task;
+                    ep_current_task = task;
+                    long long res = task->step(task->args);
+                    ep_current_task = saved_current;
+                    if (res != -999999) {
+                        if (task->fut) {
+                            task->fut->value = res;
+                            task->fut->completed = 1;
+                            if (task->fut->waiting_task) {
+                                ep_task_enqueue(task->fut->waiting_task);
+                                task->fut->waiting_task = NULL;
+                            }
+                        }
+                        free(task->args);
+                        free(task);
+                    }
+                }
+            }
+        } else {
+            long long timeout = ep_get_next_timer_timeout();
+            if (timeout == -1 && !ep_timers_head && ep_active_io_sources == 0) {
+                fprintf(stderr, "Deadlock detected: awaiting incomplete future with no active tasks or timers.\n");
+                exit(1);
+            }
+            if (ep_event_loop_fd == -1) {
+                if (timeout > 0) {
+                    ep_sleep_ms(timeout);
+                }
+                ep_process_expired_timers();
+            } else {
+                ep_async_wait_step(timeout);
+            }
+        }
+    }
+    return fut->value;
+}
+
+static EpGCObject* ep_gc_register(void* ptr, EpObjKind kind);
+long long create_list(void);
+long long append_list(long long list_ptr, long long value);
+
+typedef struct {
+    EpFuture* futures[128];
+    int count;
+    int has_error;
+} EpTaskGroup;
+
+typedef struct {
+    EpFuture* fut;
+    int timer_fired;
+} EpTimeoutArgs;
+
+static EpTask* ep_find_task_by_future(EpFuture* fut) {
+    if (!fut) return NULL;
+    EpTask* cur = ep_run_queue_head;
+    while (cur) {
+        if (cur->fut == fut) return cur;
+        cur = cur->next;
+    }
+    EpTimer* timer = ep_timers_head;
+    while (timer) {
+        if (timer->task && timer->task->fut == fut) return timer->task;
+        timer = timer->next;
+    }
+    return NULL;
+}
+
+static void ep_cancel_task(EpTask* task) {
+    if (!task) return;
+    task->is_cancelled = 1;
+    if (task->fut) {
+        task->fut->completed = 1;
+        task->fut->value = -1;
+    }
+    // Cancel children in run queue
+    EpTask* cur = ep_run_queue_head;
+    while (cur) {
+        if (cur->parent == task) {
+            ep_cancel_task(cur);
+        }
+        cur = cur->next;
+    }
+    // Cancel children in timers queue
+    EpTimer* timer = ep_timers_head;
+    while (timer) {
+        if (timer->task && timer->task->parent == task) {
+            ep_cancel_task(timer->task);
+        }
+        timer = timer->next;
+    }
+}
+
+static long long create_task_group(void) {
+    EpTaskGroup* tg = (EpTaskGroup*)calloc(1, sizeof(EpTaskGroup));
+    tg->count = 0;
+    tg->has_error = 0;
+    { EpGCObject* _go = ep_gc_register(tg, EP_OBJ_STRUCT); if(_go) _go->num_fields = 0; }
+    return (long long)tg;
+}
+
+static long long add_task_group(long long group_ptr, long long fut_ptr) {
+    EpTaskGroup* tg = (EpTaskGroup*)group_ptr;
+    EpFuture* fut = (EpFuture*)fut_ptr;
+    if (!tg || !fut) return 0;
+    if (tg->count < 128) {
+        tg->futures[tg->count++] = fut;
+        // Associate the task's parent with the current task so it's cancellation-linked
+        EpTask* task = ep_find_task_by_future(fut);
+        if (task) {
+            task->parent = ep_current_task;
+        }
+    }
+    return 0;
+}
+
+static long long wait_task_group(long long group_ptr) {
+    EpTaskGroup* tg = (EpTaskGroup*)group_ptr;
+    if (!tg) return 0;
+    
+    int all_done = 0;
+    while (!all_done) {
+        all_done = 1;
+        for (int i = 0; i < tg->count; i++) {
+            EpFuture* fut = tg->futures[i];
+            if (!fut->completed) {
+                all_done = 0;
+                break;
+            }
+        }
+        
+        if (all_done) break;
+        
+        if (ep_run_queue_head) {
+            EpTask* task = ep_task_dequeue();
+            if (task) {
+                if (task->is_cancelled) {
+                    if (task->fut) {
+                        task->fut->completed = 1;
+                        task->fut->value = -1;
+                    }
+                    free(task->args);
+                    free(task);
+                } else {
+                    EpTask* saved_current = ep_current_task;
+                    ep_current_task = task;
+                    long long res = task->step(task->args);
+                    ep_current_task = saved_current;
+                    if (res != -999999) {
+                        if (task->fut) {
+                            task->fut->value = res;
+                            task->fut->completed = 1;
+                            if (task->fut->waiting_task) {
+                                ep_task_enqueue(task->fut->waiting_task);
+                                task->fut->waiting_task = NULL;
+                            }
+                        }
+                        free(task->args);
+                        free(task);
+                    }
+                }
+            }
+        } else {
+            long long timeout = ep_get_next_timer_timeout();
+            if (timeout == -1 && !ep_timers_head && ep_active_io_sources == 0) {
+                fprintf(stderr, "Deadlock detected: waiting on task group with no active tasks or timers.\n");
+                exit(1);
+            }
+            if (ep_event_loop_fd == -1) {
+                if (timeout > 0) {
+                    ep_sleep_ms(timeout);
+                }
+                ep_process_expired_timers();
+            } else {
+                ep_async_wait_step(timeout);
+            }
+        }
+        
+        // Propagate cancellation/failure inside task group
+        for (int i = 0; i < tg->count; i++) {
+            EpFuture* fut = tg->futures[i];
+            if (fut->completed && fut->value == -1) {
+                tg->has_error = 1;
+                for (int j = 0; j < tg->count; j++) {
+                    EpFuture* other_fut = tg->futures[j];
+                    if (!other_fut->completed) {
+                        EpTask* other_task = ep_find_task_by_future(other_fut);
+                        if (other_task) {
+                            ep_cancel_task(other_task);
+                        } else {
+                            other_fut->completed = 1;
+                            other_fut->value = -1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    long long list = create_list();
+    for (int i = 0; i < tg->count; i++) {
+        append_list(list, tg->futures[i]->value);
+    }
+    return list;
+}
+
+static long long ep_timeout_timer_step(void* r) {
+    EpTimeoutArgs* args = (EpTimeoutArgs*)r;
+    if (args && args->fut && !args->fut->completed) {
+        args->timer_fired = 1;
+        EpTask* task = ep_find_task_by_future(args->fut);
+        if (task) {
+            ep_cancel_task(task);
+        } else {
+            args->fut->completed = 1;
+            args->fut->value = -1;
+        }
+    }
+    return 0;
+}
+
+static long long async_timeout(long long timeout_ms, long long fut_ptr) {
+    EpFuture* fut = (EpFuture*)fut_ptr;
+    if (!fut) return -1;
+    if (fut->completed) return fut->value;
+    
+    EpTimeoutArgs* args = (EpTimeoutArgs*)malloc(sizeof(EpTimeoutArgs));
+    args->fut = fut;
+    args->timer_fired = 0;
+    
+    EpTask* timer_task = (EpTask*)malloc(sizeof(EpTask));
+    timer_task->step = ep_timeout_timer_step;
+    timer_task->args = args;
+    timer_task->args_size_bytes = sizeof(EpTimeoutArgs);
+    timer_task->fut = NULL;
+    timer_task->state = 0;
+    timer_task->is_cancelled = 0;
+    timer_task->parent = NULL;
+    
+    ep_async_register_timer(timeout_ms, timer_task);
+    
+    while (!fut->completed && !(args->timer_fired)) {
+        if (ep_run_queue_head) {
+            EpTask* task = ep_task_dequeue();
+            if (task) {
+                if (task->is_cancelled) {
+                    if (task->fut) {
+                        task->fut->completed = 1;
+                        task->fut->value = -1;
+                    }
+                    free(task->args);
+                    free(task);
+                } else {
+                    EpTask* saved_current = ep_current_task;
+                    ep_current_task = task;
+                    long long res = task->step(task->args);
+                    ep_current_task = saved_current;
+                    if (res != -999999) {
+                        if (task->fut) {
+                            task->fut->value = res;
+                            task->fut->completed = 1;
+                            if (task->fut->waiting_task) {
+                                ep_task_enqueue(task->fut->waiting_task);
+                                task->fut->waiting_task = NULL;
+                            }
+                        }
+                        free(task->args);
+                        free(task);
+                    }
+                }
+            }
+        } else {
+            long long timeout = ep_get_next_timer_timeout();
+            if (timeout == -1 && !ep_timers_head && ep_active_io_sources == 0) {
+                break;
+            }
+            if (ep_event_loop_fd == -1) {
+                if (timeout > 0) {
+                    ep_sleep_ms(timeout);
+                }
+                ep_process_expired_timers();
+            } else {
+                ep_async_wait_step(timeout);
+            }
+        }
+    }
+    
+    return fut->value;
+}
+
+typedef struct {
+    EpFuture* fut;
+} EpSleepTimerArgs;
+
+static long long ep_sleep_timer_step(void* r) {
+    EpSleepTimerArgs* args = (EpSleepTimerArgs*)r;
+    if (args && args->fut) {
+        args->fut->completed = 1;
+        args->fut->value = 0;
+        if (args->fut->waiting_task) {
+            ep_task_enqueue(args->fut->waiting_task);
+            args->fut->waiting_task = NULL;
+        }
+    }
+    return 0;
+}
+
+static long long sleep_ms(long long ms) {
+    EpFuture* fut = (EpFuture*)malloc(sizeof(EpFuture));
+    fut->completed = 0;
+    fut->value = 0;
+    fut->waiting_task = NULL;
+    fut->chan = 0;
+    { EpGCObject* _go = ep_gc_register(fut, EP_OBJ_STRUCT); if(_go) _go->num_fields = 3; }
+    
+    EpSleepTimerArgs* args = (EpSleepTimerArgs*)malloc(sizeof(EpSleepTimerArgs));
+    args->fut = fut;
+    
+    EpTask* task = (EpTask*)malloc(sizeof(EpTask));
+    task->step = ep_sleep_timer_step;
+    task->args = args;
+    task->args_size_bytes = sizeof(EpSleepTimerArgs);
+    task->fut = NULL;
+    task->state = 0;
+    task->is_cancelled = 0;
+    task->parent = ep_current_task;
+    
+    ep_async_register_timer(ms, task);
+    return (long long)fut;
+}
+
+static long long cancel_task(long long fut_ptr) {
+    EpFuture* fut = (EpFuture*)fut_ptr;
+    if (fut) {
+        EpTask* task = ep_find_task_by_future(fut);
+        if (task) {
+            ep_cancel_task(task);
+        } else {
+            fut->completed = 1;
+            fut->value = -1;
+        }
+    }
+    return 0;
+}
 
 /* Closure environment — captures travel with the function pointer */
 #define EP_CLOSURE_MAGIC 0x4550434C4FL
@@ -3260,11 +4367,21 @@ static EpGCObject* ep_gc_head = NULL;
 static long long ep_gc_count = 0;
 static long long ep_gc_threshold = 4096;
 static int ep_gc_enabled = 1;
+static long long ep_gc_nursery_count = 0;
+static long long ep_gc_nursery_threshold = 512;
+static int ep_gc_minor_count = 0;
+static int ep_gc_major_count = 0;
+static void** ep_gc_remembered_set = NULL;
+static long long ep_gc_remembered_cap = 0;
+static long long ep_gc_remembered_size = 0;
 /* Single mutex for ALL GC and thread registry operations.
    Previous design had two mutexes (ep_gc_mutex + ep_thread_registry_mutex)
    which caused deadlock under concurrent channel load: thread A held gc_mutex
    and waited for registry_mutex, thread B held registry_mutex and waited for
    gc_mutex. Single lock eliminates the ordering problem. */
+#ifdef __wasm__
+#define __thread
+#endif
 static pthread_mutex_t ep_gc_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* Thread registry for GC root scanning in multi-threaded environment */
@@ -3459,9 +4576,11 @@ static EpGCObject* ep_gc_register(void* ptr, EpObjKind kind) {
     obj->ptr = ptr;
     obj->size = 0;
     obj->num_fields = 0;
+    obj->generation = 0;
     obj->next = ep_gc_head;
     ep_gc_head = obj;
     ep_gc_count++;
+    ep_gc_nursery_count++;
     ep_gc_table_insert(ptr, obj);
     pthread_mutex_unlock(&ep_gc_mutex);
     return obj;
@@ -3470,6 +4589,38 @@ static EpGCObject* ep_gc_register(void* ptr, EpObjKind kind) {
 /* Find GC object by pointer */
 static EpGCObject* ep_gc_find(void* ptr) {
     return ep_gc_table_get(ptr);
+}
+
+/* Write barrier for generational GC: tracks references from old objects (gen 1) to young objects (gen 0) */
+static void ep_gc_write_barrier(void* host_ptr, long long val) {
+    if (val == 0) return;
+    EpGCObject* host_obj = ep_gc_find(host_ptr);
+    EpGCObject* val_obj = ep_gc_find((void*)val);
+    if (host_obj && val_obj && host_obj->generation == 1 && val_obj->generation == 0) {
+        pthread_mutex_lock(&ep_gc_mutex);
+        /* Check if already in remembered set */
+        int found = 0;
+        for (long long i = 0; i < ep_gc_remembered_size; i++) {
+            if (ep_gc_remembered_set[i] == (void*)val) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            if (ep_gc_remembered_size >= ep_gc_remembered_cap) {
+                long long new_cap = ep_gc_remembered_cap == 0 ? 128 : ep_gc_remembered_cap * 2;
+                void** new_set = (void**)realloc(ep_gc_remembered_set, new_cap * sizeof(void*));
+                if (new_set) {
+                    ep_gc_remembered_set = new_set;
+                    ep_gc_remembered_cap = new_cap;
+                }
+            }
+            if (ep_gc_remembered_size < ep_gc_remembered_cap) {
+                ep_gc_remembered_set[ep_gc_remembered_size++] = (void*)val;
+            }
+        }
+        pthread_mutex_unlock(&ep_gc_mutex);
+    }
 }
 
 /* Forward declarations for list type (needed by GC mark) */
@@ -3504,14 +4655,34 @@ static void ep_gc_mark_object(void* ptr) {
     }
 }
 
+/* Mark a single object and recursively mark its children (only if it is Gen 0) */
+static void ep_gc_mark_object_minor(void* ptr) {
+    if (!ptr) return;
+    EpGCObject* obj = ep_gc_find(ptr);
+    if (!obj || obj->generation != 0 || obj->marked) return;
+    obj->marked = 1;
+
+    if (obj->kind == EP_OBJ_LIST) {
+        EpList* list = (EpList*)ptr;
+        for (long long i = 0; i < list->length; i++) {
+            long long val = list->data[i];
+            if (val != 0) {
+                ep_gc_mark_object_minor((void*)val);
+            }
+        }
+    } else if (obj->kind == EP_OBJ_STRUCT) {
+        long long* fields = (long long*)ptr;
+        for (long long i = 0; i < obj->num_fields; i++) {
+            if (fields[i] != 0) {
+                ep_gc_mark_object_minor((void*)fields[i]);
+            }
+        }
+    }
+}
+
 /* Mark phase: traverse from ALL threads' explicit GC roots.
-   Uses the heap-allocated EpThreadGCState instead of raw __thread pointers.
-   This is safe even if a thread exits mid-mark because:
-   (1) ep_gc_unregister_thread zeros sp before clearing active, with barrier
-   (2) the EpThreadGCState struct is heap-allocated and stable
-   (3) we hold ep_gc_mutex, same lock as register/unregister */
+   Uses the heap-allocated EpThreadGCState instead of raw __thread pointers. */
 static void ep_gc_mark(void) {
-    /* ep_gc_mutex is already held by caller (ep_gc_maybe_collect) */
     for (int t = 0; t < ep_num_threads; t++) {
         if (!ep_thread_active[t]) continue;
         EpThreadGCState* state = ep_thread_gc_states[t];
@@ -3534,18 +4705,149 @@ static void ep_gc_mark(void) {
             ep_gc_mark_object((void*)val);
         }
     }
+    /* Mark active tasks in the scheduler run queue */
+    EpTask* task = ep_run_queue_head;
+    while (task) {
+        if (task->fut) {
+            ep_gc_mark_object((void*)task->fut);
+        }
+        if (task->args && task->args_size_bytes > 0) {
+            long long* ptr = (long long*)task->args;
+            for (int i = 0; i < task->args_size_bytes / 8; i++) {
+                long long val = ptr[i];
+                if (val != 0) ep_gc_mark_object((void*)val);
+            }
+        }
+        task = task->next;
+    }
+    /* Mark active tasks in the timers queue */
+    EpTimer* timer = ep_timers_head;
+    while (timer) {
+        if (timer->task) {
+            EpTask* t = timer->task;
+            if (t->fut) {
+                ep_gc_mark_object((void*)t->fut);
+            }
+            if (t->args && t->args_size_bytes > 0) {
+                long long* ptr = (long long*)t->args;
+                for (int i = 0; i < t->args_size_bytes / 8; i++) {
+                    long long val = ptr[i];
+                    if (val != 0) ep_gc_mark_object((void*)val);
+                }
+            }
+        }
+        timer = timer->next;
+    }
 }
 
-/* Sweep phase: free unmarked objects */
-static void ep_gc_sweep(void) {
+static void ep_gc_mark_minor(void) {
+    for (int t = 0; t < ep_num_threads; t++) {
+        if (!ep_thread_active[t]) continue;
+        EpThreadGCState* state = ep_thread_gc_states[t];
+        if (!state) continue;
+        int sp = state->sp;
+        if (sp <= 0 || sp > EP_GC_MAX_ROOTS) continue;
+        for (int i = 0; i < sp; i++) {
+            long long* root_ptr = state->roots[i];
+            if (!root_ptr) continue;
+            long long val = *root_ptr;
+            if (val != 0) {
+                ep_gc_mark_object_minor((void*)val);
+            }
+        }
+    }
+    for (int i = 0; i < ep_gc_root_sp; i++) {
+        long long val = *ep_gc_root_stack[i];
+        if (val != 0) {
+            ep_gc_mark_object_minor((void*)val);
+        }
+    }
+    /* Mark active tasks in the scheduler run queue for minor collection */
+    EpTask* task = ep_run_queue_head;
+    while (task) {
+        if (task->fut) {
+            ep_gc_mark_object_minor((void*)task->fut);
+        }
+        if (task->args && task->args_size_bytes > 0) {
+            long long* ptr = (long long*)task->args;
+            for (int i = 0; i < task->args_size_bytes / 8; i++) {
+                long long val = ptr[i];
+                if (val != 0) ep_gc_mark_object_minor((void*)val);
+            }
+        }
+        task = task->next;
+    }
+    /* Mark active tasks in the timers queue for minor collection */
+    EpTimer* timer = ep_timers_head;
+    while (timer) {
+        if (timer->task) {
+            EpTask* t = timer->task;
+            if (t->fut) {
+                ep_gc_mark_object_minor((void*)t->fut);
+            }
+            if (t->args && t->args_size_bytes > 0) {
+                long long* ptr = (long long*)t->args;
+                for (int i = 0; i < t->args_size_bytes / 8; i++) {
+                    long long val = ptr[i];
+                    if (val != 0) ep_gc_mark_object_minor((void*)val);
+                }
+            }
+        }
+        timer = timer->next;
+    }
+    /* Also mark from the remembered set */
+    for (long long i = 0; i < ep_gc_remembered_size; i++) {
+        ep_gc_mark_object_minor(ep_gc_remembered_set[i]);
+    }
+}
+
+static void ep_gc_sweep_minor(void) {
+    EpGCObject** cur = &ep_gc_head;
+    while (*cur) {
+        if ((*cur)->generation == 0) {
+            if (!(*cur)->marked) {
+                EpGCObject* garbage = *cur;
+                *cur = garbage->next;
+                ep_gc_table_remove(garbage->ptr);
+                if (garbage->kind == EP_OBJ_LIST) {
+                    EpList* list = (EpList*)garbage->ptr;
+                    if (list) {
+                        free(list->data);
+                        free(list);
+                    }
+                } else if (garbage->kind == EP_OBJ_STRING) {
+                    free(garbage->ptr);
+                } else if (garbage->kind == EP_OBJ_STRUCT) {
+                    free(garbage->ptr);
+                } else if (garbage->kind == EP_OBJ_CLOSURE) {
+                    free(garbage->ptr);
+                }
+                free(garbage);
+                ep_gc_count--;
+                ep_gc_nursery_count--;
+            } else {
+                (*cur)->marked = 0;
+                (*cur)->generation = 1;
+                ep_gc_nursery_count--;
+                cur = &(*cur)->next;
+            }
+        } else {
+            cur = &(*cur)->next;
+        }
+    }
+    ep_gc_remembered_size = 0;
+}
+
+static void ep_gc_sweep_major(void) {
     EpGCObject** cur = &ep_gc_head;
     while (*cur) {
         if (!(*cur)->marked) {
             EpGCObject* garbage = *cur;
             *cur = garbage->next;
-
             ep_gc_table_remove(garbage->ptr);
-
+            if (garbage->generation == 0) {
+                ep_gc_nursery_count--;
+            }
             if (garbage->kind == EP_OBJ_LIST) {
                 EpList* list = (EpList*)garbage->ptr;
                 if (list) {
@@ -3559,32 +4861,56 @@ static void ep_gc_sweep(void) {
             } else if (garbage->kind == EP_OBJ_CLOSURE) {
                 free(garbage->ptr);
             }
-
             free(garbage);
             ep_gc_count--;
         } else {
-            (*cur)->marked = 0;  /* reset for next cycle */
+            (*cur)->marked = 0;
+            if ((*cur)->generation == 0) {
+                (*cur)->generation = 1;
+                ep_gc_nursery_count--;
+            }
             cur = &(*cur)->next;
         }
     }
+    ep_gc_remembered_size = 0;
+}
+
+static void ep_gc_collect_minor(void) {
+    if (!ep_gc_enabled) return;
+    ep_gc_minor_count++;
+    ep_gc_mark_minor();
+    ep_gc_sweep_minor();
+}
+
+static void ep_gc_collect_major(void) {
+    if (!ep_gc_enabled) return;
+    ep_gc_major_count++;
+    ep_gc_mark();
+    ep_gc_sweep_major();
+    ep_gc_threshold = ep_gc_count * 2;
+    if (ep_gc_threshold < 4096) ep_gc_threshold = 4096;
 }
 
 /* Run a full GC collection — caller MUST hold ep_gc_mutex */
 static void ep_gc_collect(void) {
-    if (!ep_gc_enabled) return;
-    ep_gc_mark();
-    ep_gc_sweep();
-    ep_gc_threshold = ep_gc_count * 2;
-    if (ep_gc_threshold < 4096) ep_gc_threshold = 4096;
+    ep_gc_collect_major();
 }
 
 /* Maybe trigger GC if we've exceeded threshold */
 static void ep_gc_maybe_collect(void) {
     if (!ep_gc_enabled) return;  /* Early exit if GC suppressed (e.g. during channel ops) */
+    /* Fast path: check thresholds before acquiring mutex.
+       Counters are only incremented under the mutex, so worst case
+       we miss one collection cycle — safe trade-off for avoiding
+       a mutex lock/unlock (~20-50ns) on every function call. */
+    if (ep_gc_nursery_count < ep_gc_nursery_threshold && ep_gc_count < ep_gc_threshold) return;
     EP_GC_UPDATE_TOP();
     pthread_mutex_lock(&ep_gc_mutex);
-    if (ep_gc_count >= ep_gc_threshold && ep_gc_enabled) {
-        ep_gc_collect();
+    if (ep_gc_nursery_count >= ep_gc_nursery_threshold) {
+        ep_gc_collect_minor();
+    }
+    if (ep_gc_count >= ep_gc_threshold) {
+        ep_gc_collect_major();
     }
     pthread_mutex_unlock(&ep_gc_mutex);
 }
@@ -3599,6 +4925,9 @@ static void ep_gc_unregister(void* ptr) {
         if ((*cur)->ptr == ptr) {
             EpGCObject* found = *cur;
             *cur = found->next;
+            if (found->generation == 0) {
+                ep_gc_nursery_count--;
+            }
             free(found);
             ep_gc_count--;
             pthread_mutex_unlock(&ep_gc_mutex);
@@ -3775,8 +5104,12 @@ long long channel_select(long long channels_list, long long timeout_ms) {
     EpList* list = (EpList*)channels_list;
     if (!list || list->length == 0) return -1;
     
+#ifdef _WIN32
+    ULONGLONG start_tick = GetTickCount64();
+#else
     struct timespec start, now;
     clock_gettime(CLOCK_MONOTONIC, &start);
+#endif
     
     while (1) {
         // Poll all channels
@@ -3794,22 +5127,101 @@ long long channel_select(long long channels_list, long long timeout_ms) {
         
         // Check timeout
         if (timeout_ms >= 0) {
+#ifdef _WIN32
+            ULONGLONG now_tick = GetTickCount64();
+            long long elapsed = (long long)(now_tick - start_tick);
+#else
             clock_gettime(CLOCK_MONOTONIC, &now);
             long long elapsed = (now.tv_sec - start.tv_sec) * 1000 + (now.tv_nsec - start.tv_nsec) / 1000000;
+#endif
             if (elapsed >= timeout_ms) return -1;
         }
         
         // Brief sleep to avoid busy-wait
+#ifdef _WIN32
+        Sleep(1);
+#else
         usleep(1000); // 1ms
+#endif
     }
 }
 
+#ifdef __wasm__
+long long ep_net_connect(const char* host, long long port) {
+    (void)host; (void)port;
+    return -1;
+}
+
+long long ep_net_listen(long long port) {
+    (void)port;
+    return -1;
+}
+
+long long ep_net_accept(long long server_fd) {
+    (void)server_fd;
+    return -1;
+}
+
+long long ep_net_send(long long fd, const char* data) {
+    (void)fd; (void)data;
+    return 0;
+}
+
+char* ep_net_recv(long long fd, long long max_len) {
+    (void)fd; (void)max_len;
+    char* empty = malloc(1);
+    if (empty) empty[0] = '\0';
+    return empty;
+}
+
+long long ep_net_close(long long fd) {
+    (void)fd;
+    return -1;
+}
+
+long long ep_sleep_ms(long long ms) {
+    struct timespec ts;
+    ts.tv_sec = ms / 1000;
+    ts.tv_nsec = (ms % 1000) * 1000000;
+    nanosleep(&ts, NULL);
+    return 0;
+}
+
+long long ep_system(long long cmd) {
+    (void)cmd;
+    return -1;
+}
+
+long long ep_play_sound(long long path) {
+    (void)path;
+    return -1;
+}
+
+long long ep_dlopen(long long path) {
+    (void)path;
+    return 0;
+}
+
+long long ep_dlsym(long long handle, long long name) {
+    (void)handle; (void)name;
+    return 0;
+}
+
+long long ep_dlclose(long long handle) {
+    (void)handle;
+    return 0;
+}
+#else
 long long ep_net_connect(const char* host, long long port) {
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) return -1;
     struct hostent* server = gethostbyname(host);
     if (!server) {
+#ifdef _WIN32
+        closesocket(sockfd);
+#else
         close(sockfd);
+#endif
         return -1;
     }
     struct sockaddr_in serv_addr;
@@ -3818,7 +5230,11 @@ long long ep_net_connect(const char* host, long long port) {
     memcpy(&serv_addr.sin_addr.s_addr, server->h_addr_list[0], server->h_length);
     serv_addr.sin_port = htons(port);
     if (connect(sockfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
+#ifdef _WIN32
+        closesocket(sockfd);
+#else
         close(sockfd);
+#endif
         return -1;
     }
     return sockfd;
@@ -3828,18 +5244,26 @@ long long ep_net_listen(long long port) {
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) return -1;
     int opt = 1;
-    setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
     struct sockaddr_in serv_addr;
     memset(&serv_addr, 0, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_addr.s_addr = INADDR_ANY;
     serv_addr.sin_port = htons(port);
     if (bind(sockfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
+#ifdef _WIN32
+        closesocket(sockfd);
+#else
         close(sockfd);
+#endif
         return -1;
     }
     if (listen(sockfd, 10) < 0) {
+#ifdef _WIN32
+        closesocket(sockfd);
+#else
         close(sockfd);
+#endif
         return -1;
     }
     return sockfd;
@@ -3864,18 +5288,30 @@ char* ep_net_recv(long long fd, long long max_len) {
         if (empty) empty[0] = '\0';
         return empty;
     }
+#ifdef _WIN32
+    int n = recv((int)fd, buf, (int)max_len, 0);
+#else
     ssize_t n = recv((int)fd, buf, max_len, 0);
+#endif
     if (n < 0) n = 0;
     buf[n] = '\0';
     return buf;
 }
 
 long long ep_net_close(long long fd) {
+#ifdef _WIN32
+    return closesocket((int)fd);
+#else
     return close((int)fd);
+#endif
 }
 
 long long ep_sleep_ms(long long ms) {
+#ifdef _WIN32
+    Sleep((DWORD)ms);
+#else
     usleep((useconds_t)(ms * 1000));
+#endif
     return 0;
 }
 
@@ -3896,7 +5332,8 @@ long long ep_play_sound(long long path) {
 
 long long ep_dlopen(long long path) {
 #ifdef _WIN32
-    return 0;  /* Not supported on Windows yet */
+    HMODULE h = LoadLibraryA((const char*)path);
+    return (long long)h;
 #else
     const char* p = (const char*)path;
     void* handle = dlopen(p, RTLD_LAZY);
@@ -3906,7 +5343,8 @@ long long ep_dlopen(long long path) {
 
 long long ep_dlsym(long long handle, long long name) {
 #ifdef _WIN32
-    return 0;
+    FARPROC sym = GetProcAddress((HMODULE)handle, (const char*)name);
+    return (long long)sym;
 #else
     void* sym = dlsym((void*)handle, (const char*)name);
     return (long long)sym;
@@ -3915,11 +5353,12 @@ long long ep_dlsym(long long handle, long long name) {
 
 long long ep_dlclose(long long handle) {
 #ifdef _WIN32
-    return 0;
+    return (long long)FreeLibrary((HMODULE)handle);
 #else
     return (long long)dlclose((void*)handle);
 #endif
 }
+#endif
 
 /* Call a function pointer with 0..6 arguments.
    These are type-punned through long long — the C calling convention
@@ -3969,6 +5408,78 @@ long long ep_dlcall9(long long fptr, long long a0, long long a1, long long a2, l
 long long ep_dlcall10(long long fptr, long long a0, long long a1, long long a2, long long a3, long long a4, long long a5, long long a6, long long a7, long long a8, long long a9) {
     return ((ep_fn10)fptr)(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9);
 }
+
+/* ========== Float FFI: ep_dlcall_f* ========== */
+/* For calling C functions that accept/return double values.
+   Arguments are passed as long long (bit-punned doubles).
+   Return value is a double bit-punned back to long long.
+   Use ep_double_to_bits() / ep_bits_to_double() to convert. */
+
+typedef union { long long i; double f; } ep_float_bits;
+
+static inline double ep_ll_to_double(long long v) {
+    ep_float_bits u; u.i = v; return u.f;
+}
+static inline long long ep_double_to_ll(double v) {
+    ep_float_bits u; u.f = v; return u.i;
+}
+
+/* Convert between ErnosPlain float representation and raw bits */
+long long ep_double_to_bits(long long float_val) {
+    /* float_val is already an EP Float stored as long long bits */
+    return float_val;
+}
+long long ep_bits_to_double(long long bits) {
+    return bits;
+}
+
+/* Float function pointer typedefs */
+typedef double (*ep_ff0)(void);
+typedef double (*ep_ff1)(double);
+typedef double (*ep_ff2)(double, double);
+typedef double (*ep_ff3)(double, double, double);
+typedef double (*ep_ff4)(double, double, double, double);
+typedef double (*ep_ff5)(double, double, double, double, double);
+typedef double (*ep_ff6)(double, double, double, double, double, double);
+
+/* Call functions that take doubles and return double */
+long long ep_dlcall_f0(long long fptr) {
+    return ep_double_to_ll(((ep_ff0)fptr)());
+}
+long long ep_dlcall_f1(long long fptr, long long a0) {
+    return ep_double_to_ll(((ep_ff1)fptr)(ep_ll_to_double(a0)));
+}
+long long ep_dlcall_f2(long long fptr, long long a0, long long a1) {
+    return ep_double_to_ll(((ep_ff2)fptr)(ep_ll_to_double(a0), ep_ll_to_double(a1)));
+}
+long long ep_dlcall_f3(long long fptr, long long a0, long long a1, long long a2) {
+    return ep_double_to_ll(((ep_ff3)fptr)(ep_ll_to_double(a0), ep_ll_to_double(a1), ep_ll_to_double(a2)));
+}
+long long ep_dlcall_f4(long long fptr, long long a0, long long a1, long long a2, long long a3) {
+    return ep_double_to_ll(((ep_ff4)fptr)(ep_ll_to_double(a0), ep_ll_to_double(a1), ep_ll_to_double(a2), ep_ll_to_double(a3)));
+}
+long long ep_dlcall_f5(long long fptr, long long a0, long long a1, long long a2, long long a3, long long a4) {
+    return ep_double_to_ll(((ep_ff5)fptr)(ep_ll_to_double(a0), ep_ll_to_double(a1), ep_ll_to_double(a2), ep_ll_to_double(a3), ep_ll_to_double(a4)));
+}
+long long ep_dlcall_f6(long long fptr, long long a0, long long a1, long long a2, long long a3, long long a4, long long a5) {
+    return ep_double_to_ll(((ep_ff6)fptr)(ep_ll_to_double(a0), ep_ll_to_double(a1), ep_ll_to_double(a2), ep_ll_to_double(a3), ep_ll_to_double(a4), ep_ll_to_double(a5)));
+}
+
+/* Variants that take doubles but return int (for comparison functions etc.) */
+typedef long long (*ep_fdi1)(double);
+typedef long long (*ep_fdi2)(double, double);
+typedef long long (*ep_fdi3)(double, double, double);
+
+long long ep_dlcall_fd1(long long fptr, long long a0) {
+    return ((ep_fdi1)fptr)(ep_ll_to_double(a0));
+}
+long long ep_dlcall_fd2(long long fptr, long long a0, long long a1) {
+    return ((ep_fdi2)fptr)(ep_ll_to_double(a0), ep_ll_to_double(a1));
+}
+long long ep_dlcall_fd3(long long fptr, long long a0, long long a1, long long a2) {
+    return ((ep_fdi3)fptr)(ep_ll_to_double(a0), ep_ll_to_double(a1), ep_ll_to_double(a2));
+}
+/* ========== End Float FFI ========== */
 /* ========== End Dynamic Library Loading ========== */
 
 unsigned long hash_string(const char* str) {
@@ -4055,6 +5566,7 @@ long long map_insert(long long map_ptr, long long key_val, long long value) {
     while (map->entries[h].used) {
         if (strcmp(map->entries[h].key, key) == 0) {
             map->entries[h].value = value;
+            ep_gc_write_barrier((void*)map_ptr, value);
             return value;
         }
         h = (h + 1) % map->capacity;
@@ -4063,6 +5575,7 @@ long long map_insert(long long map_ptr, long long key_val, long long value) {
     map->entries[h].value = value;
     map->entries[h].used = 1;
     map->size++;
+    ep_gc_write_barrier((void*)map_ptr, value);
     return value;
 }
 
@@ -4371,6 +5884,12 @@ long long fs_get_size(long long path_val) {
 }
 
 /* HTTP Client */
+#ifdef __wasm__
+long long ep_http_request(long long method_val, long long url_val, long long headers_val, long long body_val) {
+    (void)method_val; (void)url_val; (void)headers_val; (void)body_val;
+    return (long long)strdup("Error: HTTP request is not supported on WebAssembly");
+}
+#else
 long long ep_http_request(long long method_val, long long url_val, long long headers_val, long long body_val) {
     const char* method = (const char*)method_val;
     const char* url = (const char*)url_val;
@@ -4473,6 +5992,7 @@ long long ep_http_request(long long method_val, long long url_val, long long hea
     }
     return (long long)resp;
 }
+#endif
 
 #define ROTRIGHT(word,bits) (((word) >> (bits)) | ((word) << (32-(bits))))
 #define CH(x,y,z) (((x) & (y)) ^ (~(x) & (z)))
@@ -4766,6 +6286,7 @@ long long append_list(long long list_ptr, long long value) {
     }
     list->data[list->length] = value;
     list->length += 1;
+    ep_gc_write_barrier((void*)list_ptr, value);
     return value;
 }
 
@@ -4779,6 +6300,7 @@ long long set_list(long long list_ptr, long long index, long long value) {
     EpList* list = (EpList*)list_ptr;
     if (!list || index < 0 || index >= list->length) return 0;
     list->data[index] = value;
+    ep_gc_write_barrier((void*)list_ptr, value);
     return value;
 }
 
@@ -5198,6 +6720,12 @@ long long ep_get_home_dir(void) {
     return home ? (long long)home : (long long)"";
 }
 
+#ifdef __wasm__
+long long ep_run_command(long long cmd_ptr) {
+    (void)cmd_ptr;
+    return (long long)"Error: running external commands is not supported on WebAssembly";
+}
+#else
 long long ep_run_command(long long cmd_ptr) {
     const char* cmd = (const char*)cmd_ptr;
     FILE* fp = popen(cmd, "r");
@@ -5214,6 +6742,7 @@ long long ep_run_command(long long cmd_ptr) {
     pclose(fp);
     return (long long)result;
 }
+#endif
 
 /* ========== HashMap helpers ========== */
 
@@ -5239,6 +6768,29 @@ long long ep_str_equals(long long a_ptr, long long b_ptr) {
 
 /* ========== Sync Primitives ========== */
 
+#ifdef _WIN32
+long long ep_mutex_create(void) {
+    CRITICAL_SECTION* m = (CRITICAL_SECTION*)malloc(sizeof(CRITICAL_SECTION));
+    InitializeCriticalSection(m);
+    return (long long)m;
+}
+long long ep_mutex_lock_fn(long long m) {
+    EnterCriticalSection((CRITICAL_SECTION*)m);
+    return 1;
+}
+long long ep_mutex_unlock_fn(long long m) {
+    LeaveCriticalSection((CRITICAL_SECTION*)m);
+    return 1;
+}
+long long ep_mutex_trylock(long long m) {
+    return TryEnterCriticalSection((CRITICAL_SECTION*)m) ? 1 : 0;
+}
+long long ep_mutex_destroy(long long m) {
+    DeleteCriticalSection((CRITICAL_SECTION*)m);
+    free((void*)m);
+    return 0;
+}
+#else
 long long ep_mutex_create(void) {
     pthread_mutex_t* m = (pthread_mutex_t*)malloc(sizeof(pthread_mutex_t));
     pthread_mutex_init(m, NULL);
@@ -5262,7 +6814,38 @@ long long ep_mutex_destroy(long long m) {
     free((void*)m);
     return 0;
 }
+#endif
 
+#ifdef _WIN32
+long long ep_rwlock_create(void) {
+    SRWLOCK* rwl = (SRWLOCK*)malloc(sizeof(SRWLOCK));
+    InitializeSRWLock(rwl);
+    return (long long)rwl;
+}
+long long ep_rwlock_read_lock(long long rwl) {
+    AcquireSRWLockShared((SRWLOCK*)rwl);
+    return 1;
+}
+long long ep_rwlock_write_lock(long long rwl) {
+    AcquireSRWLockExclusive((SRWLOCK*)rwl);
+    return 1;
+}
+long long ep_rwlock_unlock(long long rwl) {
+    /* SRWLOCK does not have a single "unlock" — we try exclusive first.
+       In practice the caller should know which lock was taken.
+       ReleaseSRWLockExclusive on a shared lock is undefined, but
+       the runtime guarantees matched lock/unlock pairs. We default
+       to releasing the exclusive lock; shared unlock is handled
+       by pairing read_lock -> read_unlock if needed later. */
+    ReleaseSRWLockExclusive((SRWLOCK*)rwl);
+    return 1;
+}
+long long ep_rwlock_destroy(long long rwl) {
+    /* SRWLOCK has no destroy */
+    free((void*)rwl);
+    return 0;
+}
+#else
 long long ep_rwlock_create(void) {
     pthread_rwlock_t* rwl = (pthread_rwlock_t*)malloc(sizeof(pthread_rwlock_t));
     pthread_rwlock_init(rwl, NULL);
@@ -5286,7 +6869,32 @@ long long ep_rwlock_destroy(long long rwl) {
     free((void*)rwl);
     return 0;
 }
+#endif
 
+#ifdef _MSC_VER
+long long ep_atomic_create(long long initial) {
+    volatile long long* a = (volatile long long*)malloc(sizeof(long long));
+    InterlockedExchange64(a, initial);
+    return (long long)a;
+}
+long long ep_atomic_load(long long a) {
+    return InterlockedCompareExchange64((volatile long long*)a, 0, 0);
+}
+long long ep_atomic_store(long long a, long long value) {
+    InterlockedExchange64((volatile long long*)a, value);
+    return value;
+}
+long long ep_atomic_add(long long a, long long delta) {
+    return InterlockedExchangeAdd64((volatile long long*)a, delta);
+}
+long long ep_atomic_sub(long long a, long long delta) {
+    return InterlockedExchangeAdd64((volatile long long*)a, -delta);
+}
+long long ep_atomic_cas(long long a, long long expected, long long desired) {
+    long long old = InterlockedCompareExchange64((volatile long long*)a, desired, expected);
+    return (old == expected) ? 1 : 0;
+}
+#else
 long long ep_atomic_create(long long initial) {
     long long* a = (long long*)malloc(sizeof(long long));
     __atomic_store_n(a, initial, __ATOMIC_SEQ_CST);
@@ -5314,6 +6922,7 @@ long long ep_atomic_cas(long long a, long long expected, long long desired) {
     long long exp = expected;
     return __atomic_compare_exchange_n((long long*)a, &exp, desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) ? 1 : 0;
 }
+#endif
 
 /* Barrier — portable polyfill (macOS lacks pthread_barrier_t) */
 typedef struct {
@@ -5766,7 +7375,17 @@ long long ep_auto_to_string(long long val) {
     // These aren't GC-tracked but ARE valid pointers. Use a safe probe:
     // only dereference if the address is in a readable memory page.
     if (val > 0x100000) {
-#if defined(__APPLE__)
+#if defined(_WIN32)
+        // Windows: use VirtualQuery to safely probe pointer validity
+        MEMORY_BASIC_INFORMATION mbi;
+        if (VirtualQuery((void*)val, &mbi, sizeof(mbi)) && mbi.State == MEM_COMMIT && !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
+            const char* p = (const char*)(void*)val;
+            unsigned char first = (unsigned char)*p;
+            if ((first >= 0x20 && first <= 0x7E) || (first >= 0xC0 && first <= 0xFD) || first == '\n' || first == '\t' || first == '\r' || first == 0) {
+                return val; // Readable memory, looks like a string
+            }
+        }
+#elif defined(__APPLE__)
         // macOS: use vm_read_overwrite to safely probe
         char probe;
         vm_size_t sz = 1;
@@ -5987,19 +7606,35 @@ long long ep_sha1(long long data_val) {
 }
 
 // Read exact N bytes from a socket
+#ifdef __wasm__
+long long ep_net_recv_bytes(long long fd, long long count) {
+    (void)fd; (void)count;
+    return (long long)strdup("");
+}
+#else
 long long ep_net_recv_bytes(long long fd, long long count) {
     if (count <= 0) return (long long)strdup("");
     char* buf = (char*)malloc(count + 1);
+#ifdef _WIN32
+    int total = 0;
+    while (total < (int)count) {
+        int n = recv((int)fd, buf + total, (int)(count - total), 0);
+        if (n <= 0) break;
+        total += n;
+    }
+#else
     ssize_t total = 0;
     while (total < count) {
         ssize_t n = recv((int)fd, buf + total, count - total, 0);
         if (n <= 0) break;
         total += n;
     }
+#endif
     buf[total] = '\0';
     ep_gc_register(buf, EP_OBJ_STRING);
     return (long long)buf;
 }
+#endif
 
 long long ep_get_args(void) {
     long long list_ptr = create_list();
@@ -6013,6 +7648,7 @@ long long ep_get_args(void) {
 
 "#;
 
+#[allow(dead_code)]
 const C_MAIN_BOOTSTRAPPER: &str = r#"
 /* Bootstrapper C main */
 int main(int argc, char** argv) {

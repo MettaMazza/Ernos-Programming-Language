@@ -301,3 +301,14 @@ define pq_peek with pq:
 
 define pq_size with pq:
     return length_list(pq)
+
+# ════════════════════════════════════════════
+# Iterator/Generator Protocol
+# ════════════════════════════════════════════
+
+define choice IterResult:
+    variant Next with value as Any
+    variant Done
+
+define trait Iterator:
+    define next returning IterResult

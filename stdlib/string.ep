@@ -292,41 +292,31 @@ define join with parts and separator:
         set i to i + 1
     return result
 
-# ---- StringBuilder ----
+# ---- StringBuilder (native realloc-backed) ----
+
+external define ep_sb_create with dummy returning Int
+external define ep_sb_append with sb and s returning Int
+external define ep_sb_append_int with sb and n returning Int
+external define ep_sb_to_string with sb returning Str
+external define ep_sb_length with sb returning Int
 
 define create_builder:
-    set builder to create_list()
-    return builder
+    return ep_sb_create(0)
 
 define builder_append with builder and s:
-    set ok to append_list(builder and s)
-    return builder
+    return ep_sb_append(builder and s)
 
 define builder_append_int with builder and n:
-    set s to int_to_string(n)
-    set ok to append_list(builder and s)
-    return builder
+    return ep_sb_append_int(builder and n)
 
 define builder_to_string with builder:
-    set result to ""
-    set len to length_list(builder)
-    set i to 0
-    repeat while i < len:
-        set part to get_list(builder and i)
-        set result to concat(result and part)
-        set i to i + 1
-    return result
+    return ep_sb_to_string(builder)
 
 define builder_length with builder:
-    return length_list(builder)
+    return ep_sb_length(builder)
 
 define builder_clear with builder:
-    set len to length_list(builder)
-    set i to 0
-    repeat while i < len:
-        set ok to remove_list(builder and 0)
-        set i to i + 1
-    return builder
+    return ep_sb_create(0)
 
 # ---- String Conversion ----
 

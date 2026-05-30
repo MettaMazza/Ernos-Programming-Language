@@ -64,8 +64,8 @@ for TEST_FILE in tests/test_*.ep conformance/test_*.ep; do
     fi
 
     # ── Run ──
+    EXIT_CODE=0
     ACTUAL=$("$BINARY" 2>/dev/null) || EXIT_CODE=$?
-    EXIT_CODE=${EXIT_CODE:-0}
 
     if [[ $EXIT_CODE -ne 0 ]]; then
         echo "FAIL  $NAME  (exit code $EXIT_CODE)"

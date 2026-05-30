@@ -85,6 +85,7 @@ pub enum Token {
     /// Interpolated string parts: alternating (literal, expression_source) pairs + final literal
     /// e.g., "hello {name}!" → [("hello ", "name"), ("!", "")]
     InterpStringParts(Vec<(String, String)>),
+    DocComment(String),
 
     // Punctuation
     Colon,

@@ -17,6 +17,7 @@ enum RawToken {
     Spaces(usize),
     Newline,
     Comment,
+    DocComment(String),
 }
 
 pub struct Lexer<'a> {
@@ -92,15 +93,35 @@ impl<'a> Lexer<'a> {
                 }
                 raw_tokens.push((RawToken::Spaces(count), span));
             } else if c == '#' {
-                // Comment
-                self.advance();
-                while let Some(ch) = self.peek() {
-                    if ch == '\n' || ch == '\r' {
-                        break;
+                // Check for triple-hash doc comment '###'
+                let is_doc = self.pos + 2 < self.chars.len() 
+                    && self.chars[self.pos] == '#' 
+                    && self.chars[self.pos + 1] == '#' 
+                    && self.chars[self.pos + 2] == '#';
+                if is_doc {
+                    self.advance(); // consume first '#'
+                    self.advance(); // consume second '#'
+                    self.advance(); // consume third '#'
+                    let mut s = String::new();
+                    while let Some(ch) = self.peek() {
+                        if ch == '\n' || ch == '\r' {
+                            break;
+                        }
+                        s.push(ch);
+                        self.advance();
                     }
+                    raw_tokens.push((RawToken::DocComment(s.trim().to_string()), span));
+                } else {
+                    // Regular comment
                     self.advance();
+                    while let Some(ch) = self.peek() {
+                        if ch == '\n' || ch == '\r' {
+                            break;
+                        }
+                        self.advance();
+                    }
+                    raw_tokens.push((RawToken::Comment, span));
                 }
-                raw_tokens.push((RawToken::Comment, span));
             } else if c.is_ascii_digit() {
                 let mut val = 0i64;
                 while let Some(ch) = self.peek() {
@@ -393,9 +414,9 @@ impl<'a> Lexer<'a> {
                         spaces = *s;
                         temp_i += 1;
                     }
-                }
-
-                // If the line is empty (contains only comments, newlines, or nothing), we ignore its indentation
+                }                 // If the line is empty (contains only comments, newlines, or nothing), we ignore its indentation.
+                // Note: We do NOT ignore lines containing doc comments because doc comments are passed to the parser
+                // and need to be correctly placed relative to Dedent/Indent tokens.
                 let is_empty_line = temp_i >= raw.len() 
                     || matches!(raw[temp_i].0, RawToken::Newline | RawToken::Comment);
 
@@ -444,6 +465,10 @@ impl<'a> Lexer<'a> {
             
             match raw_tok {
                 RawToken::Comment => {
+                    i += 1;
+                }
+                RawToken::DocComment(s) => {
+                    tokens.push((Token::DocComment(s.clone()), span.clone()));
                     i += 1;
                 }
                 RawToken::Newline => {

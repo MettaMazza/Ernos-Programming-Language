@@ -181,7 +181,7 @@ Parser (parser.rs) → AST
     ↓
 Type Checker (type_check.rs) → Type-annotated AST (errors = hard stop)
     ↓
-Borrow Checker (borrow_check.rs) → Ownership validation (warnings, not errors currently)
+Borrow Checker (borrow_check.rs) → Ownership validation with NLL (non-lexical lifetimes)
     ↓
 Optimizer (optimizer.rs) → Constant folding, dead code elimination
     ↓
@@ -373,7 +373,7 @@ These are implemented as C functions in the runtime (codegen.rs). They are NOT E
 `fs_exists(path)`, `fs_is_file(path)`, `fs_is_dir(path)`, `fs_get_size(path)`, `fs_delete_file(path)`, `fs_copy_file(src and dst)`, `fs_move_file(src and dst)`, `fs_scan_dir(path)`
 
 ### Concurrency
-`channel` (keyword), `create_channel()`, `send value to channel` (statement), `receive from channel` (expression), `spawn function(args)` (statement), `channel_has_data(ch)`, `channel_try_recv(ch)`, `channel_select(ch_list)`, `send_channel(ch and val)`, `recv_channel(ch)`
+`channel` (keyword), `create_channel()`, `send value to channel` (statement), `receive from channel` (expression), `spawn function(args)` (statement), `channel_has_data(ch)`, `channel_try_recv(ch)`, `channel_select(ch_list)`, `send_channel(ch and val)`, `recv_channel(ch)`, `create_task_group()`, `add_task_group(group and fut)`, `wait_task_group(group)`, `async_timeout(timeout_ms and fut)`, `cancel_task(fut)`
 
 ### Networking
 `ep_net_connect(host and port)`, `ep_net_listen(port)`, `ep_net_accept(server)`, `ep_net_send(socket and data)`, `ep_net_recv(socket and bufsize)`, `ep_net_recv_bytes(socket and bufsize)`, `ep_net_close(socket)`, `ep_http_request(method and url and body and headers)`
@@ -382,10 +382,10 @@ These are implemented as C functions in the runtime (codegen.rs). They are NOT E
 `json_get_int(json and key)`, `json_get_string(json and key)`, `json_get_bool(json and key)`
 
 ### SQLite
-`sqlite_get_callback_ptr()`
+`sqlite_get_callback_ptr(dummy)`
 
 ### Math / System
-`ep_random_int(min and max)`, `ep_time_ms()`, `ep_time_now_ms()`, `ep_time_now_sec()`, `ep_time_day()`, `ep_time_month()`, `ep_time_year()`, `ep_sleep_ms(ms)`, `ep_abs(n)`, `ep_system(cmd)`, `ep_play_sound(path)` (macOS), `run_command(cmd)`
+`ep_random_int(min and max)`, `ep_time_ms()`, `ep_time_now_ms()`, `ep_time_now_sec()`, `ep_time_day()`, `ep_time_month()`, `ep_time_year()`, `ep_sleep_ms(ms)`, `sleep_ms(ms)`, `ep_abs(n)`, `ep_system(cmd)`, `ep_play_sound(path)` (macOS), `run_command(cmd)`
 
 ### Float
 `int_to_float(n)`, `float_to_int(f)`, `float_to_string(f)`
@@ -458,6 +458,8 @@ If ANY step fails, the change is not ready. Fix it before committing. Do not com
 8. **Namespace imports** — `import "module" as alias` adds `alias_` prefixed function names
 9. **HOF with named functions** — passing named functions as arguments requires closure wrapping in some cases
 10. **Concurrency scale** — channel operations are safe up to ~500-1000 operations before GC pressure
+11. **Send/Sync checking** — spawn arguments and channel values must be Send. `Ref(T)` (borrowed references) are NOT Send (E0036). `Struct`/`Enum`/`List` are Send (owned values). All primitives are Send+Sync.
+12. **NLL borrow checker** — borrows expire at their last use point (non-lexical lifetimes), not at scope end. The checker pre-collects variable uses via `UseCollector` and tracks `LiveBorrow` lifetimes.
 
 ---
 
@@ -527,7 +529,11 @@ Usage: `import "stdlib/bridge/sqlite"` — all functions use `ep_dlopen`/`ep_dls
 
 ### Modifying the type checker
 - The type checker uses Hindley-Milner unification in `type_check.rs`
-- `MonoType` is the core type enum (`Int`, `Float`, `Bool`, `Str`, `DynStr`, `Any`, `List`, `Struct`, `Enum`, `Fun`, `Var`, `Unit`)
+- `MonoType` is the core type enum (`Int`, `Float`, `Bool`, `Str`, `DynStr`, `Any`, `List`, `Struct`, `Enum`, `Fun`, `Var`, `Unit`, `Ref`, `Future`)
+- `MonoType::is_send()` — returns true if the type can be safely transferred across thread boundaries
+- `MonoType::is_sync()` — returns true if the type can be safely shared between threads
+- `Ref(T)` is NOT Send — borrowed references cannot cross thread boundaries
+- Spawn arguments and channel sends are checked for Send safety (error code E0036)
 - `Substitution` maps type variables to concrete types
 - `unify()` is the unification function — it resolves type constraints
 - `Any` is the top type — it unifies with everything

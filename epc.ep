@@ -65,7 +65,7 @@ define resolve_import_path with current_file and import_path:
             return resolved
     return string_concat(resolved and ".ep")
 
-define parse_all_modules with current_file and parsed_files and all_functions and all_externals:
+define parse_all_modules with current_file and parsed_files and all_functions and all_externals and all_struct_defs and all_enum_defs and all_method_defs and all_trait_defs and all_trait_impls:
     set has_parsed to contains_string(parsed_files and current_file)
     if has_parsed == 1:
         return 0
@@ -98,13 +98,51 @@ define parse_all_modules with current_file and parsed_files and all_functions an
         set func to get_list(funcs and f_idx)
         set ok to append_list(all_functions and func)
         set f_idx to f_idx + 1
+
+    # Collect struct/enum/method/trait/impl defs from expanded program node
+    set prog_len to length_list(program_ast)
+    if prog_len > 4:
+        set sd to get_list(program_ast and 4)
+        set sd_len to length_list(sd)
+        set sd_idx to 0
+        repeat while sd_idx < sd_len:
+            set ok to append_list(all_struct_defs and get_list(sd and sd_idx))
+            set sd_idx to sd_idx + 1
+    if prog_len > 5:
+        set ed to get_list(program_ast and 5)
+        set ed_len to length_list(ed)
+        set ed_idx to 0
+        repeat while ed_idx < ed_len:
+            set ok to append_list(all_enum_defs and get_list(ed and ed_idx))
+            set ed_idx to ed_idx + 1
+    if prog_len > 6:
+        set md to get_list(program_ast and 6)
+        set md_len to length_list(md)
+        set md_idx to 0
+        repeat while md_idx < md_len:
+            set ok to append_list(all_method_defs and get_list(md and md_idx))
+            set md_idx to md_idx + 1
+    if prog_len > 7:
+        set td to get_list(program_ast and 7)
+        set td_len to length_list(td)
+        set td_idx to 0
+        repeat while td_idx < td_len:
+            set ok to append_list(all_trait_defs and get_list(td and td_idx))
+            set td_idx to td_idx + 1
+    if prog_len > 8:
+        set ti to get_list(program_ast and 8)
+        set ti_len to length_list(ti)
+        set ti_idx to 0
+        repeat while ti_idx < ti_len:
+            set ok to append_list(all_trait_impls and get_list(ti and ti_idx))
+            set ti_idx to ti_idx + 1
         
     set imp_len to length_list(imports)
     set i_idx to 0
     repeat while i_idx < imp_len:
         set imp to get_list(imports and i_idx)
         set resolved_path to resolve_import_path(current_file and imp)
-        set status to parse_all_modules(resolved_path and parsed_files and all_functions and all_externals)
+        set status to parse_all_modules(resolved_path and parsed_files and all_functions and all_externals and all_struct_defs and all_enum_defs and all_method_defs and all_trait_defs and all_trait_impls)
         if status != 0:
             return status
         set i_idx to i_idx + 1
@@ -133,8 +171,13 @@ define main:
     display "[1/3] Tokenizing and Parsing..."
     set all_functions to create_list()
     set all_externals to create_list()
+    set all_struct_defs to create_list()
+    set all_enum_defs to create_list()
+    set all_method_defs to create_list()
+    set all_trait_defs to create_list()
+    set all_trait_impls to create_list()
     set parsed_files to create_list()
-    set status to parse_all_modules(input_path and parsed_files and all_functions and all_externals)
+    set status to parse_all_modules(input_path and parsed_files and all_functions and all_externals and all_struct_defs and all_enum_defs and all_method_defs and all_trait_defs and all_trait_impls)
     if status != 0:
         return 1
         
@@ -162,6 +205,11 @@ define main:
     set ok to append_list(program_ast and empty_imports)
     set ok to append_list(program_ast and all_externals)
     set ok to append_list(program_ast and all_functions)
+    set ok to append_list(program_ast and all_struct_defs)
+    set ok to append_list(program_ast and all_enum_defs)
+    set ok to append_list(program_ast and all_method_defs)
+    set ok to append_list(program_ast and all_trait_defs)
+    set ok to append_list(program_ast and all_trait_impls)
     
     display "[2/3] Generating C Source..."
     set c_code to generate_c(program_ast and is_test_mode)

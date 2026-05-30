@@ -24,11 +24,48 @@ pub struct Parser {
     pos: usize,
     in_condition: bool,
     call_depth: usize,
+    errors: Vec<ParseError>,
 }
 
 impl Parser {
     pub fn new(tokens: Vec<(Token, Span)>) -> Self {
-        Self { tokens, pos: 0, in_condition: false, call_depth: 0 }
+        Self { tokens, pos: 0, in_condition: false, call_depth: 0, errors: Vec::new() }
+    }
+
+    /// Skip tokens until we find one that can start a new statement.
+    fn recover_to_next_statement(&mut self) {
+        loop {
+            match self.peek() {
+                Token::Set | Token::If | Token::Repeat | Token::While |
+                Token::For | Token::Return | Token::Display | Token::Define |
+                Token::Check | Token::Break | Token::Continue | Token::Dedent |
+                Token::EOF => break,
+                Token::Newline => {
+                    self.advance();
+                    // After newline, if the next token can start a statement, stop
+                    match self.peek() {
+                        Token::Set | Token::If | Token::Repeat | Token::While |
+                        Token::For | Token::Return | Token::Display | Token::Define |
+                        Token::Check | Token::Break | Token::Continue | Token::Dedent |
+                        Token::Indent | Token::EOF | Token::Identifier(_) => break,
+                        _ => {}
+                    }
+                }
+                _ => { self.advance(); }
+            }
+        }
+    }
+
+    /// Skip tokens until we find one that can start a top-level item.
+    fn recover_to_next_top_level(&mut self) {
+        loop {
+            match self.peek() {
+                Token::Define | Token::Implement | Token::Import |
+                Token::External | Token::Async | Token::Set |
+                Token::EOF => break,
+                _ => { self.advance(); }
+            }
+        }
     }
 
     fn peek(&self) -> &Token {
@@ -54,6 +91,31 @@ impl Parser {
             res
         } else {
             (Token::EOF, Span::new(1, 1))
+        }
+    }
+
+    fn parse_doc_comments(&mut self) -> Option<String> {
+        let mut docs = Vec::new();
+        loop {
+            match self.peek() {
+                Token::DocComment(s) => {
+                    docs.push(s.clone());
+                    self.advance();
+                }
+                Token::Newline => {
+                    if self.pos + 1 < self.tokens.len() && matches!(self.tokens[self.pos + 1].0, Token::DocComment(_)) {
+                        self.advance(); // consume Newline
+                    } else {
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+        if docs.is_empty() {
+            None
+        } else {
+            Some(docs.join("\n"))
         }
     }
 
@@ -148,7 +210,7 @@ impl Parser {
         }
     }
 
-    pub fn parse_program(&mut self) -> Result<Program, ParseError> {
+    pub fn parse_program(&mut self) -> Result<Program, Vec<ParseError>> {
         let mut imports = Vec::new();
         let mut externals = Vec::new();
         let mut functions = Vec::new();
@@ -166,141 +228,177 @@ impl Parser {
                 continue;
             }
 
-            if self.peek() == &Token::Import {
-                self.advance(); // consume "import"
-                if let (Token::StringLiteral(path), _) = self.advance() {
-                    // Parse optional alias: import "string" as str
-                    let alias = if self.peek() == &Token::As {
-                        self.advance(); // consume "as"
-                        let (alias_name, _) = self.expect_identifier()?;
-                        Some(alias_name)
+            let doc_comment = self.parse_doc_comments();
+            if self.peek() == &Token::Newline {
+                self.advance();
+            }
+
+            let err = 'item: {
+                if self.peek() == &Token::Import {
+                    self.advance(); // consume "import"
+                    if let (Token::StringLiteral(path), _) = self.advance() {
+                        let alias = if self.peek() == &Token::As {
+                            self.advance();
+                            match self.expect_identifier() {
+                                Ok((alias_name, _)) => Some(alias_name),
+                                Err(e) => break 'item Some(e),
+                            }
+                        } else {
+                            None
+                        };
+                        imports.push((path, alias));
+                        if self.peek() == &Token::Newline {
+                            self.advance();
+                        }
                     } else {
-                        None
-                    };
-                    imports.push((path, alias));
-                    // Optional newline
-                    if self.peek() == &Token::Newline {
-                        self.advance();
+                        break 'item Some(ParseError {
+                            message: "Expected string literal after 'import'".to_string(),
+                            span: self.peek_span(),
+                        });
+                    }
+                } else if self.peek() == &Token::External {
+                    match self.parse_external_def() {
+                        Ok(ext) => externals.push(ext),
+                        Err(e) => break 'item Some(e),
+                    }
+                } else if self.peek() == &Token::Async {
+                    self.advance();
+                    match self.parse_function(true, doc_comment) {
+                        Ok(func) => functions.push(func),
+                        Err(e) => break 'item Some(e),
+                    }
+                } else if self.peek() == &Token::Define {
+                    if self.pos + 1 < self.tokens.len() && self.tokens[self.pos + 1].0 == Token::Structure {
+                        match self.parse_struct_def(doc_comment) {
+                            Ok(sd) => struct_defs.push(sd),
+                            Err(e) => break 'item Some(e),
+                        }
+                    } else if self.pos + 1 < self.tokens.len() && self.tokens[self.pos + 1].0 == Token::Choice {
+                        match self.parse_enum_def(doc_comment) {
+                            Ok(ed) => enum_defs.push(ed),
+                            Err(e) => break 'item Some(e),
+                        }
+                    } else if self.pos + 1 < self.tokens.len() && self.tokens[self.pos + 1].0 == Token::Trait {
+                        match self.parse_trait_def(doc_comment) {
+                            Ok(td) => trait_defs.push(td),
+                            Err(e) => break 'item Some(e),
+                        }
+                    } else if self.pos + 1 < self.tokens.len() {
+                        let is_name_token = matches!(&self.tokens[self.pos + 1].0,
+                            Token::Identifier(_) | Token::Choice | Token::Field |
+                            Token::Variant | Token::Structure | Token::Check |
+                            Token::Trait | Token::Implement |
+                            Token::Define | Token::Repeat | Token::Display |
+                            Token::Break | Token::Continue | Token::Each |
+                            Token::Multiply | Token::Returning
+                        );
+                        if is_name_token {
+                            let is_method = self.pos + 2 < self.tokens.len() && self.tokens[self.pos + 2].0 == Token::On;
+                            if is_method {
+                                match self.parse_method_def(doc_comment) {
+                                    Ok(md) => method_defs.push(md),
+                                    Err(e) => break 'item Some(e),
+                                }
+                            } else {
+                                match self.parse_function(false, doc_comment) {
+                                    Ok(func) => functions.push(func),
+                                    Err(e) => break 'item Some(e),
+                                }
+                            }
+                        } else {
+                            match self.parse_function(false, doc_comment) {
+                                Ok(func) => functions.push(func),
+                                Err(e) => break 'item Some(e),
+                            }
+                        }
+                    } else {
+                        match self.parse_function(false, doc_comment) {
+                            Ok(func) => functions.push(func),
+                            Err(e) => break 'item Some(e),
+                        }
+                    }
+                } else if self.peek() == &Token::Implement {
+                    match self.parse_trait_impl() {
+                        Ok(ti) => trait_impls.push(ti),
+                        Err(e) => break 'item Some(e),
+                    }
+                } else if self.peek() == &Token::Set {
+                    match self.parse_statement() {
+                        Ok(stmt) => top_level_constants.push(stmt),
+                        Err(e) => break 'item Some(e),
                     }
                 } else {
-                    return Err(ParseError {
-                        message: "Expected string literal after 'import'".to_string(),
+                    break 'item Some(ParseError {
+                        message: format!("Unexpected token at top level: {:?}", self.peek()),
                         span: self.peek_span(),
                     });
                 }
-            } else if self.peek() == &Token::External {
-                self.advance(); // consume "external"
-                self.expect(Token::Define)?;
-                let (name, _) = self.expect_identifier()?;
-                let mut params = Vec::new();
-                if self.peek() == &Token::With {
-                    self.advance(); // consume "with"
-                    let mut is_borrow = false;
-                    if self.peek() == &Token::Borrow {
-                        self.advance();
-                        is_borrow = true;
-                    }
-                    let (first_param, _) = self.expect_identifier()?;
-                    let mut first_type = None;
-                    if self.peek() == &Token::As {
-                        self.advance(); // consume "as"
-                        first_type = Some(self.parse_type_annotation()?);
-                    }
-                    params.push((first_param, is_borrow, first_type));
-                    while self.peek() == &Token::And {
-                        self.advance(); // consume "and"
-                        let mut next_is_borrow = false;
-                        if self.peek() == &Token::Borrow {
-                            self.advance();
-                            next_is_borrow = true;
-                        }
-                        let (next_param, _) = self.expect_identifier()?;
-                        let mut next_type = None;
-                        if self.peek() == &Token::As {
-                            self.advance(); // consume "as"
-                            next_type = Some(self.parse_type_annotation()?);
-                        }
-                        params.push((next_param, next_is_borrow, next_type));
-                    }
-                }
-                let mut return_type = None;
-                if self.peek() == &Token::Returning {
-                    self.advance(); // consume "returning"
-                    return_type = Some(self.parse_type_annotation()?);
-                }
-                // Optional colon after external definition (consistency with regular define)
-                if self.peek() == &Token::Colon {
-                    self.advance();
-                }
-                // Optional newline after external definition
-                if self.peek() == &Token::Newline {
-                    self.advance();
-                }
-                externals.push(crate::ast::ExternalFunction { name, params, return_type });
-            } else if self.peek() == &Token::Async {
-                self.advance(); // consume "async"
-                let func = self.parse_function(true)?;
-                functions.push(func);
-            } else if self.peek() == &Token::Define {
-                // Check if this is a structure or choice definition
-                if self.pos + 1 < self.tokens.len() && self.tokens[self.pos + 1].0 == Token::Structure {
-                    let sd = self.parse_struct_def()?;
-                    struct_defs.push(sd);
-                } else if self.pos + 1 < self.tokens.len() && self.tokens[self.pos + 1].0 == Token::Choice {
-                    let ed = self.parse_enum_def()?;
-                    enum_defs.push(ed);
-                } else if self.pos + 1 < self.tokens.len() && self.tokens[self.pos + 1].0 == Token::Trait {
-                    let td = self.parse_trait_def()?;
-                    trait_defs.push(td);
-                } else if self.pos + 1 < self.tokens.len() {
-                    // Check if the next token could be an identifier (name)
-                    // This includes actual identifiers plus keywords allowed as names
-                    let is_name_token = matches!(&self.tokens[self.pos + 1].0,
-                        Token::Identifier(_) | Token::Choice | Token::Field |
-                        Token::Variant | Token::Structure | Token::Check |
-                        Token::Trait | Token::Implement |
-                        Token::Define | Token::Repeat | Token::Display |
-                        Token::Break | Token::Continue | Token::Each |
-                        Token::Multiply | Token::Returning
-                    );
-                    if is_name_token {
-                        // Look ahead: is there an "on" after the name to detect method?
-                        let is_method = self.pos + 2 < self.tokens.len() && self.tokens[self.pos + 2].0 == Token::On;
-                        if is_method {
-                            let md = self.parse_method_def()?;
-                            method_defs.push(md);
-                        } else {
-                            let func = self.parse_function(false)?;
-                            functions.push(func);
-                        }
-                    } else {
-                        let func = self.parse_function(false)?;
-                        functions.push(func);
-                    }
-                } else {
-                    let func = self.parse_function(false)?;
-                    functions.push(func);
-                }
-            } else if self.peek() == &Token::Implement {
-                let ti = self.parse_trait_impl()?;
-                trait_impls.push(ti);
-            } else if self.peek() == &Token::Set {
-                // Top-level constant: set NAME to EXPR
-                // Collected for global variable initialization
-                let stmt = self.parse_statement()?;
-                top_level_constants.push(stmt);
-            } else {
-                return Err(ParseError {
-                    message: format!("Unexpected token at top level: {:?}", self.peek()),
-                    span: self.peek_span(),
-                });
+                None
+            };
+
+            if let Some(e) = err {
+                self.errors.push(e);
+                self.recover_to_next_top_level();
             }
+        }
+
+        if !self.errors.is_empty() {
+            return Err(std::mem::take(&mut self.errors));
         }
 
         Ok(Program { imports, externals, functions, struct_defs, enum_defs, method_defs, trait_defs, trait_impls, top_level_constants })
     }
 
-    fn parse_struct_def(&mut self) -> Result<StructDef, ParseError> {
+    fn parse_external_def(&mut self) -> Result<crate::ast::ExternalFunction, ParseError> {
+        self.advance(); // consume "external"
+        self.expect(Token::Define)?;
+        let (name, _) = self.expect_identifier()?;
+        let mut params = Vec::new();
+        if self.peek() == &Token::With {
+            self.advance(); // consume "with"
+            let mut is_borrow = false;
+            if self.peek() == &Token::Borrow {
+                self.advance();
+                is_borrow = true;
+            }
+            let (first_param, _) = self.expect_identifier()?;
+            let mut first_type = None;
+            if self.peek() == &Token::As {
+                self.advance(); // consume "as"
+                first_type = Some(self.parse_type_annotation()?);
+            }
+            params.push((first_param, is_borrow, first_type));
+            while self.peek() == &Token::And {
+                self.advance(); // consume "and"
+                let mut next_is_borrow = false;
+                if self.peek() == &Token::Borrow {
+                    self.advance();
+                    next_is_borrow = true;
+                }
+                let (next_param, _) = self.expect_identifier()?;
+                let mut next_type = None;
+                if self.peek() == &Token::As {
+                    self.advance(); // consume "as"
+                    next_type = Some(self.parse_type_annotation()?);
+                }
+                params.push((next_param, next_is_borrow, next_type));
+            }
+        }
+        let mut return_type = None;
+        if self.peek() == &Token::Returning {
+            self.advance(); // consume "returning"
+            return_type = Some(self.parse_type_annotation()?);
+        }
+        if self.peek() == &Token::Colon {
+            self.advance();
+        }
+        if self.peek() == &Token::Newline {
+            self.advance();
+        }
+        Ok(crate::ast::ExternalFunction { name, params, return_type })
+    }
+
+    fn parse_struct_def(&mut self, doc_comment: Option<String>) -> Result<StructDef, ParseError> {
         self.expect(Token::Define)?;
         self.expect(Token::Structure)?;
         let (name, _) = self.expect_identifier()?;
@@ -358,10 +456,10 @@ impl Parser {
             self.advance();
         }
 
-        Ok(StructDef { name, type_params, fields })
+        Ok(StructDef { name, type_params, fields, doc_comment })
     }
 
-    fn parse_enum_def(&mut self) -> Result<EnumDef, ParseError> {
+    fn parse_enum_def(&mut self, doc_comment: Option<String>) -> Result<EnumDef, ParseError> {
         self.expect(Token::Define)?;
         self.expect(Token::Choice)?;
         let (name, _) = self.expect_identifier()?;
@@ -427,10 +525,10 @@ impl Parser {
             self.advance();
         }
 
-        Ok(EnumDef { name, type_params, variants })
+        Ok(EnumDef { name, type_params, variants, doc_comment })
     }
 
-    fn parse_function(&mut self, is_async: bool) -> Result<Function, ParseError> {
+    fn parse_function(&mut self, is_async: bool, doc_comment: Option<String>) -> Result<Function, ParseError> {
         self.expect(Token::Define)?;
         let (name, _name_span) = self.expect_identifier()?;
         
@@ -495,10 +593,10 @@ impl Parser {
 
         let body = self.parse_block()?;
 
-        Ok(Function { name, params, return_type, body, is_async })
+        Ok(Function { name, params, return_type, body, is_async, doc_comment })
     }
 
-    fn parse_method_def(&mut self) -> Result<MethodDef, ParseError> {
+    fn parse_method_def(&mut self, doc_comment: Option<String>) -> Result<MethodDef, ParseError> {
         self.expect(Token::Define)?;
         let (name, _) = self.expect_identifier()?;
         self.expect(Token::On)?;
@@ -548,10 +646,10 @@ impl Parser {
         }
 
         let body = self.parse_block()?;
-        Ok(MethodDef { name, struct_name, params, return_type, body })
+        Ok(MethodDef { name, struct_name, params, return_type, body, doc_comment })
     }
 
-    fn parse_trait_def(&mut self) -> Result<TraitDef, ParseError> {
+    fn parse_trait_def(&mut self, doc_comment: Option<String>) -> Result<TraitDef, ParseError> {
         self.expect(Token::Define)?;
         self.expect(Token::Trait)?;
         let (name, _) = self.expect_identifier()?;
@@ -614,7 +712,7 @@ impl Parser {
             self.advance();
         }
 
-        Ok(TraitDef { name, method_signatures })
+        Ok(TraitDef { name, method_signatures, doc_comment })
     }
 
     fn parse_trait_impl(&mut self) -> Result<TraitImpl, ParseError> {
@@ -636,7 +734,7 @@ impl Parser {
                 continue;
             }
 
-            let func = self.parse_function(false)?;
+            let func = self.parse_function(false, None)?;
             methods.push(func);
         }
 
@@ -656,7 +754,13 @@ impl Parser {
                 self.advance();
                 continue;
             }
-            statements.push(self.parse_statement()?);
+            match self.parse_statement() {
+                Ok(stmt) => statements.push(stmt),
+                Err(e) => {
+                    self.errors.push(e);
+                    self.recover_to_next_statement();
+                }
+            }
         }
 
         if self.peek() == &Token::Dedent {

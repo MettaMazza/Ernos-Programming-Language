@@ -249,6 +249,11 @@ define tokenize_source with source:
                                                     set current_col to current_col + (next_p2 - pos)
                                                     set pos to next_p2
                                                     set is_multi_phrase to 1
+
+                                        if is_multi_phrase == 0:
+                                            # Standalone 'is' for struct field defaults
+                                            set tok_type to 72
+                                            set is_multi_phrase to 1
                                                     
                                 if is_multi_phrase == 0:
                                     if "and" equals id_str:
@@ -455,6 +460,14 @@ define tokenize_source with source:
                                         set sym_type to 21
                                         set sym_val to "||"
                                         set sym_len to 2
+                                    if c == 60 && next_c == 61: # <=
+                                        set sym_type to 67
+                                        set sym_val to "<="
+                                        set sym_len to 2
+                                    if c == 62 && next_c == 61: # >=
+                                        set sym_type to 68
+                                        set sym_val to ">="
+                                        set sym_len to 2
                                     
                                     if sym_type == 0:
                                         # Single-character symbol
@@ -491,6 +504,15 @@ define tokenize_source with source:
                                         if c == 37: # %
                                             set sym_type to 41
                                             set sym_val to "%"
+                                        if c == 91: # [
+                                            set sym_type to 69
+                                            set sym_val to "["
+                                        if c == 93: # ]
+                                            set sym_type to 70
+                                            set sym_val to "]"
+                                        if c == 44: # ,
+                                            set sym_type to 71
+                                            set sym_val to ","
                                     
                                     if sym_type > 0:
                                         set tok to create_token(sym_type and sym_val and current_line and current_col) + 0

@@ -318,6 +318,20 @@ define collect_var_types with state and stmts and var_keys and var_values:
                 if type == 11: # NODE_REPEAT_WHILE
                     set body to get_list(stmt and 2)
                     set ok to collect_var_types(state and body and var_keys and var_values)
+                else:
+                    if type == 27: # NODE_MATCH
+                        set arms to get_list(stmt and 2)
+                        set a_len to length_list(arms)
+                        set a_idx to 0
+                        repeat while a_idx < a_len:
+                            set arm to get_list(arms and a_idx)
+                            set arm_body to get_list(arm and 2)
+                            set ok to collect_var_types(state and arm_body and var_keys and var_values)
+                            set a_idx to a_idx + 1
+                    else:
+                        if type == 28: # NODE_FOR_EACH
+                            set fe_body to get_list(stmt and 3)
+                            set ok to collect_var_types(state and fe_body and var_keys and var_values)
         set idx to idx + 1
     return 0
 
@@ -648,7 +662,7 @@ define gen_function with state and func:
         repeat while p_i < p_len:
             set p_node to get_list(params and p_i)
             set p_name to get_list(p_node and 0)
-            if string_concat(var_name and "") equals string_concat(p_name and ""):
+            if var_name equals p_name:
                 set is_param to 1
             set p_i to p_i + 1
             
@@ -674,7 +688,7 @@ define gen_function with state and func:
         repeat while p_i < p_len:
             set p_node to get_list(params and p_i)
             set p_name to get_list(p_node and 0)
-            if string_concat(var_name and "") equals string_concat(p_name and ""):
+            if var_name equals p_name:
                 set is_p to 1
             set p_i to p_i + 1
         if is_p == 0:
@@ -702,8 +716,9 @@ define gen_function with state and func:
     # Emit cleanup label and deallocations
     set ok to emit(state and "L_cleanup:\n")
     if gc_root_count > 0:
+        set gc_count_str to ep_int_to_str(gc_root_count)
         set root_pop to "    ep_gc_pop_roots("
-        set root_pop to string_concat(root_pop and ep_int_to_str(gc_root_count))
+        set root_pop to string_concat(root_pop and gc_count_str)
         set root_pop to string_concat(root_pop and ");\n")
         set ok to emit(state and root_pop)
         
@@ -715,7 +730,7 @@ define gen_function with state and func:
         repeat while p_i < p_len:
             set p_node to get_list(params and p_i)
             set p_name to get_list(p_node and 0)
-            if string_concat(var_name and "") equals string_concat(p_name and ""):
+            if var_name equals p_name:
                 set is_param to 1
             set p_i to p_i + 1
             
@@ -929,6 +944,118 @@ define gen_statement with state and stmt and var_keys and var_values:
                 set null_line to string_concat(null_line and " = 0;\n")
                 set ok to emit(state and null_line)
         return 0
+
+    if type == 23: # NODE_FIELD_SET
+        set obj to get_list(stmt and 1)
+        set field_name to get_list(stmt and 2)
+        set val to get_list(stmt and 3)
+        set obj_str to gen_expr(state and obj and var_keys and var_values)
+        set val_str to gen_expr(state and val and var_keys and var_values)
+        set line to "    ((long long*)"
+        set line to string_concat(line and obj_str)
+        set line to string_concat(line and ")[EP_FIELD_")
+        set line to string_concat(line and field_name)
+        set line to string_concat(line and "] = ")
+        set line to string_concat(line and val_str)
+        set line to string_concat(line and ";\n")
+        set ok to emit(state and line)
+        return 0
+
+    if type == 27: # NODE_MATCH
+        set expr to get_list(stmt and 1)
+        set arms to get_list(stmt and 2)
+        set expr_str to gen_expr(state and expr and var_keys and var_values)
+        set ok to emit(state and "    {\n")
+        set line to "        long long _match_val = "
+        set line to string_concat(line and expr_str)
+        set line to string_concat(line and ";\n")
+        set ok to emit(state and line)
+        set ok to emit(state and "        long long _match_tag = ((long long*)_match_val)[0];\n")
+        set arm_len to length_list(arms)
+        set arm_idx to 0
+        repeat while arm_idx < arm_len:
+            set arm to get_list(arms and arm_idx)
+            set vname to get_list(arm and 0)
+            set bindings to get_list(arm and 1)
+            set arm_body to get_list(arm and 2)
+            set kw to "if"
+            if arm_idx > 0:
+                set kw to "} else if"
+            set line to "        "
+            set line to string_concat(line and kw)
+            set line to string_concat(line and " (_match_tag == EP_TAG_")
+            set line to string_concat(line and vname)
+            set line to string_concat(line and ") {\n")
+            set ok to emit(state and line)
+            # Extract bindings
+            set b_len to length_list(bindings)
+            set b_idx to 0
+            repeat while b_idx < b_len:
+                set bname to get_list(bindings and b_idx)
+                set line to "            long long "
+                set line to string_concat(line and bname)
+                set line to string_concat(line and " = ((long long*)_match_val)[")
+                set line to string_concat(line and ep_int_to_str(b_idx + 1))
+                set line to string_concat(line and "];\n")
+                set ok to emit(state and line)
+                set b_idx to b_idx + 1
+            # Emit arm body
+            set ab_len to length_list(arm_body)
+            set ab_idx to 0
+            repeat while ab_idx < ab_len:
+                set s to get_list(arm_body and ab_idx)
+                set ok to gen_statement(state and s and var_keys and var_values)
+                set ab_idx to ab_idx + 1
+            set arm_idx to arm_idx + 1
+        set ok to emit(state and "        }\n")
+        set ok to emit(state and "    }\n")
+        return 0
+
+    if type == 28: # NODE_FOR_EACH
+        set var_name to get_list(stmt and 1)
+        set iter_expr to get_list(stmt and 2)
+        set body to get_list(stmt and 3)
+        set iter_str to gen_expr(state and iter_expr and var_keys and var_values)
+        set label to get_new_label(state and "foreach")
+        set ok to emit(state and "    {\n")
+        set line to "        long long _iter = "
+        set line to string_concat(line and iter_str)
+        set line to string_concat(line and ";\n")
+        set ok to emit(state and line)
+        set ok to emit(state and "        long long _iter_len = length_list(_iter);\n")
+        set ok to emit(state and "        long long _iter_i = 0;\n")
+        set ok to emit(state and "        while (_iter_i < _iter_len) {\n")
+        set line to "            long long "
+        set line to string_concat(line and var_name)
+        set line to string_concat(line and " = get_list(_iter, _iter_i);\n")
+        set ok to emit(state and line)
+        set b_len to length_list(body)
+        set b_idx to 0
+        repeat while b_idx < b_len:
+            set s to get_list(body and b_idx)
+            set ok to gen_statement(state and s and var_keys and var_values)
+            set b_idx to b_idx + 1
+        set ok to emit(state and "            _iter_i++;\n")
+        set ok to emit(state and "        }\n")
+        set ok to emit(state and "    }\n")
+        return 0
+
+    if type == 29: # NODE_BREAK
+        set ok to emit(state and "    break;\n")
+        return 0
+
+    if type == 30: # NODE_CONTINUE
+        set ok to emit(state and "    continue;\n")
+        return 0
+
+    if type == 36: # NODE_EXPR_STMT
+        set expr to get_list(stmt and 1)
+        set expr_str to gen_expr(state and expr and var_keys and var_values)
+        set line to "    "
+        set line to string_concat(line and expr_str)
+        set line to string_concat(line and ";\n")
+        set ok to emit(state and line)
+        return 0
         
     return 0
 
@@ -937,7 +1064,8 @@ define gen_expr with state and expr and var_keys and var_values:
     
     if type == 1: # NODE_INT
         set val to get_list(expr and 1)
-        return ep_int_to_str(val)
+        set num_str to ep_int_to_str(val)
+        return string_concat(num_str and "LL")
         
     if type == 2: # NODE_STR
         set val to get_list(expr and 1)
@@ -968,6 +1096,8 @@ define gen_expr with state and expr and var_keys and var_values:
             set op_str to "*"
         if op == 4:
             set op_str to "/"
+        if op == 5:
+            set op_str to "%"
             
         set res to "("
         set res to string_concat(res and left_str)
@@ -1001,6 +1131,10 @@ define gen_expr with state and expr and var_keys and var_values:
                 set cmp_op to "== 0"
             if op == 4:
                 set cmp_op to "!= 0"
+            if op == 5:
+                set cmp_op to "<= 0"
+            if op == 6:
+                set cmp_op to ">= 0"
             
             set res to "(strcmp((char*)"
             set res to string_concat(res and left_str)
@@ -1020,6 +1154,10 @@ define gen_expr with state and expr and var_keys and var_values:
                 set op_str to "=="
             if op == 4:
                 set op_str to "!="
+            if op == 5:
+                set op_str to "<="
+            if op == 6:
+                set op_str to ">="
                 
             set res to ""
             set res to string_concat(res and left_str)
@@ -1134,6 +1272,123 @@ define gen_expr with state and expr and var_keys and var_values:
         set res to string_concat(res and inner_str)
         set res to string_concat(res and "; long long _res = 0; if (_fut) { if (!_fut->completed) { _res = receive_channel(_fut->chan); } else { _res = _fut->value; } } _res; })")
         return res
+
+    if type == 22: # NODE_FIELD_ACCESS
+        set obj to get_list(expr and 1)
+        set field_name to get_list(expr and 2)
+        set obj_str to gen_expr(state and obj and var_keys and var_values)
+        set res to "((long long*)"
+        set res to string_concat(res and obj_str)
+        set res to string_concat(res and ")[EP_FIELD_")
+        set res to string_concat(res and field_name)
+        set res to string_concat(res and "]")
+        return res
+
+    if type == 24: # NODE_STRUCT_CREATE
+        set struct_name to get_list(expr and 1)
+        set fields to get_list(expr and 2)
+        set field_count to length_list(fields)
+        set res to "({ long long* _s = (long long*)malloc(sizeof(long long) * "
+        set res to string_concat(res and ep_int_to_str(field_count + 8))
+        set res to string_concat(res and "); ")
+        set f_idx to 0
+        repeat while f_idx < field_count:
+            set fpair to get_list(fields and f_idx)
+            set fname to get_list(fpair and 0)
+            set fval to get_list(fpair and 1)
+            set fval_str to gen_expr(state and fval and var_keys and var_values)
+            set res to string_concat(res and "_s[EP_FIELD_")
+            set res to string_concat(res and fname)
+            set res to string_concat(res and "] = ")
+            set res to string_concat(res and fval_str)
+            set res to string_concat(res and "; ")
+            set f_idx to f_idx + 1
+        set res to string_concat(res and "ep_gc_register(_s, EP_OBJ_STRUCT); (long long)_s; })")
+        return res
+
+    if type == 25: # NODE_METHOD_CALL
+        set obj to get_list(expr and 1)
+        set method_name to get_list(expr and 2)
+        set args to get_list(expr and 3)
+        set obj_str to gen_expr(state and obj and var_keys and var_values)
+        set args_len to length_list(args)
+        set res to method_name
+        set res to string_concat(res and "(")
+        set res to string_concat(res and obj_str)
+        set idx to 0
+        repeat while idx < args_len:
+            set arg to get_list(args and idx)
+            set arg_str to gen_expr(state and arg and var_keys and var_values)
+            set res to string_concat(res and ", ")
+            set res to string_concat(res and arg_str)
+            set idx to idx + 1
+        set res to string_concat(res and ")")
+        return res
+
+    if type == 26: # NODE_ENUM_CREATE
+        set variant_name to get_list(expr and 1)
+        set args to get_list(expr and 2)
+        set args_len to length_list(args)
+        set alloc_size to args_len + 1
+        set res to "({ long long* _v = (long long*)malloc(sizeof(long long) * "
+        set res to string_concat(res and ep_int_to_str(alloc_size))
+        set res to string_concat(res and "); _v[0] = EP_TAG_")
+        set res to string_concat(res and variant_name)
+        set res to string_concat(res and "; ")
+        set a_idx to 0
+        repeat while a_idx < args_len:
+            set arg to get_list(args and a_idx)
+            set arg_str to gen_expr(state and arg and var_keys and var_values)
+            set res to string_concat(res and "_v[")
+            set res to string_concat(res and ep_int_to_str(a_idx + 1))
+            set res to string_concat(res and "] = ")
+            set res to string_concat(res and arg_str)
+            set res to string_concat(res and "; ")
+            set a_idx to a_idx + 1
+        set res to string_concat(res and "ep_gc_register(_v, EP_OBJ_STRUCT); (long long)_v; })")
+        return res
+
+    if type == 31: # NODE_BOOL_LIT
+        set val to get_list(expr and 1)
+        if val == 1:
+            return "1LL"
+        return "0LL"
+
+    if type == 32: # NODE_UNARY_NOT
+        set inner to get_list(expr and 1)
+        set inner_str to gen_expr(state and inner and var_keys and var_values)
+        set res to "(!"
+        set res to string_concat(res and inner_str)
+        set res to string_concat(res and ")")
+        return res
+
+    if type == 33: # NODE_TRY
+        set inner to get_list(expr and 1)
+        set inner_str to gen_expr(state and inner and var_keys and var_values)
+        return inner_str
+
+    if type == 34: # NODE_CLOSURE
+        # Closures: for now, emit as named static functions (simplified)
+        set params to get_list(expr and 1)
+        set body to get_list(expr and 2)
+        set label to get_new_label(state and "closure")
+        # Emit closure as inline block returning function pointer cast
+        return "0 /* closure not yet implemented */"
+
+    if type == 35: # NODE_LIST_LIT
+        set elements to get_list(expr and 1)
+        set elem_len to length_list(elements)
+        set res to "({ long long _lst = create_list(); "
+        set e_idx to 0
+        repeat while e_idx < elem_len:
+            set elem to get_list(elements and e_idx)
+            set elem_str to gen_expr(state and elem and var_keys and var_values)
+            set res to string_concat(res and "append_list(_lst, ")
+            set res to string_concat(res and elem_str)
+            set res to string_concat(res and "); ")
+            set e_idx to e_idx + 1
+        set res to string_concat(res and "_lst; })")
+        return res
             
     return ""
 
@@ -1206,7 +1461,7 @@ define get_c_runtime_source:
     set ok to append_list(lines and "/* GC globals */\n")
     set ok to append_list(lines and "static EpGCObject* ep_gc_head = NULL;\n")
     set ok to append_list(lines and "static long long ep_gc_count = 0;\n")
-    set ok to append_list(lines and "static long long ep_gc_threshold = 256;\n")
+    set ok to append_list(lines and "static long long ep_gc_threshold = 8192;\n")
     set ok to append_list(lines and "static int ep_gc_enabled = 1;\n")
     set ok to append_list(lines and "static pthread_mutex_t ep_gc_mutex = PTHREAD_MUTEX_INITIALIZER;\n")
     set ok to append_list(lines and "\n")
@@ -1470,7 +1725,7 @@ define get_c_runtime_source:
     set ok to append_list(lines and "    ep_gc_mark();\n")
     set ok to append_list(lines and "    ep_gc_sweep();\n")
     set ok to append_list(lines and "    ep_gc_threshold = ep_gc_count * 2;\n")
-    set ok to append_list(lines and "    if (ep_gc_threshold < 256) ep_gc_threshold = 256;\n")
+    set ok to append_list(lines and "    if (ep_gc_threshold < 8192) ep_gc_threshold = 8192;\n")
     set ok to append_list(lines and "}\n")
     set ok to append_list(lines and "\n")
     set ok to append_list(lines and "/* Maybe trigger GC if we've exceeded threshold */\n")
@@ -3131,6 +3386,59 @@ define generate_c with program and is_test_mode:
     
     # Emit headers and runtime
     set ok to emit(state and get_c_runtime_source())
+
+    # Emit struct typedefs (if program has struct_defs at index 4)
+    set prog_len to length_list(program)
+    if prog_len > 4:
+        set struct_defs to get_list(program and 4)
+        set sd_len to length_list(struct_defs)
+        if sd_len > 0:
+            set ok to emit(state and "\n/* Struct Field Index Defines */\n")
+            set sd_idx to 0
+            repeat while sd_idx < sd_len:
+                set sdef to get_list(struct_defs and sd_idx)
+                set sname to get_list(sdef and 1)
+                set sfields to get_list(sdef and 2)
+                set sf_len to length_list(sfields)
+                set sf_idx to 0
+                repeat while sf_idx < sf_len:
+                    set sf to get_list(sfields and sf_idx)
+                    set sf_name to get_list(sf and 0)
+                    set line to "#define EP_FIELD_"
+                    set line to string_concat(line and sf_name)
+                    set line to string_concat(line and " ")
+                    set line to string_concat(line and ep_int_to_str(sf_idx))
+                    set line to string_concat(line and "\n")
+                    set ok to emit(state and line)
+                    set sf_idx to sf_idx + 1
+                set sd_idx to sd_idx + 1
+
+    # Emit enum tag defines (if program has enum_defs at index 5)
+    if prog_len > 5:
+        set enum_defs to get_list(program and 5)
+        set ed_len to length_list(enum_defs)
+        if ed_len > 0:
+            set ok to emit(state and "\n/* Enum Tag Defines */\n")
+            set tag_counter to 0
+            set ed_idx to 0
+            repeat while ed_idx < ed_len:
+                set edef to get_list(enum_defs and ed_idx)
+                set ename to get_list(edef and 1)
+                set evariants to get_list(edef and 2)
+                set ev_len to length_list(evariants)
+                set ev_idx to 0
+                repeat while ev_idx < ev_len:
+                    set ev to get_list(evariants and ev_idx)
+                    set ev_name to get_list(ev and 0)
+                    set line to "#define EP_TAG_"
+                    set line to string_concat(line and ev_name)
+                    set line to string_concat(line and " ")
+                    set line to string_concat(line and ep_int_to_str(tag_counter))
+                    set line to string_concat(line and "\n")
+                    set ok to emit(state and line)
+                    set tag_counter to tag_counter + 1
+                    set ev_idx to ev_idx + 1
+                set ed_idx to ed_idx + 1
     
     # Emit FFI external prototypes
     set externals to get_list(program and 2)
@@ -3266,6 +3574,34 @@ define generate_c with program and is_test_mode:
     
     # Reset spawn index
     set dummy to set_codegen_spawn_index(state and 0)
+
+    # Emit method definitions (if present at index 6)
+    if prog_len > 6:
+        set method_defs to get_list(program and 6)
+        set md_len to length_list(method_defs)
+        set md_idx to 0
+        repeat while md_idx < md_len:
+            set mdef to get_list(method_defs and md_idx)
+            # method_def: [39, method_name, struct_name, params, body]
+            set mname to get_list(mdef and 1)
+            set msname to get_list(mdef and 2)
+            set mparams to get_list(mdef and 3)
+            set mbody to get_list(mdef and 4)
+            # Build a function node with self as first parameter
+            set full_params to create_list() + 0
+            set self_param to create_list() + 0
+            set ok to append_list(self_param and "self")
+            set ok to append_list(self_param and 0)
+            set ok to append_list(full_params and self_param)
+            set mp_len to length_list(mparams)
+            set mp_idx to 0
+            repeat while mp_idx < mp_len:
+                set mp to get_list(mparams and mp_idx)
+                set ok to append_list(full_params and mp)
+                set mp_idx to mp_idx + 1
+            set method_func to make_node_func(mname and full_params and mbody and 0) + 0
+            set ok to gen_function(state and method_func)
+            set md_idx to md_idx + 1
     
     # Emit functions
     set idx to 0

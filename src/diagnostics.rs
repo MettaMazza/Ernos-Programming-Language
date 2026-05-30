@@ -69,6 +69,7 @@ impl ErrorCode {
     pub const DOUBLE_MOVE: &'static str = "E0033";
     pub const MUTABLE_BORROW_CONFLICT: &'static str = "E0034";
     pub const SEND_BORROW: &'static str = "E0035";
+    pub const NON_SEND: &'static str = "E0036";
 
     // Warnings (W0040-W0049)
     pub const UNREACHABLE_CODE: &'static str = "W0040";

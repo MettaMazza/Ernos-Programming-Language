@@ -1,10 +1,10 @@
 # ErnosPlain SQLite Database Wrapper Standard Library
 
-external define sqlite3_open with filename and db_ptr
-external define sqlite3_close with db
-external define sqlite3_exec with db and sql and callback and callback_arg and errmsg_ptr
-external define sqlite_get_callback_ptr
-external define get_list_data_ptr with list
+external define sqlite3_open with filename and db_ptr returning Int
+external define sqlite3_close with db returning Int
+external define sqlite3_exec with db and sql and callback and callback_arg and errmsg_ptr returning Int
+external define sqlite_get_callback_ptr with dummy returning Int
+external define get_list_data_ptr with list returning Int
 
 define sql_open with filename:
     set db_ptr to create_list()
@@ -24,7 +24,7 @@ define sql_execute with db and sql:
 
 define sql_query with db and sql:
     set rows to create_list()
-    set cb to sqlite_get_callback_ptr()
+    set cb to sqlite_get_callback_ptr(0)
     set err_ptr to create_list()
     set ok to append_list(err_ptr and 0)
     set err_addr to get_list_data_ptr(err_ptr)
