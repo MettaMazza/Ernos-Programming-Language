@@ -473,6 +473,88 @@ impl TypeChecker {
         MonoType::Var(id)
     }
 
+    /// Instantiate a function type scheme with fresh type variables.
+    /// This ensures each call site gets independent type variables,
+    /// preventing cross-call-site unification conflicts.
+    fn instantiate(&mut self, param_types: &[MonoType], ret_type: &MonoType) -> (Vec<MonoType>, MonoType) {
+        // Collect all Var IDs in the signature
+        let mut var_ids = std::collections::HashSet::new();
+        for pt in param_types {
+            self.collect_vars(pt, &mut var_ids);
+        }
+        self.collect_vars(ret_type, &mut var_ids);
+
+        if var_ids.is_empty() {
+            // No type variables — no need to instantiate
+            return (param_types.to_vec(), ret_type.clone());
+        }
+
+        // Create a mapping from old Var IDs to fresh ones
+        let mut mapping: HashMap<TypeVarId, MonoType> = HashMap::new();
+        for id in var_ids {
+            mapping.insert(id, self.fresh_var());
+        }
+
+        let new_params: Vec<MonoType> = param_types.iter()
+            .map(|pt| self.substitute_vars(pt, &mapping))
+            .collect();
+        let new_ret = self.substitute_vars(ret_type, &mapping);
+        (new_params, new_ret)
+    }
+
+    /// Collect all Var IDs in a MonoType
+    fn collect_vars(&self, ty: &MonoType, ids: &mut std::collections::HashSet<TypeVarId>) {
+        match ty {
+            MonoType::Var(id) => { ids.insert(*id); }
+            MonoType::List(elem) => self.collect_vars(elem, ids),
+            MonoType::Fun(params, ret) => {
+                for p in params { self.collect_vars(p, ids); }
+                self.collect_vars(ret, ids);
+            }
+            MonoType::Ref(inner) => self.collect_vars(inner, ids),
+            MonoType::Future(inner) => self.collect_vars(inner, ids),
+            MonoType::Struct(_, args) | MonoType::Enum(_, args) => {
+                for a in args { self.collect_vars(a, ids); }
+            }
+            _ => {} // Int, Float, Bool, Str, DynStr, Unit, Any, Never
+        }
+    }
+
+    /// Replace Var IDs according to a mapping
+    fn substitute_vars(&self, ty: &MonoType, mapping: &HashMap<TypeVarId, MonoType>) -> MonoType {
+        match ty {
+            MonoType::Var(id) => {
+                if let Some(replacement) = mapping.get(id) {
+                    replacement.clone()
+                } else {
+                    ty.clone()
+                }
+            }
+            MonoType::List(elem) => MonoType::List(Box::new(self.substitute_vars(elem, mapping))),
+            MonoType::Fun(params, ret) => {
+                let new_params: Vec<MonoType> = params.iter()
+                    .map(|p| self.substitute_vars(p, mapping))
+                    .collect();
+                MonoType::Fun(new_params, Box::new(self.substitute_vars(ret, mapping)))
+            }
+            MonoType::Ref(inner) => MonoType::Ref(Box::new(self.substitute_vars(inner, mapping))),
+            MonoType::Future(inner) => MonoType::Future(Box::new(self.substitute_vars(inner, mapping))),
+            MonoType::Struct(name, args) => {
+                let new_args: Vec<MonoType> = args.iter()
+                    .map(|a| self.substitute_vars(a, mapping))
+                    .collect();
+                MonoType::Struct(name.clone(), new_args)
+            }
+            MonoType::Enum(name, args) => {
+                let new_args: Vec<MonoType> = args.iter()
+                    .map(|a| self.substitute_vars(a, mapping))
+                    .collect();
+                MonoType::Enum(name.clone(), new_args)
+            }
+            _ => ty.clone(), // Int, Float, Bool, Str, DynStr, Unit, Any, Never
+        }
+    }
+
     /// Push a new scope
     fn push_scope(&mut self) {
         self.env.push(HashMap::new());
@@ -604,8 +686,22 @@ impl TypeChecker {
             self.func_types.insert(func.name.clone(), (param_types, ret_type));
         }
 
-        // Register external function signatures
+        // Register built-in functions FIRST so they can't be shadowed
+        // by untyped external defines from imported modules.
+        self.register_builtins();
+
+        // Register external function signatures.
+        // Skip externals that shadow a builtin unless they have explicit type annotations
+        // (which would indicate an intentional override with a more specific type).
         for ext in &program.externals {
+            let has_annotations = ext.params.iter().any(|(_, _, ann)| ann.is_some())
+                || ext.return_type.is_some();
+            if !has_annotations && self.func_types.contains_key(&ext.name) {
+                // Untyped external that shadows a known builtin — skip to preserve
+                // the builtin's proper types (e.g., ep_sha1: Str -> DynStr).
+                continue;
+            }
+
             let param_types: Vec<MonoType> = ext.params.iter()
                 .map(|(_, is_borrowed, ann)| {
                     let base = if let Some(a) = ann {
@@ -629,9 +725,6 @@ impl TypeChecker {
             
             self.func_types.insert(ext.name.clone(), (param_types, ret_type));
         }
-
-        // Register built-in functions
-        self.register_builtins();
 
         // Register method signatures
         for md in &program.method_defs {
@@ -1462,7 +1555,14 @@ impl TypeChecker {
             ExprNode::Call(name, args) => {
                 let arg_types: Vec<MonoType> = args.iter().map(|a| self.check_expr(a)).collect();
                 
-                if let Some((param_types, ret_type)) = self.func_types.get(name).cloned() {
+                if let Some((param_types_raw, ret_type_raw)) = self.func_types.get(name).cloned() {
+                    // Instantiate: replace all Var IDs with fresh ones so each call
+                    // site gets independent type variables. Without this, two calls
+                    // to get_list() in different modules would share the same Var IDs,
+                    // and the first call's unification (e.g., Var(3)=Str) would
+                    // prevent the second call from unifying with Int.
+                    let (param_types, ret_type) = self.instantiate(&param_types_raw, &ret_type_raw);
+
                     // Polymorphic builtins that accept any value type — skip arg type checking
                     // because the C runtime stores all values as long long (ints or pointers).
                     // ep_dlcall*/ep_dlsym are FFI escape hatches where strings pass as int handles.
