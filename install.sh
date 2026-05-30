@@ -77,7 +77,9 @@ cp target/release/ernos ./epc_bootstrap
 
 # B. Concatenate and build the self-hosted compiler
 echo "Generating the self-hosted compiler unit..."
-cat ep_lexer.ep ep_parser.ep ep_codegen.ep epc.ep > self_hosted_compiler.ep
+# Strip the import lines from epc.ep — those modules are already prepended by cat.
+# Without this, the self-hosted compiler sees double definitions during self-replication.
+cat ep_lexer.ep ep_parser.ep ep_codegen.ep <(grep -v '^import "ep_' epc.ep) > self_hosted_compiler.ep
 
 echo "Compiling self-hosted compiler with the bootstrap compiler..."
 ./epc_bootstrap self_hosted_compiler.ep
