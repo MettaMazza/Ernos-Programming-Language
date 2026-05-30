@@ -58,7 +58,7 @@ If a function isn't registered in `src/type_check.rs` (`register_builtins`) AND 
 cargo run -- epc.ep && ./epc tests/test_basic_math.ep && ./test_basic_math
 ```
 
-The self-hosted compiler is 4,500+ lines of real ErnosPlain that exercises the full type system, all builtin functions, list operations, string operations, struct creation, pattern matching, and closures. If it doesn't compile, you broke something.
+The self-hosted compiler is 5,800+ lines of real ErnosPlain that exercises the full type system, all builtin functions, list operations, string operations, struct creation, pattern matching, and closures. If it doesn't compile, you broke something.
 
 ### Rule 5: Read Source, Never Guess
 
@@ -144,7 +144,7 @@ Every language construct should read like a sentence a non-programmer could unde
 Symbol shortcuts (`+`, `<`, `==`, `&&`) are allowed as opt-in shorthands for experienced programmers. The plain English form is always the primary syntax.
 
 ### Self-Hosting is Non-Negotiable
-The self-hosted compiler (`epc.ep` + modules) must always compile itself using the Rust bootstrap compiler. This is the ultimate integration test. If the type checker rejects the self-hosted compiler, the type checker is too strict — not the self-hosted compiler is wrong. The self-hosted compiler is 4,500+ lines of real, working ErnosPlain. It is the language's own dogfood.
+The self-hosted compiler (`epc.ep` + modules) must always compile itself using the Rust bootstrap compiler. This is the ultimate integration test. If the type checker rejects the self-hosted compiler, the type checker is too strict — not the self-hosted compiler is wrong. The self-hosted compiler is 5,800+ lines of real, working ErnosPlain. It is the language's own dogfood.
 
 ### Cross-Platform by Default
 Ernos must work on:
@@ -382,7 +382,9 @@ These are implemented as C functions in the runtime (codegen.rs). They are NOT E
 `json_get_int(json and key)`, `json_get_string(json and key)`, `json_get_bool(json and key)`
 
 ### SQLite
-`sqlite_get_callback_ptr(dummy)`
+`ep_sqlite3_open(filename and db_ptr)`, `ep_sqlite3_close(db)`, `ep_sqlite3_exec(db and sql and callback and cb_arg and errmsg_ptr)`, `sqlite_get_callback_ptr(dummy)`
+
+> **Note:** The `ep_sqlite3_*` wrappers properly marshal between SQLite's `int` returns and ErnosPlain's `long long`, preventing arm64 upper-32-bit garbage. The stdlib `sql.ep` module provides a higher-level API: `sql_open`, `sql_close`, `sql_execute`, `sql_query`.
 
 ### Math / System
 `ep_random_int(min and max)`, `ep_time_ms()`, `ep_time_now_ms()`, `ep_time_now_sec()`, `ep_time_day()`, `ep_time_month()`, `ep_time_year()`, `ep_sleep_ms(ms)`, `sleep_ms(ms)`, `ep_abs(n)`, `ep_system(cmd)`, `ep_play_sound(path)` (macOS), `run_command(cmd)`
@@ -397,7 +399,8 @@ These are implemented as C functions in the runtime (codegen.rs). They are NOT E
 `ep_dlopen(path)` — load .dylib/.so, returns handle
 `ep_dlsym(handle and name)` — find symbol, returns function pointer
 `ep_dlclose(handle)` — close library handle
-`ep_dlcall0(fn)` through `ep_dlcall6(fn and a1 ... and a6)` — call function pointer with 0-6 args
+`ep_dlcall0(fn)` through `ep_dlcall10(fn and a1 ... and a10)` — call function pointer with 0-10 integer args
+`ep_dlcall_f0(fn)` through `ep_dlcall_f6(fn and f1 ... and f6)` — call function pointer with 0-6 float args
 
 All FFI functions work with `long long` arguments. Pointers and integers are passed directly. Strings must be passed as their `long long` representation (which is already how ErnosPlain stores them).
 
@@ -448,7 +451,7 @@ If ANY step fails, the change is not ready. Fix it before committing. Do not com
 
 ## Known Constraints
 
-1. **All values are `long long`** — no floats at runtime yet (Float is in the type system but codegen support is partial)
+1. **All values are `long long`** — Float is supported via `int_to_float`, `float_to_int`, `float_to_string` conversions and `ep_dlcall_f0`–`ep_dlcall_f6` for calling C functions that take/return doubles
 2. **Single-file compilation** — the import system flattens everything into one C file
 3. **MonoType::Any for containers** — `get_list`, `pop_list`, `map_get_val`, `map_get_str` return `Any` to support heterogeneous data
 4. **No closures over mutable state** — closures capture by value at creation time

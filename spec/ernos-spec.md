@@ -359,7 +359,7 @@ All functions from the imported module become available with the `m_` prefix (e.
 
 ## 9. Standard Library
 
-23 modules: `string`, `collections`, `fs`, `net`, `http`, `json`, `csv`, `datetime`, `crypto`, `regex`, `sync`, `os`, `test`, `log`, `math`, `sort`, `sql`, `gui`, `hash`, `toml`, `static_server`, `websocket`, `select`.
+24 modules: `string`, `collections`, `fs`, `net`, `http`, `json`, `csv`, `datetime`, `crypto`, `regex`, `sync`, `os`, `test`, `log`, `math`, `sort`, `sql`, `gui`, `hash`, `toml`, `static_server`, `websocket`, `select`, `structured`.
 
 ---
 

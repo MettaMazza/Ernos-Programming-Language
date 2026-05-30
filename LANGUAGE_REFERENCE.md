@@ -413,7 +413,7 @@ When using `import "module" as alias`, all functions from the module are availab
 
 ## 13. Standard Library
 
-23 modules available: `string`, `collections`, `fs`, `net`, `http`, `json`, `csv`, `datetime`, `crypto`, `regex`, `sync`, `os`, `test`, `log`, `math`, `sort`, `sql`, `gui`, `hash`, `toml`, `static_server`, `websocket`, `select`.
+24 modules available: `string`, `collections`, `fs`, `net`, `http`, `json`, `csv`, `datetime`, `crypto`, `regex`, `sync`, `os`, `test`, `log`, `math`, `sort`, `sql`, `gui`, `hash`, `toml`, `static_server`, `websocket`, `select`, `structured`.
 
 ### Core Modules
 
@@ -441,6 +441,7 @@ When using `import "module" as alias`, all functions from the module are availab
 | `static_server` | Static file HTTP server |
 | `websocket` | WebSocket protocol |
 | `select` | I/O multiplexing |
+| `structured` | Structured concurrency (task groups, timeouts) |
 
 ---
 
@@ -458,7 +459,7 @@ define main:
     return 0
 ```
 
-Available bridges: `sqlite`, `curl`, `zlib`, `openssl`, `pcre`, `jansson`.
+Available bridges (29): `sqlite`, `curl`, `zlib`, `openssl`, `pcre`, `jansson`, `raylib`, `sdl2`, `ncurses`, `cairo`, `libpng`, `stb_image`, `stb_truetype`, `miniaudio`, `libsndfile`, `libsodium`, `expat`, `libgit2`, `libuv`, `lmdb`, `termbox2`, `portmidi`, `freetype`, `lua`, `mongoose`, `mosquitto`, `libnotify`, `libusb`, `chipmunk`.
 
 ### Dynamic Library Loading (Low-Level FFI)
 
@@ -476,7 +477,8 @@ FFI Functions:
 - `ep_dlopen(path)` — load shared library, returns handle
 - `ep_dlsym(handle and name)` — find symbol, returns function pointer
 - `ep_dlclose(handle)` — close library
-- `ep_dlcall0(fn)` through `ep_dlcall6(fn and a1 ... and a6)` — call with 0-6 args
+- `ep_dlcall0(fn)` through `ep_dlcall10(fn and a1 ... and a10)` — call with 0-10 integer args
+- `ep_dlcall_f0(fn)` through `ep_dlcall_f6(fn and f1 ... and f6)` — call with 0-6 float args
 
 ---
 
@@ -503,7 +505,7 @@ ernos transpile program.c -o program.ep    # C → ErnosPlain
 ernos transpile app.js -o app.ep           # JavaScript → ErnosPlain
 ```
 
-Supported extensions: `.py`, `.c`, `.h`, `.js`, `.mjs`
+Supported extensions: `.py`, `.c`, `.h`, `.js`, `.mjs`, `.go`, `.rs`, `.rb`, `.java`, `.ts`
 
 
 
