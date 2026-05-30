@@ -1,8 +1,8 @@
 # ErnosPlain SQLite Database Wrapper Standard Library
 
-external define sqlite3_open with filename and db_ptr returning Int
-external define sqlite3_close with db returning Int
-external define sqlite3_exec with db and sql and callback and callback_arg and errmsg_ptr returning Int
+external define ep_sqlite3_open with filename and db_ptr returning Int
+external define ep_sqlite3_close with db returning Int
+external define ep_sqlite3_exec with db and sql and callback and callback_arg and errmsg_ptr returning Int
 external define sqlite_get_callback_ptr with dummy returning Int
 external define get_list_data_ptr with list returning Int
 
@@ -10,24 +10,20 @@ define sql_open with filename:
     set db_ptr to create_list()
     set ok to append_list(db_ptr and 0)
     set db_addr to get_list_data_ptr(db_ptr)
-    set res to sqlite3_open(filename and db_addr)
+    set res to ep_sqlite3_open(filename and db_addr)
     if res == 0:
         set handle to get_list(db_ptr and 0)
         return handle
     return 0
 
 define sql_close with db:
-    return sqlite3_close(db)
+    return ep_sqlite3_close(db)
 
 define sql_execute with db and sql:
-    return sqlite3_exec(db and sql and 0 and 0 and 0)
+    return ep_sqlite3_exec(db and sql and 0 and 0 and 0)
 
 define sql_query with db and sql:
     set rows to create_list()
     set cb to sqlite_get_callback_ptr(0)
-    set err_ptr to create_list()
-    set ok to append_list(err_ptr and 0)
-    set err_addr to get_list_data_ptr(err_ptr)
-    set rows_ptr to get_list_data_ptr(rows)
-    set res to sqlite3_exec(db and sql and cb and rows_ptr and err_addr)
+    set res to ep_sqlite3_exec(db and sql and cb and rows and 0)
     return rows

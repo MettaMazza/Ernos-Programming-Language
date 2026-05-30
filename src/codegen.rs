@@ -321,6 +321,9 @@ impl Codegen {
         self.func_return_types.insert("pop_list".to_string(), Type::Int);
         self.func_return_types.insert("get_list_data_ptr".to_string(), Type::Int);
         self.func_return_types.insert("sqlite_get_callback_ptr".to_string(), Type::Int);
+        self.func_return_types.insert("ep_sqlite3_open".to_string(), Type::Int);
+        self.func_return_types.insert("ep_sqlite3_close".to_string(), Type::Int);
+        self.func_return_types.insert("ep_sqlite3_exec".to_string(), Type::Int);
         self.func_return_types.insert("free_list".to_string(), Type::Int);
         self.func_return_types.insert("create_map".to_string(), Type::Int);
         self.func_return_types.insert("map_insert".to_string(), Type::Int);
@@ -6334,6 +6337,31 @@ static int sqlite_list_callback(void* arg, int argc, char** argv, char** col_nam
 
 long long sqlite_get_callback_ptr(long long dummy) {
     return (long long)sqlite_list_callback;
+}
+
+/* SQLite type-safe wrappers — marshal between int and long long */
+typedef struct sqlite3 sqlite3;
+int sqlite3_open(const char*, sqlite3**);
+int sqlite3_close(sqlite3*);
+int sqlite3_exec(sqlite3*, const char*, int(*)(void*,int,char**,char**), void*, char**);
+
+long long ep_sqlite3_open(long long filename, long long db_ptr) {
+    sqlite3* db = NULL;
+    int rc = sqlite3_open((const char*)filename, &db);
+    if (rc == 0 && db_ptr != 0) {
+        *((long long*)db_ptr) = (long long)db;
+    }
+    return (long long)rc;
+}
+
+long long ep_sqlite3_close(long long db) {
+    return (long long)sqlite3_close((sqlite3*)db);
+}
+
+long long ep_sqlite3_exec(long long db, long long sql, long long callback, long long cb_arg, long long errmsg_ptr) {
+    return (long long)sqlite3_exec((sqlite3*)db, (const char*)sql,
+        (int(*)(void*,int,char**,char**))(callback),
+        (void*)cb_arg, (char**)errmsg_ptr);
 }
 
 int ep_argc = 0;
