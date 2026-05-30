@@ -73,7 +73,7 @@ echo -e "${BOLD}3. Compiling ErnosPlain from source...${NC}"
 # A. Build the Rust bootstrap compiler
 echo "Building the Rust bootstrap compiler driver..."
 cargo build --release --quiet
-cp target/release/ernosplain ./epc_bootstrap
+cp target/release/ernos ./epc_bootstrap
 
 # B. Concatenate and build the self-hosted compiler
 echo "Generating the self-hosted compiler unit..."
