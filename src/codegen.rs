@@ -6340,6 +6340,7 @@ long long sqlite_get_callback_ptr(long long dummy) {
 }
 
 /* SQLite type-safe wrappers — marshal between int and long long */
+#ifdef EP_HAS_SQLITE
 typedef struct sqlite3 sqlite3;
 int sqlite3_open(const char*, sqlite3**);
 int sqlite3_close(sqlite3*);
@@ -6363,6 +6364,7 @@ long long ep_sqlite3_exec(long long db, long long sql, long long callback, long 
         (int(*)(void*,int,char**,char**))(callback),
         (void*)cb_arg, (char**)errmsg_ptr);
 }
+#endif /* EP_HAS_SQLITE */
 
 int ep_argc = 0;
 char** ep_argv = NULL;

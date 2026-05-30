@@ -1296,6 +1296,7 @@ fn main() {
         for path in &parsed_files {
             let path_str = path.to_string_lossy();
             if path_str.ends_with("sql.ep") {
+                link_flags.push("-DEP_HAS_SQLITE");
                 link_flags.push("-lsqlite3");
             }
             if path_str.ends_with("gui.ep") {
