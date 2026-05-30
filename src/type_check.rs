@@ -1016,6 +1016,9 @@ impl TypeChecker {
 
         // SQLite
         self.func_types.insert("sqlite_get_callback_ptr".into(), (vec![MonoType::Int], MonoType::Int));
+        self.func_types.insert("ep_sqlite3_open".into(), (vec![MonoType::Str, MonoType::Int], MonoType::Int));
+        self.func_types.insert("ep_sqlite3_close".into(), (vec![MonoType::Int], MonoType::Int));
+        self.func_types.insert("ep_sqlite3_exec".into(), (vec![MonoType::Int, MonoType::Str, MonoType::Int, MonoType::Int, MonoType::Int], MonoType::Int));
 
         // Time (additional)
         self.func_types.insert("ep_time_now_ms".into(), (vec![], MonoType::Int));
