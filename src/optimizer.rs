@@ -172,6 +172,42 @@ fn stmt_modifies_var(stmt: &StmtNode, var_name: &str) -> bool {
     }
 }
 
+/// Check if a statement (or any sub-expression/sub-statement) reads a variable
+fn stmt_reads_var(stmt: &Stmt, var_name: &str) -> bool {
+    match &stmt.node {
+        StmtNode::Set(_, expr, _) => reads_var(&expr.node, var_name),
+        StmtNode::Return(expr) | StmtNode::Display(expr) | StmtNode::ExprStmt(expr) => {
+            reads_var(&expr.node, var_name)
+        }
+        StmtNode::If(cond, then_b, else_b) => {
+            reads_var(&cond.node, var_name)
+                || then_b.iter().any(|s| stmt_reads_var(s, var_name))
+                || else_b.as_ref().map_or(false, |eb| eb.iter().any(|s| stmt_reads_var(s, var_name)))
+        }
+        StmtNode::RepeatWhile(cond, body) => {
+            reads_var(&cond.node, var_name)
+                || body.iter().any(|s| stmt_reads_var(s, var_name))
+        }
+        StmtNode::ForEach(iter_var, iterable, body) => {
+            iter_var == var_name
+                || reads_var(&iterable.node, var_name)
+                || body.iter().any(|s| stmt_reads_var(s, var_name))
+        }
+        StmtNode::Send(chan, val) => {
+            reads_var(&chan.node, var_name) || reads_var(&val.node, var_name)
+        }
+        StmtNode::FieldSet(obj, _, val) => {
+            reads_var(&obj.node, var_name) || reads_var(&val.node, var_name)
+        }
+        StmtNode::Spawn(_, args) => args.iter().any(|a| reads_var(&a.node, var_name)),
+        StmtNode::Match(expr, arms) => {
+            reads_var(&expr.node, var_name)
+                || arms.iter().any(|(_, _, body)| body.iter().any(|s| stmt_reads_var(s, var_name)))
+        }
+        _ => false,
+    }
+}
+
 impl Optimizer {
     pub fn new() -> Self {
         Self { 
@@ -737,9 +773,21 @@ impl Optimizer {
                         
                         // Check if the expression reads any variable modified in the loop
                         let reads_modified = modified_vars.iter().any(|mv| reads_var(&expr.node, mv));
-                        if !reads_modified {
-                            to_hoist.push(j);
-                        }
+                        if reads_modified { continue; }
+
+                        // CRITICAL: Don't hoist if the variable is read by any other
+                        // statement in the loop body. Hoisting would change the value
+                        // seen on the first iteration (the pre-loop value would be
+                        // overwritten before the loop starts).
+                        // Example: set is_exit to 1; repeat: display is_exit; set is_exit to 0
+                        // Hoisting "set is_exit to 0" before the loop makes the first
+                        // iteration see 0 instead of 1.
+                        let var_read_elsewhere = loop_body.iter().enumerate().any(|(k, other_stmt)| {
+                            k != j && stmt_reads_var(other_stmt, var_name)
+                        });
+                        if var_read_elsewhere { continue; }
+
+                        to_hoist.push(j);
                     }
                 }
                 
