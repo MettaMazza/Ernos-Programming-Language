@@ -3156,6 +3156,15 @@ int main(int argc, char** argv) {{
     fn gen_function(&mut self, func: &Function) -> Result<(), String> {
         let mut var_types = HashMap::new();
 
+        /* Clear per-function state that would otherwise leak across functions.
+           list_element_types: bare variable names like "votes" collide between
+           functions, causing wrong for-each loop variable types.
+           closure_c_names: a closure named "x" in function A would cause
+           function B's call to a regular function "x" to be misrouted.
+           We clear both and re-collect for THIS function only. */
+        self.list_element_types.clear();
+        self.closure_c_names.clear();
+
         for param in &func.params {
             let param_type = if let Some(ref ann) = param.2 {
                 self.type_annotation_to_type(ann)
@@ -3167,6 +3176,8 @@ int main(int argc, char** argv) {{
             };
             var_types.insert(param.0.clone(), param_type);
         }
+        /* collect_var_types populates list_element_types and closure_c_names
+           for THIS function's body only (since we cleared them above). */
         self.collect_var_types(&func.body, &mut var_types);
 
         self.current_return_type = self.func_return_types.get(&func.name).cloned().unwrap_or(Type::Int);
@@ -3578,6 +3589,9 @@ int main(int argc, char** argv) {{
 
     fn gen_method(&mut self, md: &MethodDef) -> Result<(), String> {
         let mut var_types = HashMap::new();
+        self.list_element_types.clear();
+        self.closure_c_names.clear();
+
         // Type self correctly based on whether the target is an enum or struct
         if self.enum_defs.contains_key(&md.struct_name) {
             var_types.insert("self".to_string(), Type::Enum(md.struct_name.clone()));

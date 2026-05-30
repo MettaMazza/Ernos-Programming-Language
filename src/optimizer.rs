@@ -17,13 +17,16 @@
 /// - Function inlining (inline small functions at call sites)
 /// - Loop unrolling (unroll small counted loops)
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use crate::ast::*;
 
 pub struct Optimizer {
     pub stats: OptStats,
     /// Function bodies indexed by name (for inlining)
     inline_candidates: HashMap<String, InlineCandidate>,
+    /// Variable names assigned closures in the current function body.
+    /// Prevents inlining a global function when the call target is shadowed.
+    closure_vars: HashSet<String>,
 }
 
 /// A function eligible for inlining
@@ -174,6 +177,7 @@ impl Optimizer {
         Self { 
             stats: OptStats::default(),
             inline_candidates: HashMap::new(),
+            closure_vars: HashSet::new(),
         }
     }
 
@@ -305,6 +309,10 @@ impl Optimizer {
             }
 
             // Pass 2: Function inlining (before dead code elimination)
+            // First, collect variables assigned closures in this function
+            // to prevent inlining when a call target is shadowed by a local closure.
+            self.closure_vars.clear();
+            self.collect_closure_vars(body);
             self.inline_pass(body);
 
             // Pass 3: Common Subexpression Elimination
@@ -398,6 +406,38 @@ impl Optimizer {
     /// For a call `set result to add(x and y)` where `define add with a and b: return a + b`,
     /// we replace the call with the function body's return expression, substituting
     /// parameters with arguments.
+    /// Collect variable names assigned closures in a function body.
+    /// These shadow global function names and must not be inlined.
+    fn collect_closure_vars(&mut self, body: &[Stmt]) {
+        for stmt in body {
+            match &stmt.node {
+                StmtNode::Set(name, expr, _) => {
+                    if matches!(expr.node, ExprNode::Closure(_, _)) {
+                        self.closure_vars.insert(name.clone());
+                    }
+                }
+                StmtNode::If(_, then_b, else_b) => {
+                    self.collect_closure_vars(then_b);
+                    if let Some(eb) = else_b {
+                        self.collect_closure_vars(eb);
+                    }
+                }
+                StmtNode::RepeatWhile(_, loop_body) => {
+                    self.collect_closure_vars(loop_body);
+                }
+                StmtNode::ForEach(_, _, loop_body) => {
+                    self.collect_closure_vars(loop_body);
+                }
+                StmtNode::Match(_, arms) => {
+                    for (_, _, arm_body) in arms {
+                        self.collect_closure_vars(arm_body);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn inline_pass(&mut self, body: &mut Vec<Stmt>) {
         for stmt in body.iter_mut() {
             self.inline_in_stmt(stmt);
@@ -480,6 +520,10 @@ impl Optimizer {
 
         // Then, check if this is an inlineable call
         if let ExprNode::Call(fn_name, args) = &expr.node {
+            // Skip inlining if the call target is shadowed by a local closure variable
+            if self.closure_vars.contains(fn_name) {
+                return;
+            }
             if let Some(candidate) = self.inline_candidates.get(fn_name).cloned() {
                 // Only inline if the function body is a single return expression
                 // (multi-statement inlining requires more complex transformation)
