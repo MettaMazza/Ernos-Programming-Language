@@ -4387,6 +4387,11 @@ static long long ep_gc_remembered_size = 0;
 #endif
 static pthread_mutex_t ep_gc_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+/* Function pointer for channel scanning — set after EpChannel is defined.
+   GC mark calls this to scan values in-transit in channel buffers. */
+static void (*ep_gc_scan_channels_major)(void) = NULL;
+static void (*ep_gc_scan_channels_minor)(void) = NULL;
+
 /* Thread registry for GC root scanning in multi-threaded environment */
 #define EP_MAX_THREADS 256
 static __thread void* volatile ep_thread_local_top = NULL;
@@ -4741,6 +4746,8 @@ static void ep_gc_mark(void) {
         }
         timer = timer->next;
     }
+    /* Scan all registered channel buffers — values in-transit have no root */
+    if (ep_gc_scan_channels_major) ep_gc_scan_channels_major();
 }
 
 static void ep_gc_mark_minor(void) {
@@ -4802,6 +4809,8 @@ static void ep_gc_mark_minor(void) {
     for (long long i = 0; i < ep_gc_remembered_size; i++) {
         ep_gc_mark_object_minor(ep_gc_remembered_set[i]);
     }
+    /* Scan all registered channel buffers — values in-transit have no root */
+    if (ep_gc_scan_channels_minor) ep_gc_scan_channels_minor();
 }
 
 static void ep_gc_sweep_minor(void) {
@@ -5002,7 +5011,7 @@ long long channel_has_data(long long chan_ptr);
 long long channel_select(long long channels_list, long long timeout_ms);
 long long ep_auto_to_string(long long val);
 
-typedef struct {
+typedef struct EpChannel_ {
     long long* data;
     long long capacity;
     long long head;
@@ -5012,6 +5021,60 @@ typedef struct {
     ep_cond_t cond_recv;
     ep_cond_t cond_send;
 } EpChannel;
+
+/* Global channel registry — allows GC to scan values in-transit in channel buffers.
+   Without this, an object sent to a channel but not yet received has NO GC root:
+   the sender has popped it, the receiver hasn't pushed it, and the channel buffer
+   is not scanned. The GC sweeps it → receiver gets a dangling pointer. */
+#define EP_MAX_CHANNELS 1024
+static EpChannel* ep_channel_registry[EP_MAX_CHANNELS];
+static int ep_channel_count = 0;
+static pthread_mutex_t ep_channel_registry_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static void ep_register_channel(EpChannel* chan) {
+    pthread_mutex_lock(&ep_channel_registry_mutex);
+    if (ep_channel_count < EP_MAX_CHANNELS) {
+        ep_channel_registry[ep_channel_count++] = chan;
+    }
+    pthread_mutex_unlock(&ep_channel_registry_mutex);
+}
+
+/* Channel scanning implementations — called by GC mark via function pointers.
+   These are defined here (after EpChannel) so they can access struct fields. */
+static void ep_gc_mark_object(void* ptr);     /* forward decl */
+static void ep_gc_mark_object_minor(void* ptr); /* forward decl */
+
+static void ep_gc_scan_channels_major_impl(void) {
+    pthread_mutex_lock(&ep_channel_registry_mutex);
+    for (int c = 0; c < ep_channel_count; c++) {
+        EpChannel* chan = ep_channel_registry[c];
+        if (!chan || chan->size <= 0) continue;
+        ep_mutex_lock(&chan->mutex);
+        for (long long j = 0; j < chan->size; j++) {
+            long long idx = (chan->head + j) % chan->capacity;
+            long long val = chan->data[idx];
+            if (val != 0) ep_gc_mark_object((void*)val);
+        }
+        ep_mutex_unlock(&chan->mutex);
+    }
+    pthread_mutex_unlock(&ep_channel_registry_mutex);
+}
+
+static void ep_gc_scan_channels_minor_impl(void) {
+    pthread_mutex_lock(&ep_channel_registry_mutex);
+    for (int c = 0; c < ep_channel_count; c++) {
+        EpChannel* chan = ep_channel_registry[c];
+        if (!chan || chan->size <= 0) continue;
+        ep_mutex_lock(&chan->mutex);
+        for (long long j = 0; j < chan->size; j++) {
+            long long idx = (chan->head + j) % chan->capacity;
+            long long val = chan->data[idx];
+            if (val != 0) ep_gc_mark_object_minor((void*)val);
+        }
+        ep_mutex_unlock(&chan->mutex);
+    }
+    pthread_mutex_unlock(&ep_channel_registry_mutex);
+}
 
 long long create_channel(void) {
     EpChannel* chan = malloc(sizeof(EpChannel));
@@ -5024,6 +5087,7 @@ long long create_channel(void) {
     ep_mutex_init(&chan->mutex);
     ep_cond_init(&chan->cond_recv);
     ep_cond_init(&chan->cond_send);
+    ep_register_channel(chan);
     return (long long)chan;
 }
 
@@ -6373,6 +6437,9 @@ void init_ep_args(int argc, char** argv) {
     ep_argc = argc;
     ep_argv = argv;
     ep_gc_register_thread((void*)&argc);
+    /* Wire up channel scanning for GC (defined after EpChannel struct) */
+    ep_gc_scan_channels_major = ep_gc_scan_channels_major_impl;
+    ep_gc_scan_channels_minor = ep_gc_scan_channels_minor_impl;
 }
 
 long long get_argument_count(void) {
