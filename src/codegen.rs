@@ -3764,7 +3764,8 @@ typedef enum {
     EP_OBJ_LIST,
     EP_OBJ_STRING,
     EP_OBJ_STRUCT,
-    EP_OBJ_CLOSURE
+    EP_OBJ_CLOSURE,
+    EP_OBJ_MAP
 } EpObjKind;
 
 typedef struct EpGCObject {
@@ -4391,6 +4392,10 @@ static pthread_mutex_t ep_gc_mutex = PTHREAD_MUTEX_INITIALIZER;
    GC mark calls this to scan values in-transit in channel buffers. */
 static void (*ep_gc_scan_channels_major)(void) = NULL;
 static void (*ep_gc_scan_channels_minor)(void) = NULL;
+/* Function pointers for map value traversal — set after EpMap is defined.
+   GC mark calls these to recursively mark values stored in maps. */
+static void (*ep_gc_mark_map_values)(void* ptr) = NULL;
+static void (*ep_gc_mark_map_values_minor)(void* ptr) = NULL;
 
 /* Thread registry for GC root scanning in multi-threaded environment */
 #define EP_MAX_THREADS 256
@@ -4660,6 +4665,8 @@ static void ep_gc_mark_object(void* ptr) {
                 ep_gc_mark_object((void*)fields[i]);
             }
         }
+    } else if (obj->kind == EP_OBJ_MAP) {
+        if (ep_gc_mark_map_values) ep_gc_mark_map_values(ptr);
     }
 }
 
@@ -4685,6 +4692,8 @@ static void ep_gc_mark_object_minor(void* ptr) {
                 ep_gc_mark_object_minor((void*)fields[i]);
             }
         }
+    } else if (obj->kind == EP_OBJ_MAP) {
+        if (ep_gc_mark_map_values_minor) ep_gc_mark_map_values_minor(ptr);
     }
 }
 
@@ -4833,6 +4842,11 @@ static void ep_gc_sweep_minor(void) {
                     free(garbage->ptr);
                 } else if (garbage->kind == EP_OBJ_CLOSURE) {
                     free(garbage->ptr);
+                } else if (garbage->kind == EP_OBJ_MAP) {
+                    /* EpMap layout: entries*, capacity, size. Free entries then map. */
+                    void** map_fields = (void**)garbage->ptr;
+                    if (map_fields && map_fields[0]) free(map_fields[0]); /* entries */
+                    free(garbage->ptr);
                 }
                 free(garbage);
                 ep_gc_count--;
@@ -4871,6 +4885,10 @@ static void ep_gc_sweep_major(void) {
             } else if (garbage->kind == EP_OBJ_STRUCT) {
                 free(garbage->ptr);
             } else if (garbage->kind == EP_OBJ_CLOSURE) {
+                free(garbage->ptr);
+            } else if (garbage->kind == EP_OBJ_MAP) {
+                void** map_fields = (void**)garbage->ptr;
+                if (map_fields && map_fields[0]) free(map_fields[0]);
                 free(garbage->ptr);
             }
             free(garbage);
@@ -5570,6 +5588,35 @@ typedef struct {
     long long size;
 } EpMap;
 
+/* Map value traversal for GC — walks all entries and marks values.
+   Called by ep_gc_mark_object() via function pointer. */
+static void ep_gc_mark_map_values_impl(void* ptr) {
+    EpMap* map = (EpMap*)ptr;
+    if (!map || !map->entries) return;
+    for (long long i = 0; i < map->capacity; i++) {
+        if (map->entries[i].used && map->entries[i].value != 0) {
+            ep_gc_mark_object((void*)map->entries[i].value);
+        }
+        /* Also mark keys if they are heap strings */
+        if (map->entries[i].used && map->entries[i].key != NULL) {
+            ep_gc_mark_object((void*)map->entries[i].key);
+        }
+    }
+}
+
+static void ep_gc_mark_map_values_minor_impl(void* ptr) {
+    EpMap* map = (EpMap*)ptr;
+    if (!map || !map->entries) return;
+    for (long long i = 0; i < map->capacity; i++) {
+        if (map->entries[i].used && map->entries[i].value != 0) {
+            ep_gc_mark_object_minor((void*)map->entries[i].value);
+        }
+        if (map->entries[i].used && map->entries[i].key != NULL) {
+            ep_gc_mark_object_minor((void*)map->entries[i].key);
+        }
+    }
+}
+
 long long create_map(void) {
     EpMap* map = malloc(sizeof(EpMap));
     if (!map) return 0;
@@ -5580,6 +5627,7 @@ long long create_map(void) {
         free(map);
         return 0;
     }
+    ep_gc_register(map, EP_OBJ_MAP);
     return (long long)map;
 }
 
@@ -6440,6 +6488,9 @@ void init_ep_args(int argc, char** argv) {
     /* Wire up channel scanning for GC (defined after EpChannel struct) */
     ep_gc_scan_channels_major = ep_gc_scan_channels_major_impl;
     ep_gc_scan_channels_minor = ep_gc_scan_channels_minor_impl;
+    /* Wire up map value traversal for GC (defined after EpMap struct) */
+    ep_gc_mark_map_values = ep_gc_mark_map_values_impl;
+    ep_gc_mark_map_values_minor = ep_gc_mark_map_values_minor_impl;
 }
 
 long long get_argument_count(void) {
