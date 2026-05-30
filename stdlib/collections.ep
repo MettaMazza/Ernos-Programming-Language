@@ -1,171 +1,28 @@
 # ErnosPlain Collections Standard Library
-# Implements HashMap, HashSet, Stack, Queue, Deque
-
-# ---- External C Runtime Helpers ----
-external define ep_hash_string with s:
-external define ep_str_equals with a and b:
-external define string_length with s:
-external define get_character with s and idx:
+# Implements HashSet, Stack, Queue, Priority Queue, Iterator
 
 # ════════════════════════════════════════════
-# HashMap (Open addressing with linear probing)
+# HashMap — provided by C runtime builtins:
+#   create_map, map_insert, map_get_val, map_contains,
+#   map_delete, map_size, map_keys, map_values, free_map,
+#   map_set_str, map_get_str
 # ════════════════════════════════════════════
 
-# Internal constants
-# Bucket layout: [key, value, occupied] per slot
-# Total size = capacity * 3
-
-define create_map:
-    set capacity to 64
-    set buckets to create_list()
-    # Initialize buckets: key=0, value=0, occupied=0
-    set i to 0
-    repeat while i < capacity * 3:
-        set ok to append_list(buckets and 0)
-        set i to i + 1
-    # Map structure: [buckets, size, capacity]
-    set map to create_list()
-    set ok to append_list(map and buckets)
-    set ok to append_list(map and 0)
-    set ok to append_list(map and capacity)
-    return map
-
-define map_hash with map and key:
-    set capacity to get_list(map and 2)
-    set h to ep_hash_string(key)
-    # Ensure positive
-    if h < 0:
-        set h to 0 - h
-    set h to h modulo capacity
-    return h
-
-define map_put with map and key and value:
-    set buckets to get_list(map and 0)
-    set size to get_list(map and 1)
-    set capacity to get_list(map and 2)
-    set idx to map_hash(map and key)
-    set attempts to 0
-    repeat while attempts < capacity:
-        set base to idx * 3
-        set occupied to get_list(buckets and base + 2)
-        if occupied == 0:
-            # Empty slot — insert
-            set ok to set_list(buckets and base and key)
-            set ok to set_list(buckets and base + 1 and value)
-            set ok to set_list(buckets and base + 2 and 1)
-            set ok to set_list(map and 1 and size + 1)
-            return 1
-        else:
-            set existing_key to get_list(buckets and base)
-            if ep_str_equals(existing_key and key) == 1:
-                # Key exists — update value
-                set ok to set_list(buckets and base + 1 and value)
-                return 1
-        set idx to (idx + 1) modulo capacity
-        set attempts to attempts + 1
-    # Map is full — should resize, but for now return error
-    return 0
-
-define map_get with map and key:
-    set buckets to get_list(map and 0)
-    set capacity to get_list(map and 2)
-    set idx to map_hash(map and key)
-    set attempts to 0
-    repeat while attempts < capacity:
-        set base to idx * 3
-        set occupied to get_list(buckets and base + 2)
-        if occupied == 0:
-            return 0
-        set existing_key to get_list(buckets and base)
-        if ep_str_equals(existing_key and key) == 1:
-            return get_list(buckets and base + 1)
-        set idx to (idx + 1) modulo capacity
-        set attempts to attempts + 1
-    return 0
-
-define map_has with map and key:
-    set buckets to get_list(map and 0)
-    set capacity to get_list(map and 2)
-    set idx to map_hash(map and key)
-    set attempts to 0
-    repeat while attempts < capacity:
-        set base to idx * 3
-        set occupied to get_list(buckets and base + 2)
-        if occupied == 0:
-            return 0
-        set existing_key to get_list(buckets and base)
-        if ep_str_equals(existing_key and key) == 1:
-            return 1
-        set idx to (idx + 1) modulo capacity
-        set attempts to attempts + 1
-    return 0
-
-define map_remove with map and key:
-    set buckets to get_list(map and 0)
-    set size to get_list(map and 1)
-    set capacity to get_list(map and 2)
-    set idx to map_hash(map and key)
-    set attempts to 0
-    repeat while attempts < capacity:
-        set base to idx * 3
-        set occupied to get_list(buckets and base + 2)
-        if occupied == 0:
-            return 0
-        set existing_key to get_list(buckets and base)
-        if ep_str_equals(existing_key and key) == 1:
-            set ok to set_list(buckets and base + 2 and 0)
-            set ok to set_list(map and 1 and size - 1)
-            return 1
-        set idx to (idx + 1) modulo capacity
-        set attempts to attempts + 1
-    return 0
-
-define map_size with map:
-    return get_list(map and 1)
-
-define map_keys with map:
-    set buckets to get_list(map and 0)
-    set capacity to get_list(map and 2)
-    set keys to create_list()
-    set i to 0
-    repeat while i < capacity:
-        set base to i * 3
-        set occupied to get_list(buckets and base + 2)
-        if occupied == 1:
-            set key to get_list(buckets and base)
-            set ok to append_list(keys and key)
-        set i to i + 1
-    return keys
-
-define map_values with map:
-    set buckets to get_list(map and 0)
-    set capacity to get_list(map and 2)
-    set values to create_list()
-    set i to 0
-    repeat while i < capacity:
-        set base to i * 3
-        set occupied to get_list(buckets and base + 2)
-        if occupied == 1:
-            set val to get_list(buckets and base + 1)
-            set ok to append_list(values and val)
-        set i to i + 1
-    return values
-
 # ════════════════════════════════════════════
-# HashSet (backed by HashMap)
+# HashSet (backed by C runtime HashMap)
 # ════════════════════════════════════════════
 
 define create_set:
     return create_map()
 
 define set_add with s and value:
-    return map_put(s and value and 1)
+    return map_insert(s and value and 1)
 
 define set_has with s and value:
-    return map_has(s and value)
+    return map_contains(s and value)
 
 define set_remove with s and value:
-    return map_remove(s and value)
+    return map_delete(s and value)
 
 define set_size with s:
     return map_size(s)
