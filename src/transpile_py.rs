@@ -333,19 +333,20 @@ pub enum PyExpr {
     Dict(Vec<(PyExpr, PyExpr)>),
     IfExpr(Box<PyExpr>, Box<PyExpr>, Box<PyExpr>),
     ListComp(Box<PyExpr>, String, Box<PyExpr>, Option<Box<PyExpr>>),
+    Await(Box<PyExpr>),
 }
 
 #[derive(Debug, Clone)]
 pub enum PyStmt {
-    Assign(Vec<String>, PyExpr),
-    AugAssign(String, String, PyExpr),
+    Assign(PyExpr, PyExpr),
+    AugAssign(PyExpr, String, PyExpr),
     Expr(PyExpr),
     Return(Option<PyExpr>),
     If(PyExpr, Vec<PyStmt>, Vec<(PyExpr, Vec<PyStmt>)>, Option<Vec<PyStmt>>),
     While(PyExpr, Vec<PyStmt>),
     For(String, PyExpr, Vec<PyStmt>),
-    FuncDef(String, Vec<(String, Option<String>)>, Option<String>, Vec<PyStmt>),
-    ClassDef(String, Vec<PyStmt>),
+    FuncDef(String, Vec<(String, Option<String>)>, Option<String>, Vec<PyStmt>, Vec<PyExpr>, bool),
+    ClassDef(String, Vec<PyStmt>, Vec<PyExpr>),
     Import(String, Option<String>),
     FromImport(String, Vec<String>),
     Print(Vec<PyExpr>),
@@ -403,13 +404,62 @@ impl PyParser {
             if matches!(self.peek(), PyToken::Newline | PyToken::Eof) { continue; }
             if let Some(s) = self.parse_stmt() {
                 stmts.push(s);
+            } else {
+                let tok = self.peek().clone();
+                stmts.push(PyStmt::Comment(format!("Unrecognized syntax near token: {:?}", tok)));
+                while !matches!(self.peek(), PyToken::Newline | PyToken::Eof) {
+                    self.advance();
+                }
+                self.expect_newline();
             }
         }
         stmts
     }
 
     fn parse_stmt(&mut self) -> Option<PyStmt> {
-        match self.peek().clone() {
+        let mut decorators = Vec::new();
+        loop {
+            self.skip_newlines();
+            if let PyToken::Indent(0) = self.peek() {
+                self.advance();
+            }
+            self.skip_newlines();
+            if matches!(self.peek(), PyToken::At) {
+                self.advance(); // consume @
+                if let Some(dec) = self.parse_expr() {
+                    decorators.push(dec);
+                }
+                self.expect_newline();
+            } else {
+                break;
+            }
+        }
+
+        self.skip_newlines();
+        if let PyToken::Indent(0) = self.peek() {
+            self.advance();
+        }
+        self.skip_newlines();
+        let mut is_async = false;
+        if let PyToken::Ident(ref s) = self.peek() {
+            if s == "async" {
+                let mut next_pos = self.pos + 1;
+                while next_pos < self.tokens.len() && matches!(self.tokens[next_pos], PyToken::Newline) {
+                    next_pos += 1;
+                }
+                if next_pos < self.tokens.len() {
+                    if let PyToken::Ident(ref next_s) = self.tokens[next_pos] {
+                        if next_s == "def" {
+                            self.advance(); // consume async
+                            self.skip_newlines();
+                            is_async = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut stmt = match self.peek().clone() {
             PyToken::Ident(ref s) => {
                 match s.as_str() {
                     "def" => self.parse_funcdef(),
@@ -445,7 +495,29 @@ impl PyParser {
             _ => {
                 self.parse_assign_or_expr()
             }
+        };
+
+        if is_async {
+            if let Some(PyStmt::FuncDef(_, _, _, _, _, ref mut async_flag)) = stmt {
+                *async_flag = true;
+            }
         }
+
+        if !decorators.is_empty() {
+            if let Some(ref mut s) = stmt {
+                match s {
+                    PyStmt::FuncDef(_, _, _, _, ref mut decs, _) => {
+                        *decs = decorators;
+                    }
+                    PyStmt::ClassDef(_, _, ref mut decs) => {
+                        *decs = decorators;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        stmt
     }
 
     fn parse_funcdef(&mut self) -> Option<PyStmt> {
@@ -455,69 +527,111 @@ impl PyParser {
 
         let mut params = Vec::new();
         while !matches!(self.peek(), PyToken::RParen | PyToken::Eof) {
+            self.skip_newlines();
+            if let PyToken::Indent(_) = self.peek() { self.advance(); }
+            self.skip_newlines();
+            if matches!(self.peek(), PyToken::RParen | PyToken::Eof) { break; }
+
             if matches!(self.peek(), PyToken::Star | PyToken::DoubleStar) {
                 self.advance();
             }
             if let PyToken::Ident(pname) = self.advance() {
                 if pname == "self" {
                     // Skip self parameter for methods
+                    self.skip_newlines();
+                    if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                    self.skip_newlines();
                     if matches!(self.peek(), PyToken::Comma) { self.advance(); }
                     continue;
                 }
                 let type_hint = if matches!(self.peek(), PyToken::Colon) {
                     self.advance();
+                    self.skip_newlines();
+                    if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                    self.skip_newlines();
                     self.parse_type_hint()
                 } else {
                     None
                 };
                 // Skip default value
+                self.skip_newlines();
+                if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                self.skip_newlines();
                 if matches!(self.peek(), PyToken::Eq) {
                     self.advance();
+                    self.skip_newlines();
+                    if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                    self.skip_newlines();
                     let _ = self.parse_expr();
                 }
                 params.push((pname, type_hint));
             }
+            self.skip_newlines();
+            if let PyToken::Indent(_) = self.peek() { self.advance(); }
+            self.skip_newlines();
             if matches!(self.peek(), PyToken::Comma) { self.advance(); }
         }
+        self.skip_newlines();
+        if let PyToken::Indent(_) = self.peek() { self.advance(); }
+        self.skip_newlines();
         if matches!(self.peek(), PyToken::RParen) { self.advance(); }
 
         // Return type hint
+        self.skip_newlines();
+        if let PyToken::Indent(_) = self.peek() { self.advance(); }
+        self.skip_newlines();
         let ret_hint = if matches!(self.peek(), PyToken::Arrow) {
             self.advance();
+            self.skip_newlines();
+            if let PyToken::Indent(_) = self.peek() { self.advance(); }
+            self.skip_newlines();
             self.parse_type_hint()
         } else {
             None
         };
 
+        self.skip_newlines();
+        if let PyToken::Indent(_) = self.peek() { self.advance(); }
+        self.skip_newlines();
         if matches!(self.peek(), PyToken::Colon) { self.advance(); }
         self.expect_newline();
 
         let body = self.parse_block();
 
-        Some(PyStmt::FuncDef(name, params, ret_hint, body))
+        Some(PyStmt::FuncDef(name, params, ret_hint, body, Vec::new(), false))
     }
 
     fn parse_type_hint(&mut self) -> Option<String> {
-        match self.peek().clone() {
-            PyToken::Ident(s) => {
+        let mut parts = Vec::new();
+        while let PyToken::Ident(s) = self.peek() {
+            parts.push(s.clone());
+            self.advance();
+            if matches!(self.peek(), PyToken::Dot) {
+                parts.push(".".to_string());
                 self.advance();
-                // Handle Optional[X], List[X], Dict[K,V], etc.
-                if matches!(self.peek(), PyToken::LBracket) {
-                    self.advance();
-                    let mut depth = 1;
-                    while depth > 0 {
-                        match self.advance() {
-                            PyToken::LBracket => depth += 1,
-                            PyToken::RBracket => depth -= 1,
-                            PyToken::Eof => break,
-                            _ => {}
-                        }
-                    }
-                }
-                Some(s)
+            } else {
+                break;
             }
-            _ => None
         }
+        if parts.is_empty() {
+            return None;
+        }
+
+        let type_name = parts.concat();
+        // Handle Optional[X], List[X], Dict[K,V], etc.
+        if matches!(self.peek(), PyToken::LBracket) {
+            self.advance();
+            let mut depth = 1;
+            while depth > 0 {
+                match self.advance() {
+                    PyToken::LBracket => depth += 1,
+                    PyToken::RBracket => depth -= 1,
+                    PyToken::Eof => break,
+                    _ => {}
+                }
+            }
+        }
+        Some(type_name)
     }
 
     fn parse_classdef(&mut self) -> Option<PyStmt> {
@@ -541,7 +655,7 @@ impl PyParser {
         self.expect_newline();
 
         let body = self.parse_block();
-        Some(PyStmt::ClassDef(_name, body))
+        Some(PyStmt::ClassDef(_name, body, Vec::new()))
     }
 
     fn parse_if(&mut self) -> Option<PyStmt> {
@@ -630,14 +744,28 @@ impl PyParser {
         self.advance(); // (
         let mut args = Vec::new();
         while !matches!(self.peek(), PyToken::RParen | PyToken::Eof) {
+            self.skip_newlines();
+            if let PyToken::Indent(_) = self.peek() { self.advance(); }
+            self.skip_newlines();
+            if matches!(self.peek(), PyToken::RParen | PyToken::Eof) { break; }
+
             // Skip keyword arguments like end=, sep=
             if let PyToken::Ident(s) = self.peek() {
                 let _s = s.clone();
                 let save = self.pos;
                 self.advance();
+                self.skip_newlines();
+                if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                self.skip_newlines();
                 if matches!(self.peek(), PyToken::Eq) {
                     self.advance();
+                    self.skip_newlines();
+                    if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                    self.skip_newlines();
                     let _ = self.parse_expr();
+                    self.skip_newlines();
+                    if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                    self.skip_newlines();
                     if matches!(self.peek(), PyToken::Comma) { self.advance(); }
                     continue;
                 }
@@ -646,8 +774,14 @@ impl PyParser {
             if let Some(e) = self.parse_expr() {
                 args.push(e);
             }
+            self.skip_newlines();
+            if let PyToken::Indent(_) = self.peek() { self.advance(); }
+            self.skip_newlines();
             if matches!(self.peek(), PyToken::Comma) { self.advance(); }
         }
+        self.skip_newlines();
+        if let PyToken::Indent(_) = self.peek() { self.advance(); }
+        self.skip_newlines();
         if matches!(self.peek(), PyToken::RParen) { self.advance(); }
         self.expect_newline();
         Some(PyStmt::Print(args))
@@ -721,11 +855,23 @@ impl PyParser {
                 if let PyToken::Ident(s) = self.peek() {
                     if s == "except" {
                         self.advance();
-                        let exc_type = if let PyToken::Ident(t) = self.peek() {
-                            let t = t.clone();
+                        let mut exc_type_parts = Vec::new();
+                        while let PyToken::Ident(t) = self.peek() {
+                            exc_type_parts.push(t.clone());
                             self.advance();
-                            Some(t)
-                        } else { None };
+                            if matches!(self.peek(), PyToken::Dot) {
+                                exc_type_parts.push(".".to_string());
+                                self.advance();
+                            } else {
+                                break;
+                            }
+                        }
+                        let exc_type = if exc_type_parts.is_empty() {
+                            None
+                        } else {
+                            Some(exc_type_parts.concat())
+                        };
+
                         let exc_name = if let PyToken::Ident(s) = self.peek() {
                             if s == "as" {
                                 self.advance();
@@ -756,28 +902,22 @@ impl PyParser {
                 self.advance();
                 let rhs = self.parse_expr()?;
                 self.expect_newline();
-
-                // Extract target names
-                let targets = match expr {
-                    PyExpr::Name(n) => vec![n],
-                    _ => vec!["_".into()],
-                };
-                Some(PyStmt::Assign(targets, rhs))
+                Some(PyStmt::Assign(expr, rhs))
             }
             PyToken::PlusEq => { self.advance(); let rhs = self.parse_expr()?; self.expect_newline();
-                if let PyExpr::Name(n) = expr { Some(PyStmt::AugAssign(n, "+".into(), rhs)) } else { None }
+                Some(PyStmt::AugAssign(expr, "+".into(), rhs))
             }
             PyToken::MinusEq => { self.advance(); let rhs = self.parse_expr()?; self.expect_newline();
-                if let PyExpr::Name(n) = expr { Some(PyStmt::AugAssign(n, "-".into(), rhs)) } else { None }
+                Some(PyStmt::AugAssign(expr, "-".into(), rhs))
             }
             PyToken::StarEq => { self.advance(); let rhs = self.parse_expr()?; self.expect_newline();
-                if let PyExpr::Name(n) = expr { Some(PyStmt::AugAssign(n, "*".into(), rhs)) } else { None }
+                Some(PyStmt::AugAssign(expr, "*".into(), rhs))
             }
             PyToken::SlashEq => { self.advance(); let rhs = self.parse_expr()?; self.expect_newline();
-                if let PyExpr::Name(n) = expr { Some(PyStmt::AugAssign(n, "/".into(), rhs)) } else { None }
+                Some(PyStmt::AugAssign(expr, "/".into(), rhs))
             }
             PyToken::PercentEq => { self.advance(); let rhs = self.parse_expr()?; self.expect_newline();
-                if let PyExpr::Name(n) = expr { Some(PyStmt::AugAssign(n, "%".into(), rhs)) } else { None }
+                Some(PyStmt::AugAssign(expr, "%".into(), rhs))
             }
             _ => {
                 self.expect_newline();
@@ -805,6 +945,13 @@ impl PyParser {
                     if matches!(self.peek(), PyToken::Newline | PyToken::Eof) { continue; }
                     if let Some(s) = self.parse_stmt() {
                         stmts.push(s);
+                    } else {
+                        let tok = self.peek().clone();
+                        stmts.push(PyStmt::Comment(format!("Unrecognized block syntax near token: {:?}", tok)));
+                        while !matches!(self.peek(), PyToken::Newline | PyToken::Eof) {
+                            self.advance();
+                        }
+                        self.expect_newline();
                     }
                 }
                 _ => break,
@@ -821,17 +968,24 @@ impl PyParser {
 
     fn parse_ternary(&mut self) -> Option<PyExpr> {
         let expr = self.parse_or()?;
+        let save = self.pos;
         if let PyToken::Ident(s) = self.peek() {
             if s == "if" {
                 self.advance();
-                let cond = self.parse_or()?;
-                if let PyToken::Ident(s) = self.peek() {
-                    if s == "else" {
-                        self.advance();
-                        let alt = self.parse_or()?;
-                        return Some(PyExpr::IfExpr(Box::new(expr), Box::new(cond), Box::new(alt)));
+                if let Some(cond) = self.parse_or() {
+                    self.skip_newlines();
+                    if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                    self.skip_newlines();
+                    if let PyToken::Ident(s2) = self.peek() {
+                        if s2 == "else" {
+                            self.advance();
+                            if let Some(alt) = self.parse_or() {
+                                return Some(PyExpr::IfExpr(Box::new(expr), Box::new(cond), Box::new(alt)));
+                            }
+                        }
                     }
                 }
+                self.pos = save; // backtrack!
             }
         }
         Some(expr)
@@ -958,11 +1112,16 @@ impl PyParser {
     }
 
     fn parse_unary(&mut self) -> Option<PyExpr> {
-        match self.peek() {
+        match self.peek().clone() {
             PyToken::Minus => {
                 self.advance();
                 let expr = self.parse_postfix()?;
                 Some(PyExpr::UnaryOp("-".into(), Box::new(expr)))
+            }
+            PyToken::Ident(ref s) if s == "await" => {
+                self.advance();
+                let expr = self.parse_unary()?;
+                Some(PyExpr::Await(Box::new(expr)))
             }
             _ => self.parse_postfix()
         }
@@ -978,15 +1137,29 @@ impl PyParser {
                     let mut args = Vec::new();
                     let mut kwargs = Vec::new();
                     while !matches!(self.peek(), PyToken::RParen | PyToken::Eof) {
+                        self.skip_newlines();
+                        if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                        self.skip_newlines();
+                        if matches!(self.peek(), PyToken::RParen | PyToken::Eof) { break; }
+
                         // Check for keyword argument
                         if let PyToken::Ident(s) = self.peek() {
                             let s = s.clone();
                             let save = self.pos;
                             self.advance();
+                            self.skip_newlines();
+                            if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                            self.skip_newlines();
                             if matches!(self.peek(), PyToken::Eq) {
                                 self.advance();
+                                self.skip_newlines();
+                                if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                                self.skip_newlines();
                                 let val = self.parse_expr().unwrap_or(PyExpr::None);
                                 kwargs.push((s, val));
+                                self.skip_newlines();
+                                if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                                self.skip_newlines();
                                 if matches!(self.peek(), PyToken::Comma) { self.advance(); }
                                 continue;
                             }
@@ -995,18 +1168,27 @@ impl PyParser {
                         if let Some(arg) = self.parse_expr() {
                             args.push(arg);
                         }
+                        self.skip_newlines();
+                        if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                        self.skip_newlines();
                         if matches!(self.peek(), PyToken::Comma) { self.advance(); }
                     }
+                    self.skip_newlines();
+                    if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                    self.skip_newlines();
                     if matches!(self.peek(), PyToken::RParen) { self.advance(); }
                     expr = PyExpr::Call(Box::new(expr), args, kwargs);
                 }
                 PyToken::LBracket => {
                     self.advance();
+                    self.skip_newlines();
+                    if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                    self.skip_newlines();
                     let idx = self.parse_expr()?;
+                    self.skip_newlines();
+                    if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                    self.skip_newlines();
                     if matches!(self.peek(), PyToken::RBracket) { self.advance(); }
-
-                    // Check for subscript assignment: x[i] = v
-                    // This is handled at statement level, not here
                     expr = PyExpr::Subscript(Box::new(expr), Box::new(idx));
                 }
                 PyToken::Dot => {
@@ -1038,7 +1220,13 @@ impl PyParser {
             }
             PyToken::LParen => {
                 self.advance();
+                self.skip_newlines();
+                if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                self.skip_newlines();
                 let expr = self.parse_expr()?;
+                self.skip_newlines();
+                if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                self.skip_newlines();
                 if matches!(self.peek(), PyToken::RParen) { self.advance(); }
                 Some(expr)
             }
@@ -1046,26 +1234,61 @@ impl PyParser {
                 self.advance();
                 let mut elems = Vec::new();
                 while !matches!(self.peek(), PyToken::RBracket | PyToken::Eof) {
+                    self.skip_newlines();
+                    if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                    self.skip_newlines();
+                    if matches!(self.peek(), PyToken::RBracket | PyToken::Eof) { break; }
+
                     if let Some(e) = self.parse_expr() {
+                        self.skip_newlines();
+                        if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                        self.skip_newlines();
                         // Check for list comprehension: [expr for x in iter]
                         if let PyToken::Ident(s) = self.peek() {
                             if s == "for" && elems.is_empty() {
                                 self.advance();
+                                self.skip_newlines();
+                                if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                                self.skip_newlines();
                                 let var = if let PyToken::Ident(v) = self.advance() { v } else { "_".into() };
+                                self.skip_newlines();
+                                if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                                self.skip_newlines();
                                 if let PyToken::Ident(s) = self.peek() { if s == "in" { self.advance(); } }
+                                self.skip_newlines();
+                                if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                                self.skip_newlines();
                                 let iter = self.parse_expr()?;
+                                self.skip_newlines();
+                                if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                                self.skip_newlines();
                                 let filter = if let PyToken::Ident(s) = self.peek() {
-                                    if s == "if" { self.advance(); self.parse_expr().map(Box::new) }
+                                    if s == "if" {
+                                        self.advance();
+                                        self.skip_newlines();
+                                        if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                                        self.skip_newlines();
+                                        self.parse_expr().map(Box::new)
+                                    }
                                     else { None }
                                 } else { None };
+                                self.skip_newlines();
+                                if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                                self.skip_newlines();
                                 if matches!(self.peek(), PyToken::RBracket) { self.advance(); }
                                 return Some(PyExpr::ListComp(Box::new(e), var, Box::new(iter), filter));
                             }
                         }
                         elems.push(e);
                     }
+                    self.skip_newlines();
+                    if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                    self.skip_newlines();
                     if matches!(self.peek(), PyToken::Comma) { self.advance(); }
                 }
+                self.skip_newlines();
+                if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                self.skip_newlines();
                 if matches!(self.peek(), PyToken::RBracket) { self.advance(); }
                 Some(PyExpr::List(elems))
             }
@@ -1073,14 +1296,31 @@ impl PyParser {
                 self.advance();
                 let mut pairs = Vec::new();
                 while !matches!(self.peek(), PyToken::RBrace | PyToken::Eof) {
+                    self.skip_newlines();
+                    if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                    self.skip_newlines();
+                    if matches!(self.peek(), PyToken::RBrace | PyToken::Eof) { break; }
+
                     let key = self.parse_expr()?;
+                    self.skip_newlines();
+                    if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                    self.skip_newlines();
                     if matches!(self.peek(), PyToken::Colon) {
                         self.advance();
+                        self.skip_newlines();
+                        if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                        self.skip_newlines();
                         let val = self.parse_expr()?;
                         pairs.push((key, val));
                     }
+                    self.skip_newlines();
+                    if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                    self.skip_newlines();
                     if matches!(self.peek(), PyToken::Comma) { self.advance(); }
                 }
+                self.skip_newlines();
+                if let PyToken::Indent(_) = self.peek() { self.advance(); }
+                self.skip_newlines();
                 if matches!(self.peek(), PyToken::RBrace) { self.advance(); }
                 Some(PyExpr::Dict(pairs))
             }
@@ -1106,6 +1346,7 @@ fn py_type_to_ernos(hint: &str) -> &str {
         "dict" | "Dict" => "Int",
         "None" | "NoneType" => "Int",
         "Optional" => "Int",
+        other if other.contains('.') || other.chars().next().map_or(false, |c| c.is_ascii_uppercase()) => "Any",
         _ => "Int",
     }
 }
@@ -1126,6 +1367,367 @@ fn sanitize_ernos_ident(name: &str) -> String {
     }
 }
 
+fn expr_to_py_string(expr: &PyExpr) -> String {
+    match expr {
+        PyExpr::Int(n) => n.to_string(),
+        PyExpr::Float(f) => f.to_string(),
+        PyExpr::Str(s) => format!("\"{}\"", s.replace('"', "\\\"")),
+        PyExpr::FStr(s) => format!("f\"{}\"", s.replace('"', "\\\"")),
+        PyExpr::Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        PyExpr::None => "None".to_string(),
+        PyExpr::Name(n) => n.clone(),
+        PyExpr::BinOp(left, op, right) => {
+            format!("({} {} {})", expr_to_py_string(left), op, expr_to_py_string(right))
+        }
+        PyExpr::UnaryOp(op, expr) => {
+            format!("({}{})", op, expr_to_py_string(expr))
+        }
+        PyExpr::Compare(left, ops) => {
+            let mut s = expr_to_py_string(left);
+            for (op, right) in ops {
+                s.push_str(&format!(" {} {}", op, expr_to_py_string(right)));
+            }
+            s
+        }
+        PyExpr::BoolOp(op, exprs) => {
+            exprs.iter().map(expr_to_py_string).collect::<Vec<_>>().join(&format!(" {} ", op))
+        }
+        PyExpr::Call(func, args, kwargs) => {
+            let mut parts = Vec::new();
+            for arg in args {
+                parts.push(expr_to_py_string(arg));
+            }
+            for (k, v) in kwargs {
+                parts.push(format!("{}={}", k, expr_to_py_string(v)));
+            }
+            format!("{}({})", expr_to_py_string(func), parts.join(", "))
+        }
+        PyExpr::Attribute(obj, attr) => {
+            format!("{}.{}", expr_to_py_string(obj), attr)
+        }
+        PyExpr::Subscript(obj, idx) => {
+            format!("{}[{}]", expr_to_py_string(obj), expr_to_py_string(idx))
+        }
+        PyExpr::List(elems) => {
+            format!("[{}]", elems.iter().map(expr_to_py_string).collect::<Vec<_>>().join(", "))
+        }
+        PyExpr::Dict(pairs) => {
+            let items: Vec<String> = pairs.iter()
+                .map(|(k, v)| format!("{}: {}", expr_to_py_string(k), expr_to_py_string(v)))
+                .collect();
+            format!("{{{}}}", items.join(", "))
+        }
+        PyExpr::IfExpr(val, cond, alt) => {
+            format!("{} if {} else {}", expr_to_py_string(val), expr_to_py_string(cond), expr_to_py_string(alt))
+        }
+        PyExpr::ListComp(expr, var, iter, filter) => {
+            let filt = filter.as_ref().map(|f| format!(" if {}", expr_to_py_string(f))).unwrap_or_default();
+            format!("[{} for {} in {}{}]", expr_to_py_string(expr), var, expr_to_py_string(iter), filt)
+        }
+        PyExpr::Await(expr) => {
+            format!("await {}", expr_to_py_string(expr))
+        }
+    }
+}
+
+fn desugar_fstring(s: &str) -> PyExpr {
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    let mut parts = Vec::new();
+    let mut current_lit = String::new();
+
+    while i < chars.len() {
+        if chars[i] == '{' {
+            if i + 1 < chars.len() && chars[i + 1] == '{' {
+                current_lit.push('{');
+                i += 2;
+                continue;
+            }
+            if !current_lit.is_empty() {
+                parts.push(PyExpr::Str(current_lit.clone()));
+                current_lit.clear();
+            }
+            i += 1; // skip '{'
+            let mut expr_str = String::new();
+            let mut brace_depth = 1;
+            while i < chars.len() {
+                let c = chars[i];
+                if c == '}' {
+                    brace_depth -= 1;
+                    if brace_depth == 0 {
+                        i += 1; // skip '}'
+                        break;
+                    }
+                } else if c == '{' {
+                    brace_depth += 1;
+                }
+                expr_str.push(c);
+                i += 1;
+            }
+            
+            let mut lexer = PyLexer::new(&expr_str);
+            let tokens = lexer.tokenize();
+            let mut parser = PyParser::new(tokens);
+            let parsed_expr = parser.parse_expr().unwrap_or(PyExpr::None);
+            
+            let wrapped = PyExpr::Call(
+                Box::new(PyExpr::Name("ep_auto_to_string".to_string())),
+                vec![parsed_expr],
+                vec![]
+            );
+            parts.push(wrapped);
+        } else if chars[i] == '}' {
+            if i + 1 < chars.len() && chars[i + 1] == '}' {
+                current_lit.push('}');
+                i += 2;
+            } else {
+                current_lit.push('}');
+                i += 1;
+            }
+        } else {
+            current_lit.push(chars[i]);
+            i += 1;
+        }
+    }
+
+    if !current_lit.is_empty() {
+        parts.push(PyExpr::Str(current_lit));
+    }
+
+    if parts.is_empty() {
+        return PyExpr::Str(String::new());
+    }
+
+    let mut result = parts[0].clone();
+    for part in parts.iter().skip(1) {
+        result = PyExpr::Call(
+            Box::new(PyExpr::Name("concat".to_string())),
+            vec![result, part.clone()],
+            vec![]
+        );
+    }
+    result
+}
+
+fn simplify_expr(expr: &mut PyExpr, temp_counter: &mut usize, pre_stmts: &mut Vec<PyStmt>) {
+    match expr {
+        PyExpr::BinOp(left, _, right) => {
+            simplify_expr(left, temp_counter, pre_stmts);
+            simplify_expr(right, temp_counter, pre_stmts);
+        }
+        PyExpr::UnaryOp(_, inner) => {
+            simplify_expr(inner, temp_counter, pre_stmts);
+        }
+        PyExpr::Compare(left, ops) => {
+            simplify_expr(left, temp_counter, pre_stmts);
+            for (_, right) in ops {
+                simplify_expr(right, temp_counter, pre_stmts);
+            }
+        }
+        PyExpr::BoolOp(_, exprs) => {
+            for e in exprs {
+                simplify_expr(e, temp_counter, pre_stmts);
+            }
+        }
+        PyExpr::Call(func, args, kwargs) => {
+            simplify_expr(func, temp_counter, pre_stmts);
+            for arg in args {
+                simplify_expr(arg, temp_counter, pre_stmts);
+            }
+            for (_, val) in kwargs {
+                simplify_expr(val, temp_counter, pre_stmts);
+            }
+        }
+        PyExpr::Attribute(obj, _) => {
+            simplify_expr(obj, temp_counter, pre_stmts);
+        }
+        PyExpr::Subscript(obj, idx) => {
+            simplify_expr(obj, temp_counter, pre_stmts);
+            simplify_expr(idx, temp_counter, pre_stmts);
+        }
+        PyExpr::List(elems) => {
+            for elem in elems {
+                simplify_expr(elem, temp_counter, pre_stmts);
+            }
+        }
+        PyExpr::Dict(pairs) => {
+            if pairs.is_empty() {
+                return;
+            }
+            for (k, v) in pairs.iter_mut() {
+                simplify_expr(k, temp_counter, pre_stmts);
+                simplify_expr(v, temp_counter, pre_stmts);
+            }
+            
+            let temp_name = format!("_dict_{}", *temp_counter);
+            *temp_counter += 1;
+            
+            pre_stmts.push(PyStmt::Assign(PyExpr::Name(temp_name.clone()), PyExpr::Call(Box::new(PyExpr::Name("create_map".to_string())), vec![], vec![])));
+            for (k, v) in pairs.clone() {
+                pre_stmts.push(PyStmt::Expr(PyExpr::Call(
+                    Box::new(PyExpr::Name("map_insert".to_string())),
+                    vec![PyExpr::Name(temp_name.clone()), k, v],
+                    vec![]
+                )));
+            }
+            *expr = PyExpr::Name(temp_name);
+        }
+        PyExpr::IfExpr(val, cond, alt) => {
+            simplify_expr(val, temp_counter, pre_stmts);
+            simplify_expr(cond, temp_counter, pre_stmts);
+            simplify_expr(alt, temp_counter, pre_stmts);
+            
+            let temp_name = format!("_ternary_{}", *temp_counter);
+            *temp_counter += 1;
+            
+            pre_stmts.push(PyStmt::If(
+                *cond.clone(),
+                vec![PyStmt::Assign(PyExpr::Name(temp_name.clone()), *val.clone())],
+                vec![],
+                Some(vec![PyStmt::Assign(PyExpr::Name(temp_name.clone()), *alt.clone())])
+            ));
+            
+            *expr = PyExpr::Name(temp_name);
+        }
+        PyExpr::ListComp(item_expr, var, iter, filter) => {
+            simplify_expr(item_expr, temp_counter, pre_stmts);
+            simplify_expr(iter, temp_counter, pre_stmts);
+            if let Some(f) = filter {
+                simplify_expr(f, temp_counter, pre_stmts);
+            }
+            
+            let temp_name = format!("_list_comp_{}", *temp_counter);
+            *temp_counter += 1;
+            
+            pre_stmts.push(PyStmt::Assign(PyExpr::Name(temp_name.clone()), PyExpr::Call(Box::new(PyExpr::Name("create_list".to_string())), vec![], vec![])));
+            
+            let append_call = PyStmt::Expr(PyExpr::Call(
+                Box::new(PyExpr::Name("append_list".to_string())),
+                vec![PyExpr::Name(temp_name.clone()), *item_expr.clone()],
+                vec![]
+            ));
+            
+            let loop_body = if let Some(filt) = filter {
+                vec![PyStmt::If(*filt.clone(), vec![append_call], vec![], None)]
+            } else {
+                vec![append_call]
+            };
+            
+            pre_stmts.push(PyStmt::For(var.clone(), *iter.clone(), loop_body));
+            
+            *expr = PyExpr::Name(temp_name);
+        }
+        PyExpr::Await(inner) => {
+            simplify_expr(inner, temp_counter, pre_stmts);
+        }
+        PyExpr::FStr(s) => {
+            let desugared = desugar_fstring(s);
+            *expr = desugared;
+            simplify_expr(expr, temp_counter, pre_stmts);
+        }
+        _ => {}
+    }
+}
+
+fn preprocess_stmt(stmt: PyStmt, temp_counter: &mut usize) -> Vec<PyStmt> {
+    let mut pre_stmts = Vec::new();
+    let mut mut_stmt = stmt;
+    match &mut mut_stmt {
+        PyStmt::Assign(lhs, val) => {
+            simplify_expr(lhs, temp_counter, &mut pre_stmts);
+            simplify_expr(val, temp_counter, &mut pre_stmts);
+        }
+        PyStmt::AugAssign(lhs, _, val) => {
+            simplify_expr(lhs, temp_counter, &mut pre_stmts);
+            simplify_expr(val, temp_counter, &mut pre_stmts);
+        }
+        PyStmt::Expr(val) => {
+            simplify_expr(val, temp_counter, &mut pre_stmts);
+        }
+        PyStmt::Return(Some(val)) => {
+            simplify_expr(val, temp_counter, &mut pre_stmts);
+        }
+        PyStmt::If(cond, body, elifs, else_body) => {
+            simplify_expr(cond, temp_counter, &mut pre_stmts);
+            let mut new_body = Vec::new();
+            for s in body.drain(..) {
+                new_body.extend(preprocess_stmt(s, temp_counter));
+            }
+            *body = new_body;
+            for (econd, ebody) in elifs {
+                simplify_expr(econd, temp_counter, &mut pre_stmts);
+                let mut new_ebody = Vec::new();
+                for s in ebody.drain(..) {
+                    new_ebody.extend(preprocess_stmt(s, temp_counter));
+                }
+                *ebody = new_ebody;
+            }
+            if let Some(else_b) = else_body {
+                let mut new_else = Vec::new();
+                for s in else_b.drain(..) {
+                    new_else.extend(preprocess_stmt(s, temp_counter));
+                }
+                *else_body = Some(new_else);
+            }
+        }
+        PyStmt::While(cond, body) => {
+            simplify_expr(cond, temp_counter, &mut pre_stmts);
+            let mut new_body = Vec::new();
+            for s in body.drain(..) {
+                new_body.extend(preprocess_stmt(s, temp_counter));
+            }
+            *body = new_body;
+        }
+        PyStmt::For(_var, iter, body) => {
+            simplify_expr(iter, temp_counter, &mut pre_stmts);
+            let mut new_body = Vec::new();
+            for s in body.drain(..) {
+                new_body.extend(preprocess_stmt(s, temp_counter));
+            }
+            *body = new_body;
+        }
+        PyStmt::FuncDef(_, _, _, body, _, _) => {
+            let mut new_body = Vec::new();
+            for s in body.drain(..) {
+                new_body.extend(preprocess_stmt(s, temp_counter));
+            }
+            *body = new_body;
+        }
+        PyStmt::ClassDef(_, body, _) => {
+            let mut new_body = Vec::new();
+            for s in body.drain(..) {
+                new_body.extend(preprocess_stmt(s, temp_counter));
+            }
+            *body = new_body;
+        }
+        PyStmt::Print(args) => {
+            for arg in args {
+                simplify_expr(arg, temp_counter, &mut pre_stmts);
+            }
+        }
+        PyStmt::Del(expr) => {
+            simplify_expr(expr, temp_counter, &mut pre_stmts);
+        }
+        PyStmt::Try(body, handlers) => {
+            let mut new_body = Vec::new();
+            for s in body.drain(..) {
+                new_body.extend(preprocess_stmt(s, temp_counter));
+            }
+            *body = new_body;
+            for (_, _, hbody) in handlers {
+                let mut new_hbody = Vec::new();
+                for s in hbody.drain(..) {
+                    new_hbody.extend(preprocess_stmt(s, temp_counter));
+                }
+                *hbody = new_hbody;
+            }
+        }
+        _ => {}
+    }
+    pre_stmts.push(mut_stmt);
+    pre_stmts
+}
+
 fn emit_indent(out: &mut String, depth: usize) {
     for _ in 0..depth {
         out.push_str("    ");
@@ -1138,6 +1740,12 @@ pub fn emit_ernos_from_python(filename: &str, source: &str) -> String {
     let mut parser = PyParser::new(tokens);
     let stmts = parser.parse();
 
+    let mut temp_counter = 0;
+    let mut processed_stmts = Vec::new();
+    for stmt in stmts {
+        processed_stmts.extend(preprocess_stmt(stmt, &mut temp_counter));
+    }
+
     let mut out = String::new();
     out.push_str(&format!("# Auto-transpiled from Python: {}\n", filename));
     out.push_str("# Generated by: ernos transpile\n\n");
@@ -1145,13 +1753,15 @@ pub fn emit_ernos_from_python(filename: &str, source: &str) -> String {
     let mut ctx = EmitCtx {
         vars: HashMap::new(),
         depth: 0,
+        last_query_results: HashMap::new(),
     };
 
-    for stmt in &stmts {
+    for stmt in &processed_stmts {
         // Only emit function/class definitions at top level — ErnosPlain
         // doesn't allow bare statements (calls, assignments, etc.) outside of define blocks
         match stmt {
-            PyStmt::FuncDef(..) | PyStmt::ClassDef(..) => {
+            PyStmt::FuncDef(..) | PyStmt::ClassDef(..) | PyStmt::Comment(..)
+            | PyStmt::Import(..) | PyStmt::FromImport(..) => {
                 emit_stmt(&mut out, &mut ctx, stmt);
             }
             _ => {
@@ -1166,19 +1776,26 @@ pub fn emit_ernos_from_python(filename: &str, source: &str) -> String {
 struct EmitCtx {
     vars: HashMap<String, bool>,  // name → is_set (for tracking first assignment)
     depth: usize,
+    last_query_results: HashMap<String, String>, // cursor_name -> results_var_name
 }
 
 fn emit_stmt(out: &mut String, ctx: &mut EmitCtx, stmt: &PyStmt) {
     match stmt {
-        PyStmt::FuncDef(name, params, ret_hint, body) => {
+        PyStmt::FuncDef(name, params, ret_hint, body, decorators, is_async) => {
+            for dec in decorators {
+                emit_indent(out, ctx.depth);
+                out.push_str(&format!("# @{}\n", expr_to_py_string(dec)));
+            }
+
             emit_indent(out, ctx.depth);
             let ep_name = sanitize_ernos_ident(&name.replace("__init__", "create"));
+            let prefix = if *is_async { "async define " } else { "define " };
 
             if params.is_empty() {
                 if let Some(ret) = ret_hint {
-                    out.push_str(&format!("define {} returning {}:\n", ep_name, py_type_to_ernos(ret)));
+                    out.push_str(&format!("{}{} returning {}:\n", prefix, ep_name, py_type_to_ernos(ret)));
                 } else {
-                    out.push_str(&format!("define {}:\n", ep_name));
+                    out.push_str(&format!("{}{}:\n", prefix, ep_name));
                 }
             } else {
                 let param_parts: Vec<String> = params.iter()
@@ -1189,15 +1806,19 @@ fn emit_stmt(out: &mut String, ctx: &mut EmitCtx, stmt: &PyStmt) {
                     .collect();
 
                 if let Some(ret) = ret_hint {
-                    out.push_str(&format!("define {} with {} returning {}:\n",
-                        ep_name, param_parts.join(" and "), py_type_to_ernos(ret)));
+                    out.push_str(&format!("{}{} with {} returning {}:\n",
+                        prefix, ep_name, param_parts.join(" and "), py_type_to_ernos(ret)));
                 } else {
-                    out.push_str(&format!("define {} with {}:\n",
-                        ep_name, param_parts.join(" and ")));
+                    out.push_str(&format!("{}{} with {}:\n",
+                        prefix, ep_name, param_parts.join(" and ")));
                 }
             }
 
-            let mut inner_ctx = EmitCtx { vars: HashMap::new(), depth: ctx.depth + 1 };
+            let mut inner_ctx = EmitCtx {
+                vars: HashMap::new(),
+                depth: ctx.depth + 1,
+                last_query_results: HashMap::new(),
+            };
             for p in params { inner_ctx.vars.insert(p.0.clone(), true); }
             for s in body {
                 emit_stmt(out, &mut inner_ctx, s);
@@ -1205,20 +1826,26 @@ fn emit_stmt(out: &mut String, ctx: &mut EmitCtx, stmt: &PyStmt) {
             out.push('\n');
         }
 
-        PyStmt::ClassDef(name, body) => {
+        PyStmt::ClassDef(name, body, decorators) => {
+            for dec in decorators {
+                emit_indent(out, ctx.depth);
+                out.push_str(&format!("# @{}\n", expr_to_py_string(dec)));
+            }
+
             // Extract fields from __init__ method
             let mut fields = Vec::new();
             let mut methods = Vec::new();
 
             for s in body {
-                if let PyStmt::FuncDef(fname, _params, _ret, fbody) = s {
+                if let PyStmt::FuncDef(fname, _params, _ret, fbody, _, _) = s {
                     if fname == "__init__" {
                         for init_stmt in fbody {
-                            if let PyStmt::Assign(targets, _val) = init_stmt {
-                                for t in targets {
-                                    if t.starts_with("self.") {
-                                        let field_name = t.strip_prefix("self.").unwrap_or(t);
-                                        fields.push(field_name.to_string());
+                            if let PyStmt::Assign(lhs, _val) = init_stmt {
+                                if let PyExpr::Attribute(obj, field) = lhs {
+                                    if let PyExpr::Name(obj_name) = obj.as_ref() {
+                                        if obj_name == "self" {
+                                            fields.push(field.clone());
+                                        }
                                     }
                                 }
                             }
@@ -1239,8 +1866,9 @@ fn emit_stmt(out: &mut String, ctx: &mut EmitCtx, stmt: &PyStmt) {
 
             // Emit methods
             for method in &methods {
-                if let PyStmt::FuncDef(mname, params, _ret, mbody) = method {
+                if let PyStmt::FuncDef(mname, params, _ret, mbody, _, is_async) = method {
                     emit_indent(out, ctx.depth);
+                    let prefix = if *is_async { "async define " } else { "define " };
                     let param_parts: Vec<String> = params.iter()
                         .map(|(pname, hint)| {
                             let ptype = hint.as_deref().map(py_type_to_ernos).unwrap_or("Int");
@@ -1249,13 +1877,17 @@ fn emit_stmt(out: &mut String, ctx: &mut EmitCtx, stmt: &PyStmt) {
                         .collect();
 
                     if param_parts.is_empty() {
-                        out.push_str(&format!("define method {} on {}:\n", mname, name));
+                        out.push_str(&format!("{}{} on {}:\n", prefix, mname, name));
                     } else {
-                        out.push_str(&format!("define method {} on {} with {}:\n",
-                            mname, name, param_parts.join(" and ")));
+                        out.push_str(&format!("{}{} on {} with {}:\n",
+                            prefix, mname, name, param_parts.join(" and ")));
                     }
 
-                    let mut inner_ctx = EmitCtx { vars: HashMap::new(), depth: ctx.depth + 1 };
+                    let mut inner_ctx = EmitCtx {
+                        vars: HashMap::new(),
+                        depth: ctx.depth + 1,
+                        last_query_results: HashMap::new(),
+                    };
                     for p in params { inner_ctx.vars.insert(p.0.clone(), true); }
                     for s in mbody {
                         emit_stmt(out, &mut inner_ctx, s);
@@ -1265,41 +1897,87 @@ fn emit_stmt(out: &mut String, ctx: &mut EmitCtx, stmt: &PyStmt) {
             }
         }
 
-        PyStmt::Assign(targets, val) => {
-            let target = &targets[0];
-            // Handle self.field = val → set self_field to val
-            if target.contains('.') {
-                emit_indent(out, ctx.depth);
-                let parts: Vec<&str> = target.splitn(2, '.').collect();
-                out.push_str(&format!("set the {} of {} to ", parts[1], parts[0]));
-                emit_expr(out, val);
-                out.push('\n');
-            } else if ctx.vars.contains_key(target) {
-                emit_indent(out, ctx.depth);
-                out.push_str(&format!("set {} to ", target));
-                emit_expr(out, val);
-                out.push('\n');
-            } else {
-                ctx.vars.insert(target.clone(), true);
-                emit_indent(out, ctx.depth);
-                out.push_str(&format!("set {} to ", target));
-                emit_expr(out, val);
-                out.push('\n');
+        PyStmt::Assign(lhs, val) => {
+            emit_indent(out, ctx.depth);
+            match lhs {
+                PyExpr::Attribute(obj, attr) => {
+                    out.push_str("set ");
+                    emit_expr(out, obj, ctx);
+                    out.push('.');
+                    out.push_str(attr);
+                    out.push_str(" to ");
+                    emit_expr(out, val, ctx);
+                    out.push('\n');
+                }
+                PyExpr::Subscript(obj, idx) => {
+                    out.push_str("set_list(");
+                    emit_expr(out, obj, ctx);
+                    out.push_str(" and ");
+                    emit_expr(out, idx, ctx);
+                    out.push_str(" and ");
+                    emit_expr(out, val, ctx);
+                    out.push_str(")\n");
+                }
+                PyExpr::Name(target) => {
+                    let sanitized = sanitize_ernos_ident(target);
+                    if ctx.vars.contains_key(&sanitized) {
+                        out.push_str(&format!("set {} to ", sanitized));
+                    } else {
+                        ctx.vars.insert(sanitized.clone(), true);
+                        out.push_str(&format!("set {} to ", sanitized));
+                    }
+                    emit_expr(out, val, ctx);
+                    out.push('\n');
+                }
+                _ => {
+                    out.push_str("set ");
+                    emit_expr(out, lhs, ctx);
+                    out.push_str(" to ");
+                    emit_expr(out, val, ctx);
+                    out.push('\n');
+                }
             }
         }
 
-        PyStmt::AugAssign(name, op, val) => {
+        PyStmt::AugAssign(lhs, op, val) => {
             emit_indent(out, ctx.depth);
-            out.push_str(&format!("set {} to {} {} ", name, name, op));
-            emit_expr(out, val);
-            out.push('\n');
+            match lhs {
+                PyExpr::Attribute(obj, attr) => {
+                    out.push_str("set ");
+                    emit_expr(out, obj, ctx);
+                    out.push('.');
+                    out.push_str(attr);
+                    out.push_str(" to ");
+                    emit_expr(out, obj, ctx);
+                    out.push('.');
+                    out.push_str(attr);
+                    out.push_str(&format!(" {} ", op));
+                    emit_expr(out, val, ctx);
+                    out.push('\n');
+                }
+                PyExpr::Name(name) => {
+                    let sanitized = sanitize_ernos_ident(name);
+                    out.push_str(&format!("set {} to {} {} ", sanitized, sanitized, op));
+                    emit_expr(out, val, ctx);
+                    out.push('\n');
+                }
+                _ => {
+                    out.push_str("set ");
+                    emit_expr(out, lhs, ctx);
+                    out.push_str(" to ");
+                    emit_expr(out, lhs, ctx);
+                    out.push_str(&format!(" {} ", op));
+                    emit_expr(out, val, ctx);
+                    out.push('\n');
+                }
+            }
         }
 
         PyStmt::Print(args) => {
             for arg in args {
                 emit_indent(out, ctx.depth);
                 out.push_str("display ");
-                emit_expr(out, arg);
+                emit_expr(out, arg, ctx);
                 out.push('\n');
             }
         }
@@ -1308,7 +1986,7 @@ fn emit_stmt(out: &mut String, ctx: &mut EmitCtx, stmt: &PyStmt) {
             emit_indent(out, ctx.depth);
             if let Some(v) = val {
                 out.push_str("return ");
-                emit_expr(out, v);
+                emit_expr(out, v, ctx);
                 out.push('\n');
             } else {
                 out.push_str("return 0\n");
@@ -1318,7 +1996,7 @@ fn emit_stmt(out: &mut String, ctx: &mut EmitCtx, stmt: &PyStmt) {
         PyStmt::If(cond, body, elifs, else_body) => {
             emit_indent(out, ctx.depth);
             out.push_str("if ");
-            emit_cond(out, cond);
+            emit_cond(out, cond, ctx);
             out.push_str(":\n");
             ctx.depth += 1;
             for s in body { emit_stmt(out, ctx, s); }
@@ -1327,7 +2005,7 @@ fn emit_stmt(out: &mut String, ctx: &mut EmitCtx, stmt: &PyStmt) {
             for (econd, ebody) in elifs {
                 emit_indent(out, ctx.depth);
                 out.push_str("else if ");
-                emit_cond(out, econd);
+                emit_cond(out, econd, ctx);
                 out.push_str(":\n");
                 ctx.depth += 1;
                 for s in ebody { emit_stmt(out, ctx, s); }
@@ -1346,7 +2024,7 @@ fn emit_stmt(out: &mut String, ctx: &mut EmitCtx, stmt: &PyStmt) {
         PyStmt::While(cond, body) => {
             emit_indent(out, ctx.depth);
             out.push_str("repeat while ");
-            emit_cond(out, cond);
+            emit_cond(out, cond, ctx);
             out.push_str(":\n");
             ctx.depth += 1;
             for s in body { emit_stmt(out, ctx, s); }
@@ -1361,30 +2039,24 @@ fn emit_stmt(out: &mut String, ctx: &mut EmitCtx, stmt: &PyStmt) {
             if let PyExpr::Call(func, args, _) = iter {
                 if let PyExpr::Name(fname) = func.as_ref() {
                     if fname == "range" {
-                        // Expand range() to set/repeat while/increment pattern
-                        // range(n) → set var to 0, repeat while var < n
-                        // range(a, b) → set var to a, repeat while var < b
                         let (start_expr, end_expr) = match args.len() {
                             1 => (None, &args[0]),
                             2 => (Some(&args[0]), &args[1]),
                             _ => (None, &args[0]),
                         };
-                        // Emit: set var to start
                         out.push_str(&format!("set {} to ", var));
                         if let Some(start) = start_expr {
-                            emit_expr(out, start);
+                            emit_expr(out, start, ctx);
                         } else {
                             out.push('0');
                         }
                         out.push('\n');
-                        // Emit: repeat while var < end:
                         emit_indent(out, ctx.depth);
                         out.push_str(&format!("repeat while {} < ", var));
-                        emit_expr(out, end_expr);
+                        emit_expr(out, end_expr, ctx);
                         out.push_str(":\n");
                         ctx.depth += 1;
                         for s in body { emit_stmt(out, ctx, s); }
-                        // Emit: set var to var + 1
                         emit_indent(out, ctx.depth);
                         out.push_str(&format!("set {} to {} + 1\n", var, var));
                         ctx.depth -= 1;
@@ -1394,7 +2066,7 @@ fn emit_stmt(out: &mut String, ctx: &mut EmitCtx, stmt: &PyStmt) {
             }
 
             out.push_str(&format!("for each {} in ", var));
-            emit_expr(out, iter);
+            emit_expr(out, iter, ctx);
             out.push_str(":\n");
             ctx.depth += 1;
             for s in body { emit_stmt(out, ctx, s); }
@@ -1418,7 +2090,9 @@ fn emit_stmt(out: &mut String, ctx: &mut EmitCtx, stmt: &PyStmt) {
 
         PyStmt::Import(module, alias) => {
             emit_indent(out, ctx.depth);
-            if let Some(a) = alias {
+            if module == "sqlite3" {
+                out.push_str("import \"sql\"\n");
+            } else if let Some(a) = alias {
                 out.push_str(&format!("# import {} as {} — manual translation needed\n", module, a));
             } else {
                 out.push_str(&format!("# import {} — manual translation needed\n", module));
@@ -1436,15 +2110,50 @@ fn emit_stmt(out: &mut String, ctx: &mut EmitCtx, stmt: &PyStmt) {
         }
 
         PyStmt::Expr(expr) => {
-            // Method calls like list.append(), etc.
             emit_indent(out, ctx.depth);
             match expr {
                 PyExpr::Call(func, args, _) => {
-                    emit_call_stmt(out, func, args);
+                    if let PyExpr::Attribute(obj, method) = func.as_ref() {
+                        if let PyExpr::Name(obj_name) = obj.as_ref() {
+                            let sanitized_obj = sanitize_ernos_ident(obj_name);
+                            if method == "execute" && !args.is_empty() {
+                                let sql_arg = &args[0];
+                                let mut is_write = false;
+                                if let PyExpr::Str(sql_str) = sql_arg {
+                                    let sql_lower = sql_str.to_lowercase();
+                                    is_write = sql_lower.contains("insert")
+                                        || sql_lower.contains("update")
+                                        || sql_lower.contains("delete")
+                                        || sql_lower.contains("create")
+                                        || sql_lower.contains("drop")
+                                        || sql_lower.contains("replace");
+                                }
+                                if is_write {
+                                    out.push_str("sql_execute(");
+                                    emit_expr(out, obj, ctx);
+                                    out.push_str(" and ");
+                                    emit_expr(out, sql_arg, ctx);
+                                    out.push_str(")\n");
+                                } else {
+                                    let res_var = format!("_query_res_{}", sanitized_obj);
+                                    ctx.vars.insert(res_var.clone(), true);
+                                    ctx.last_query_results.insert(sanitized_obj.clone(), res_var.clone());
+                                    
+                                    out.push_str(&format!("set {} to sql_query(", res_var));
+                                    emit_expr(out, obj, ctx);
+                                    out.push_str(" and ");
+                                    emit_expr(out, sql_arg, ctx);
+                                    out.push_str(")\n");
+                                }
+                                return;
+                            }
+                        }
+                    }
+                    emit_call_stmt(out, func, args, ctx);
                     out.push('\n');
                 }
                 _ => {
-                    emit_expr(out, expr);
+                    emit_expr(out, expr, ctx);
                     out.push('\n');
                 }
             }
@@ -1454,69 +2163,90 @@ fn emit_stmt(out: &mut String, ctx: &mut EmitCtx, stmt: &PyStmt) {
             emit_indent(out, ctx.depth);
             if let PyExpr::Subscript(obj, key) = expr {
                 out.push_str("map_delete(");
-                emit_expr(out, obj);
+                emit_expr(out, obj, ctx);
                 out.push_str(" and ");
-                emit_expr(out, key);
+                emit_expr(out, key, ctx);
                 out.push_str(")\n");
             } else {
                 out.push_str("# del ");
-                emit_expr(out, expr);
+                emit_expr(out, expr, ctx);
                 out.push_str(" — manual translation needed\n");
             }
         }
 
         PyStmt::Try(body, handlers) => {
-            // Basic translation — wrap body statements
             emit_indent(out, ctx.depth);
-            out.push_str("# try/except — approximate translation\n");
+            out.push_str("# try:\n");
             for s in body { emit_stmt(out, ctx, s); }
-            for (exc_type, _exc_name, handler_body) in handlers {
+            for (exc_type, exc_name, handler_body) in handlers {
                 emit_indent(out, ctx.depth);
-                if let Some(t) = exc_type {
-                    out.push_str(&format!("# except {}:\n", t));
-                } else {
-                    out.push_str("# except:\n");
-                }
-                ctx.depth += 1;
+                let exc_str = exc_type.as_deref().unwrap_or("Exception");
+                let name_str = exc_name.as_ref().map(|n| format!(" as {}", n)).unwrap_or_default();
+                out.push_str(&format!("# except {}{}:\n", exc_str, name_str));
                 for s in handler_body { emit_stmt(out, ctx, s); }
-                ctx.depth -= 1;
             }
         }
     }
 }
 
-fn emit_call_stmt(out: &mut String, func: &PyExpr, args: &[PyExpr]) {
-    // Handle method calls
+fn emit_call_stmt(out: &mut String, func: &PyExpr, args: &[PyExpr], ctx: &mut EmitCtx) {
     if let PyExpr::Attribute(obj, method) = func {
         match method.as_str() {
             "append" => {
                 out.push_str("append_list(");
-                emit_expr(out, obj);
+                emit_expr(out, obj, ctx);
                 if !args.is_empty() {
                     out.push_str(" and ");
-                    emit_expr(out, &args[0]);
+                    emit_expr(out, &args[0], ctx);
                 }
                 out.push(')');
                 return;
             }
             "pop" => {
                 out.push_str("pop_list(");
-                emit_expr(out, obj);
+                emit_expr(out, obj, ctx);
                 out.push(')');
+                return;
+            }
+            "close" => {
+                out.push_str("sql_close(");
+                emit_expr(out, obj, ctx);
+                out.push(')');
+                return;
+            }
+            "commit" => {
+                out.push_str("# conn.commit()");
                 return;
             }
             _ => {}
         }
     }
 
-    // Regular function call
-    emit_expr(out, &PyExpr::Call(Box::new(func.clone()), args.to_vec(), vec![]));
+    emit_expr(out, &PyExpr::Call(Box::new(func.clone()), args.to_vec(), vec![]), ctx);
 }
 
-fn emit_cond(out: &mut String, expr: &PyExpr) {
+fn emit_cond(out: &mut String, expr: &PyExpr, ctx: &mut EmitCtx) {
     match expr {
         PyExpr::Compare(left, ops) => {
-            emit_expr(out, left);
+            if ops.len() == 1 && (ops[0].0 == "in" || ops[0].0 == "not in") {
+                let op = &ops[0].0;
+                let right = &ops[0].1;
+                if op == "in" {
+                    out.push_str("string_index_of(");
+                    emit_expr(out, right, ctx);
+                    out.push_str(" and ");
+                    emit_expr(out, left, ctx);
+                    out.push_str(") != -1");
+                } else {
+                    out.push_str("string_index_of(");
+                    emit_expr(out, right, ctx);
+                    out.push_str(" and ");
+                    emit_expr(out, left, ctx);
+                    out.push_str(") equals -1");
+                }
+                return;
+            }
+            emit_expr(out, left, ctx);
             for (op, right) in ops {
                 match op.as_str() {
                     "==" => out.push_str(" equals "),
@@ -1525,33 +2255,33 @@ fn emit_cond(out: &mut String, expr: &PyExpr) {
                     ">" => out.push_str(" > "),
                     "<=" => out.push_str(" <= "),
                     ">=" => out.push_str(" >= "),
-                    "in" => {
-                        out.push_str(" # 'in' check — needs manual translation");
-                        return;
-                    }
                     other => { out.push(' '); out.push_str(other); out.push(' '); }
                 };
-                emit_expr(out, right);
+                emit_expr(out, right, ctx);
             }
         }
         PyExpr::BoolOp(op, exprs) => {
             let ep_op = if op == "and" { " and " } else { " or " };
             for (i, e) in exprs.iter().enumerate() {
                 if i > 0 { out.push_str(ep_op); }
-                emit_cond(out, e);
+                emit_cond(out, e, ctx);
             }
         }
         PyExpr::UnaryOp(op, expr) if op == "not" => {
             out.push_str("not ");
-            emit_cond(out, expr);
+            emit_cond(out, expr, ctx);
+        }
+        PyExpr::Subscript(obj, idx) => {
+            emit_expr(out, expr, ctx);
+            out.push_str(" equals true");
         }
         _ => {
-            emit_expr(out, expr);
+            emit_expr(out, expr, ctx);
         }
     }
 }
 
-fn emit_expr(out: &mut String, expr: &PyExpr) {
+fn emit_expr(out: &mut String, expr: &PyExpr, ctx: &mut EmitCtx) {
     match expr {
         PyExpr::Int(n) => out.push_str(&n.to_string()),
         PyExpr::Float(f) => out.push_str(&(*f as i64).to_string()),
@@ -1572,11 +2302,10 @@ fn emit_expr(out: &mut String, expr: &PyExpr) {
         PyExpr::BinOp(left, op, right) => {
             match op.as_str() {
                 "**" => {
-                    // No native power operator — use multiplication or note
                     out.push_str("# power operation: ");
-                    emit_expr(out, left);
+                    emit_expr(out, left, ctx);
                     out.push_str(" ** ");
-                    emit_expr(out, right);
+                    emit_expr(out, right, ctx);
                     return;
                 }
                 _ => {}
@@ -1589,36 +2318,54 @@ fn emit_expr(out: &mut String, expr: &PyExpr) {
                 "/" => " / ",
                 "%" => " % ",
                 _ => {
-                    emit_expr(out, left);
+                    emit_expr(out, left, ctx);
                     out.push(' '); out.push_str(op); out.push(' ');
-                    emit_expr(out, right);
+                    emit_expr(out, right, ctx);
                     return;
                 }
             };
-            emit_expr(out, left);
+            emit_expr(out, left, ctx);
             out.push_str(ep_op);
-            emit_expr(out, right);
+            emit_expr(out, right, ctx);
         }
 
         PyExpr::UnaryOp(op, expr) => {
             if op == "-" {
                 out.push_str("0 - ");
-                emit_expr(out, expr);
+                emit_expr(out, expr, ctx);
             } else if op == "not" {
                 out.push_str("not ");
-                emit_expr(out, expr);
+                emit_expr(out, expr, ctx);
             }
         }
 
         PyExpr::Compare(left, ops) => {
-            emit_expr(out, left);
+            if ops.len() == 1 && (ops[0].0 == "in" || ops[0].0 == "not in") {
+                let op = &ops[0].0;
+                let right = &ops[0].1;
+                if op == "in" {
+                    out.push_str("string_index_of(");
+                    emit_expr(out, right, ctx);
+                    out.push_str(" and ");
+                    emit_expr(out, left, ctx);
+                    out.push_str(") != -1");
+                } else {
+                    out.push_str("string_index_of(");
+                    emit_expr(out, right, ctx);
+                    out.push_str(" and ");
+                    emit_expr(out, left, ctx);
+                    out.push_str(") equals -1");
+                }
+                return;
+            }
+            emit_expr(out, left, ctx);
             for (op, right) in ops {
                 match op.as_str() {
                     "==" => out.push_str(" equals "),
                     "!=" => out.push_str(" != "),
                     other => { out.push(' '); out.push_str(other); out.push(' '); }
                 };
-                emit_expr(out, right);
+                emit_expr(out, right, ctx);
             }
         }
 
@@ -1626,36 +2373,25 @@ fn emit_expr(out: &mut String, expr: &PyExpr) {
             let ep_op = if op == "and" { " and " } else { " or " };
             for (i, e) in exprs.iter().enumerate() {
                 if i > 0 { out.push_str(ep_op); }
-                emit_expr(out, e);
+                emit_expr(out, e, ctx);
             }
         }
 
         PyExpr::Call(func, args, _kwargs) => {
-            // Map Python builtins to Ernos
             if let PyExpr::Name(fname) = func.as_ref() {
                 match fname.as_str() {
                     "len" => {
                         if !args.is_empty() {
-                            match &args[0] {
-                                PyExpr::Name(_) => {
-                                    // Could be list or string — default to length_list
-                                    out.push_str("length_list(");
-                                    emit_expr(out, &args[0]);
-                                    out.push(')');
-                                }
-                                _ => {
-                                    out.push_str("length_list(");
-                                    emit_expr(out, &args[0]);
-                                    out.push(')');
-                                }
-                            }
+                            out.push_str("length_list(");
+                            emit_expr(out, &args[0], ctx);
+                            out.push(')');
                         }
                         return;
                     }
                     "int" => {
                         if !args.is_empty() {
                             out.push_str("string_to_int(");
-                            emit_expr(out, &args[0]);
+                            emit_expr(out, &args[0], ctx);
                             out.push(')');
                         }
                         return;
@@ -1663,7 +2399,7 @@ fn emit_expr(out: &mut String, expr: &PyExpr) {
                     "str" => {
                         if !args.is_empty() {
                             out.push_str("int_to_string(");
-                            emit_expr(out, &args[0]);
+                            emit_expr(out, &args[0], ctx);
                             out.push(')');
                         }
                         return;
@@ -1675,16 +2411,15 @@ fn emit_expr(out: &mut String, expr: &PyExpr) {
                     "abs" => {
                         if !args.is_empty() {
                             out.push_str("ep_abs(");
-                            emit_expr(out, &args[0]);
+                            emit_expr(out, &args[0], ctx);
                             out.push(')');
                         }
                         return;
                     }
                     "print" => {
-                        // print as expression — unlikely but handle
                         if !args.is_empty() {
                             out.push_str("display ");
-                            emit_expr(out, &args[0]);
+                            emit_expr(out, &args[0], ctx);
                         }
                         return;
                     }
@@ -1692,49 +2427,100 @@ fn emit_expr(out: &mut String, expr: &PyExpr) {
                 }
             }
 
-            // Handle method calls
+            if let PyExpr::Attribute(obj, method) = func.as_ref() {
+                if let PyExpr::Name(obj_name) = obj.as_ref() {
+                    let sanitized_obj = sanitize_ernos_ident(obj_name);
+                    match method.as_str() {
+                        "cursor" => {
+                            emit_expr(out, obj, ctx);
+                            return;
+                        }
+                        "fetchall" => {
+                            let res_var = ctx.last_query_results.get(&sanitized_obj)
+                                .cloned()
+                                .unwrap_or_else(|| format!("_query_res_{}", sanitized_obj));
+                            out.push_str(&res_var);
+                            return;
+                        }
+                        "fetchone" => {
+                            let res_var = ctx.last_query_results.get(&sanitized_obj)
+                                .cloned()
+                                .unwrap_or_else(|| format!("_query_res_{}", sanitized_obj));
+                            out.push_str("get_list(");
+                            out.push_str(&res_var);
+                            out.push_str(" and 0)");
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            if let PyExpr::Attribute(obj, method) = func.as_ref() {
+                if let PyExpr::Name(obj_name) = obj.as_ref() {
+                    if obj_name == "sqlite3" && method == "connect" {
+                        out.push_str("sql_open(");
+                        if !args.is_empty() {
+                            emit_expr(out, &args[0], ctx);
+                        }
+                        out.push(')');
+                        return;
+                    }
+                }
+            }
+
             if let PyExpr::Attribute(obj, method) = func.as_ref() {
                 match method.as_str() {
                     "append" => {
                         out.push_str("append_list(");
-                        emit_expr(out, obj);
+                        emit_expr(out, obj, ctx);
                         if !args.is_empty() {
                             out.push_str(" and ");
-                            emit_expr(out, &args[0]);
+                            emit_expr(out, &args[0], ctx);
                         }
                         out.push(')');
                         return;
                     }
                     "pop" => {
                         out.push_str("pop_list(");
-                        emit_expr(out, obj);
+                        emit_expr(out, obj, ctx);
                         out.push(')');
+                        return;
+                    }
+                    "close" => {
+                        out.push_str("sql_close(");
+                        emit_expr(out, obj, ctx);
+                        out.push(')');
+                        return;
+                    }
+                    "commit" => {
+                        out.push_str("0");
                         return;
                     }
                     "upper" => {
                         out.push_str("string_upper(");
-                        emit_expr(out, obj);
+                        emit_expr(out, obj, ctx);
                         out.push(')');
                         return;
                     }
                     "lower" => {
                         out.push_str("string_lower(");
-                        emit_expr(out, obj);
+                        emit_expr(out, obj, ctx);
                         out.push(')');
                         return;
                     }
                     "strip" => {
                         out.push_str("string_trim(");
-                        emit_expr(out, obj);
+                        emit_expr(out, obj, ctx);
                         out.push(')');
                         return;
                     }
                     "split" => {
                         out.push_str("string_split(");
-                        emit_expr(out, obj);
+                        emit_expr(out, obj, ctx);
                         if !args.is_empty() {
                             out.push_str(" and ");
-                            emit_expr(out, &args[0]);
+                            emit_expr(out, &args[0], ctx);
                         } else {
                             out.push_str(" and \" \"");
                         }
@@ -1744,55 +2530,54 @@ fn emit_expr(out: &mut String, expr: &PyExpr) {
                     "replace" => {
                         if args.len() >= 2 {
                             out.push_str("string_replace(");
-                            emit_expr(out, obj);
+                            emit_expr(out, obj, ctx);
                             out.push_str(" and ");
-                            emit_expr(out, &args[0]);
+                            emit_expr(out, &args[0], ctx);
                             out.push_str(" and ");
-                            emit_expr(out, &args[1]);
+                            emit_expr(out, &args[1], ctx);
                             out.push(')');
                         }
                         return;
                     }
                     "find" | "index" => {
                         out.push_str("string_index_of(");
-                        emit_expr(out, obj);
+                        emit_expr(out, obj, ctx);
                         if !args.is_empty() {
                             out.push_str(" and ");
-                            emit_expr(out, &args[0]);
+                            emit_expr(out, &args[0], ctx);
                         }
                         out.push(')');
                         return;
                     }
                     "join" => {
-                        // " ".join(list) → manual handling
                         out.push_str("# .join() — manual translation needed: ");
-                        emit_expr(out, obj);
+                        emit_expr(out, obj, ctx);
                         out.push_str(".join(...)");
                         return;
                     }
                     "keys" => {
                         out.push_str("map_keys(");
-                        emit_expr(out, obj);
+                        emit_expr(out, obj, ctx);
                         out.push(')');
                         return;
                     }
                     "values" => {
                         out.push_str("map_values(");
-                        emit_expr(out, obj);
+                        emit_expr(out, obj, ctx);
                         out.push(')');
                         return;
                     }
                     "items" => {
                         out.push_str("# .items() — manual translation needed for ");
-                        emit_expr(out, obj);
+                        emit_expr(out, obj, ctx);
                         return;
                     }
                     "get" => {
                         out.push_str("map_get_val(");
-                        emit_expr(out, obj);
+                        emit_expr(out, obj, ctx);
                         if !args.is_empty() {
                             out.push_str(" and ");
-                            emit_expr(out, &args[0]);
+                            emit_expr(out, &args[0], ctx);
                         }
                         out.push(')');
                         return;
@@ -1801,28 +2586,39 @@ fn emit_expr(out: &mut String, expr: &PyExpr) {
                 }
             }
 
-            // Generic function call
-            emit_expr(out, func);
+            emit_expr(out, func, ctx);
             out.push('(');
             for (i, arg) in args.iter().enumerate() {
                 if i > 0 { out.push_str(" and "); }
-                emit_expr(out, arg);
+                emit_expr(out, arg, ctx);
             }
             out.push(')');
         }
 
         PyExpr::Attribute(obj, attr) => {
-            out.push_str("the ");
+            emit_expr(out, obj, ctx);
+            out.push('.');
             out.push_str(attr);
-            out.push_str(" of ");
-            emit_expr(out, obj);
         }
 
         PyExpr::Subscript(obj, idx) => {
-            out.push_str("get_list(");
-            emit_expr(out, obj);
+            let is_map = match idx.as_ref() {
+                PyExpr::Str(_) => true,
+                PyExpr::Name(name) => name.contains("key") || name.contains("name") || name.contains("id"),
+                _ => false,
+            } || match obj.as_ref() {
+                PyExpr::Name(name) => name.contains("dict") || name.contains("map") || name.contains("info"),
+                _ => false,
+            };
+
+            if is_map {
+                out.push_str("map_get_val(");
+            } else {
+                out.push_str("get_list(");
+            }
+            emit_expr(out, obj, ctx);
             out.push_str(" and ");
-            emit_expr(out, idx);
+            emit_expr(out, idx, ctx);
             out.push(')');
         }
 
@@ -1833,7 +2629,7 @@ fn emit_expr(out: &mut String, expr: &PyExpr) {
                 out.push('[');
                 for (i, e) in elems.iter().enumerate() {
                     if i > 0 { out.push_str(", "); }
-                    emit_expr(out, e);
+                    emit_expr(out, e, ctx);
                 }
                 out.push(']');
             }
@@ -1843,10 +2639,7 @@ fn emit_expr(out: &mut String, expr: &PyExpr) {
             if pairs.is_empty() {
                 out.push_str("create_map()");
             } else {
-                // Emit as create_map + map_insert calls
                 out.push_str("create_map()");
-                // Note: dict literals need to be expanded to separate statements
-                // This is a limitation — complex dict literals get a comment
                 if !pairs.is_empty() {
                     out.push_str(" # dict literal — add map_insert calls");
                 }
@@ -1854,24 +2647,27 @@ fn emit_expr(out: &mut String, expr: &PyExpr) {
         }
 
         PyExpr::IfExpr(val, cond, alt) => {
-            // Python ternary: val if cond else alt
-            // No direct Ernos equivalent — expand to conditional
             out.push_str("# ternary: ");
-            emit_expr(out, val);
+            emit_expr(out, val, ctx);
             out.push_str(" if ");
-            emit_expr(out, cond);
+            emit_expr(out, cond, ctx);
             out.push_str(" else ");
-            emit_expr(out, alt);
+            emit_expr(out, alt, ctx);
         }
 
         PyExpr::ListComp(_expr, var, iter, filter) => {
             out.push_str(&format!("# list comprehension: [{} for {} in ", "...", var));
-            emit_expr(out, iter);
+            emit_expr(out, iter, ctx);
             if let Some(f) = filter {
                 out.push_str(" if ");
-                emit_expr(out, f);
+                emit_expr(out, f, ctx);
             }
             out.push(']');
+        }
+
+        PyExpr::Await(expr) => {
+            out.push_str("await ");
+            emit_expr(out, expr, ctx);
         }
     }
 }
