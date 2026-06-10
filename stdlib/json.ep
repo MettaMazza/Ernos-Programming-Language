@@ -34,12 +34,21 @@ define create_json_object with keys and values:
     return node
 
 define get_json_type with node:
+    if node == 0:
+        return 0
     return get_list(node and 0)
 
 define get_json_value with node:
+    if node == 0:
+        return 0
     return get_list(node and 1)
 
 define get_json_object_value with node and key:
+    if node == 0:
+        return 0
+    set t to get_json_type(node)
+    if t != 4:
+        return 0
     set keys to get_list(node and 1)
     set values to get_list(node and 2)
     set len to length_list(keys)

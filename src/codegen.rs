@@ -26,6 +26,107 @@ fn is_tracked(t: &Type) -> bool {
     matches!(t, Type::List | Type::Map | Type::Str | Type::DynStr | Type::RefList | Type::RefStr | Type::Struct(_) | Type::Enum(_))
 }
 
+fn expr_contains_var(expr: &Expr, var_name: &str) -> bool {
+    match &expr.node {
+        ExprNode::Identifier(name) => name == var_name,
+        ExprNode::Binary(l, _, r) | ExprNode::Comparison(l, _, r) | ExprNode::Logical(l, _, r) => {
+            expr_contains_var(l, var_name) || expr_contains_var(r, var_name)
+        }
+        ExprNode::Call(_, args) => {
+            args.iter().any(|arg| expr_contains_var(arg, var_name))
+        }
+        ExprNode::MethodCall(obj, _, args) => {
+            expr_contains_var(obj, var_name) || args.iter().any(|arg| expr_contains_var(arg, var_name))
+        }
+        ExprNode::FieldAccess(obj, _) => {
+            expr_contains_var(obj, var_name)
+        }
+        ExprNode::StructCreate(_, field_inits) => {
+            field_inits.iter().any(|(_, fexpr)| expr_contains_var(fexpr, var_name))
+        }
+        ExprNode::EnumCreate(_, _, args) => {
+            args.iter().any(|arg| expr_contains_var(arg, var_name))
+        }
+        ExprNode::UnaryNot(inner) | ExprNode::TryExpr(inner) | ExprNode::Await(inner) | ExprNode::Borrow(inner) | ExprNode::Receive(inner) => {
+            expr_contains_var(inner, var_name)
+        }
+        ExprNode::ListLiteral(elements) => {
+            elements.iter().any(|el| expr_contains_var(el, var_name))
+        }
+        _ => false,
+    }
+}
+
+fn is_primitive_op_expr(expr: &Expr, param_name: &str) -> bool {
+    match &expr.node {
+        ExprNode::Integer(_) | ExprNode::FloatLiteral(_) | ExprNode::BoolLiteral(_) | ExprNode::StringLiteral(_) => true,
+        ExprNode::Identifier(_name) => {
+            // The identifier itself is fine as long as we only use it in primitive context
+            true
+        }
+        ExprNode::Binary(l, _, r) | ExprNode::Comparison(l, _, r) | ExprNode::Logical(l, _, r) => {
+            is_primitive_op_expr(l, param_name) && is_primitive_op_expr(r, param_name)
+        }
+        ExprNode::UnaryNot(inner) => {
+            is_primitive_op_expr(inner, param_name)
+        }
+        ExprNode::Call(name, args) => {
+            let primitive_arg_builtins = [
+                "int_to_string", "int_to_float", "float_to_int", "char_from_code", "ep_abs",
+                "ep_sleep_ms", "sleep_ms", "ep_time_ms", "ep_random_int"
+            ];
+            if primitive_arg_builtins.contains(&name.as_str()) {
+                args.iter().all(|arg| is_primitive_op_expr(arg, param_name))
+            } else {
+                !expr_contains_var(expr, param_name)
+            }
+        }
+        _ => {
+            !expr_contains_var(expr, param_name)
+        }
+    }
+}
+
+fn stmt_contains_non_primitive_usage(stmt: &Stmt, param_name: &str) -> bool {
+    match &stmt.node {
+        StmtNode::Set(_, expr, _) => {
+            !is_primitive_op_expr(expr, param_name)
+        }
+        StmtNode::If(cond, then_b, else_b) => {
+            if !is_primitive_op_expr(cond, param_name) { return true; }
+            then_b.iter().any(|s| stmt_contains_non_primitive_usage(s, param_name)) ||
+            else_b.as_ref().map_or(false, |eb| eb.iter().any(|s| stmt_contains_non_primitive_usage(s, param_name)))
+        }
+        StmtNode::RepeatWhile(cond, body) => {
+            if !is_primitive_op_expr(cond, param_name) { return true; }
+            body.iter().any(|s| stmt_contains_non_primitive_usage(s, param_name))
+        }
+        StmtNode::ForEach(loop_var, iterable, body) => {
+            if loop_var == param_name { return true; }
+            if !is_primitive_op_expr(iterable, param_name) { return true; }
+            body.iter().any(|s| stmt_contains_non_primitive_usage(s, param_name))
+        }
+        StmtNode::Return(expr) | StmtNode::Display(expr) | StmtNode::ExprStmt(expr) => {
+            !is_primitive_op_expr(expr, param_name)
+        }
+        StmtNode::Send(expr, body) => {
+            expr_contains_var(expr, param_name) || expr_contains_var(body, param_name)
+        }
+        StmtNode::FieldSet(obj, _, val) => {
+            expr_contains_var(obj, param_name) || expr_contains_var(val, param_name)
+        }
+        StmtNode::Match(expr, arms) => {
+            if expr_contains_var(expr, param_name) { return true; }
+            for (_, bindings, body) in arms {
+                if bindings.contains(&param_name.to_string()) { return true; }
+                if body.iter().any(|s| stmt_contains_non_primitive_usage(s, param_name)) { return true; }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
 /// Whether a local variable needs to be registered as a GC root.
 /// Only root variables whose inferred type could hold a heap pointer.
 /// Int, Float, and Bool variables are never heap pointers and can skip
@@ -454,12 +555,22 @@ impl Codegen {
             }
         }
 
-        // 3 passes for resolution of dependencies/mutual calls
-        for _ in 0..3 {
+        // Fixed-point iteration for resolution of dependencies/mutual calls
+        let mut changed = true;
+        let mut pass = 0;
+        while changed && pass < 20 {
+            changed = false;
+            pass += 1;
+
+            // 1. Top-level functions
             for func in &program.functions {
                 // If the function has an explicit return type annotation, use it
                 if let Some(ref rt) = func.return_type {
-                    self.func_return_types.insert(func.name.clone(), self.type_annotation_to_type(rt));
+                    let ty = self.type_annotation_to_type(rt);
+                    if self.func_return_types.get(&func.name) != Some(&ty) {
+                        self.func_return_types.insert(func.name.clone(), ty);
+                        changed = true;
+                    }
                     continue;
                 }
 
@@ -478,7 +589,88 @@ impl Codegen {
                 self.collect_var_types(&func.body, &mut var_types);
                 
                 let ret = self.determine_ret_type(&func.body, &var_types).unwrap_or(Type::Int);
-                self.func_return_types.insert(func.name.clone(), ret);
+                if self.func_return_types.get(&func.name) != Some(&ret) {
+                    self.func_return_types.insert(func.name.clone(), ret);
+                    changed = true;
+                }
+            }
+
+            // 2. Methods
+            for md in &program.method_defs {
+                let key = format!("{}_{}", md.struct_name, md.name);
+                if let Some(ref rt) = md.return_type {
+                    let ty = self.type_annotation_to_type(rt);
+                    if self.func_return_types.get(&key) != Some(&ty) {
+                        self.func_return_types.insert(key, ty);
+                        changed = true;
+                    }
+                    continue;
+                }
+
+                let mut var_types = HashMap::new();
+                if self.enum_defs.contains_key(&md.struct_name) {
+                    var_types.insert("self".to_string(), Type::Enum(md.struct_name.clone()));
+                } else {
+                    var_types.insert("self".to_string(), Type::Struct(md.struct_name.clone()));
+                }
+
+                for param in &md.params {
+                    let param_type = if let Some(ref ann) = param.2 {
+                        self.type_annotation_to_type(ann)
+                    } else if param.1 {
+                        Type::RefList
+                    } else {
+                        self.infer_param_struct_type(&param.0, &md.body).unwrap_or(Type::Int)
+                    };
+                    var_types.insert(param.0.clone(), param_type);
+                }
+                self.collect_var_types(&md.body, &mut var_types);
+
+                let ret = self.determine_ret_type(&md.body, &var_types).unwrap_or(Type::Int);
+                if self.func_return_types.get(&key) != Some(&ret) {
+                    self.func_return_types.insert(key, ret);
+                    changed = true;
+                }
+            }
+
+            // 3. Trait impl methods
+            for ti in &program.trait_impls {
+                for m in &ti.methods {
+                    let key = format!("{}_{}", ti.for_type, m.name);
+                    if let Some(ref rt) = m.return_type {
+                        let ty = self.type_annotation_to_type(rt);
+                        if self.func_return_types.get(&key) != Some(&ty) {
+                            self.func_return_types.insert(key, ty);
+                            changed = true;
+                        }
+                        continue;
+                    }
+
+                    let mut var_types = HashMap::new();
+                    if self.enum_defs.contains_key(&ti.for_type) {
+                        var_types.insert("self".to_string(), Type::Enum(ti.for_type.clone()));
+                    } else {
+                        var_types.insert("self".to_string(), Type::Struct(ti.for_type.clone()));
+                    }
+
+                    for param in &m.params {
+                        let param_type = if let Some(ref ann) = param.2 {
+                            self.type_annotation_to_type(ann)
+                        } else if param.1 {
+                            Type::RefList
+                        } else {
+                            self.infer_param_struct_type(&param.0, &m.body).unwrap_or(Type::Int)
+                        };
+                        var_types.insert(param.0.clone(), param_type);
+                    }
+                    self.collect_var_types(&m.body, &mut var_types);
+
+                    let ret = self.determine_ret_type(&m.body, &var_types).unwrap_or(Type::Int);
+                    if self.func_return_types.get(&key) != Some(&ret) {
+                        self.func_return_types.insert(key, ret);
+                        changed = true;
+                    }
+                }
             }
         }
     }
@@ -595,6 +787,124 @@ impl Codegen {
         } else {
             None // Ambiguous or no match — require explicit annotation
         }
+    }
+
+    fn infer_param_types_from_usage(&self, body: &[Stmt], var_types: &mut HashMap<String, Type>) {
+        fn scan_expr(expr: &Expr, var_types: &mut HashMap<String, Type>) {
+            match &expr.node {
+                ExprNode::Call(name, args) => {
+                    if name == "length_list" || name == "append_list" || name == "get_list" || 
+                       name == "set_list" || name == "remove_list" || name == "pop_list" {
+                        if let Some(ExprNode::Identifier(pname)) = args.first().map(|e| &e.node) {
+                            if let Some(ty) = var_types.get_mut(pname) {
+                                if *ty == Type::Int {
+                                    *ty = Type::List;
+                                }
+                            }
+                        }
+                    }
+                    if name == "map_insert" || name == "map_get_val" || name == "map_contains" || 
+                       name == "map_delete" || name == "map_keys" || name == "map_size" || 
+                       name == "map_values" || name == "map_set_str" || name == "map_get_str" {
+                        if let Some(ExprNode::Identifier(pname)) = args.first().map(|e| &e.node) {
+                            if let Some(ty) = var_types.get_mut(pname) {
+                                if *ty == Type::Int {
+                                    *ty = Type::Map;
+                                }
+                            }
+                        }
+                    }
+                    if name == "string_length" || name == "get_character" || name == "char_at" || 
+                       name == "string_contains" || name == "string_index_of" || name == "string_replace" || 
+                       name == "string_upper" || name == "string_lower" || name == "string_trim" || 
+                       name == "string_split" || name == "json_get_string" || name == "json_get_int" || 
+                       name == "json_get_bool" {
+                        if let Some(ExprNode::Identifier(pname)) = args.first().map(|e| &e.node) {
+                            if let Some(ty) = var_types.get_mut(pname) {
+                                if *ty == Type::Int {
+                                    *ty = Type::Str;
+                                }
+                            }
+                        }
+                    }
+                    for arg in args {
+                        scan_expr(arg, var_types);
+                    }
+                }
+                ExprNode::MethodCall(obj, _, args) => {
+                    scan_expr(obj, var_types);
+                    for arg in args {
+                        scan_expr(arg, var_types);
+                    }
+                }
+                ExprNode::Binary(l, _, r) | ExprNode::Comparison(l, _, r) | ExprNode::Logical(l, _, r) => {
+                    scan_expr(l, var_types);
+                    scan_expr(r, var_types);
+                }
+                ExprNode::UnaryNot(inner) | ExprNode::TryExpr(inner) | ExprNode::Await(inner) | ExprNode::Borrow(inner) | ExprNode::Receive(inner) => {
+                    scan_expr(inner, var_types);
+                }
+                ExprNode::StructCreate(_, field_inits) => {
+                    for (_, fexpr) in field_inits {
+                        scan_expr(fexpr, var_types);
+                    }
+                }
+                ExprNode::EnumCreate(_, _, args) => {
+                    for arg in args {
+                        scan_expr(arg, var_types);
+                    }
+                }
+                ExprNode::ListLiteral(elements) => {
+                    for el in elements {
+                        scan_expr(el, var_types);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        fn scan_stmts(stmts: &[Stmt], var_types: &mut HashMap<String, Type>) {
+            for stmt in stmts {
+                match &stmt.node {
+                    StmtNode::Set(_, expr, _) => scan_expr(expr, var_types),
+                    StmtNode::If(cond, then_b, else_b) => {
+                        scan_expr(cond, var_types);
+                        scan_stmts(then_b, var_types);
+                        if let Some(eb) = else_b {
+                            scan_stmts(eb, var_types);
+                        }
+                    }
+                    StmtNode::RepeatWhile(cond, body) => {
+                        scan_expr(cond, var_types);
+                        scan_stmts(body, var_types);
+                    }
+                    StmtNode::ForEach(_, iterable, body) => {
+                        scan_expr(iterable, var_types);
+                        scan_stmts(body, var_types);
+                    }
+                    StmtNode::Return(expr) | StmtNode::Display(expr) | StmtNode::ExprStmt(expr) => {
+                        scan_expr(expr, var_types);
+                    }
+                    StmtNode::Send(expr, body) => {
+                        scan_expr(expr, var_types);
+                        scan_expr(body, var_types);
+                    }
+                    StmtNode::FieldSet(obj, _, val) => {
+                        scan_expr(obj, var_types);
+                        scan_expr(val, var_types);
+                    }
+                    StmtNode::Match(expr, arms) => {
+                        scan_expr(expr, var_types);
+                        for (_, _, body) in arms {
+                            scan_stmts(body, var_types);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        scan_stmts(body, var_types);
     }
 
     fn collect_var_types(&mut self, stmts: &[Stmt], var_types: &mut HashMap<String, Type>) {
@@ -3182,6 +3492,7 @@ int main(int argc, char** argv) {{
         /* collect_var_types populates list_element_types and closure_c_names
            for THIS function's body only (since we cleared them above). */
         self.collect_var_types(&func.body, &mut var_types);
+        self.infer_param_types_from_usage(&func.body, &mut var_types);
 
         self.current_return_type = self.func_return_types.get(&func.name).cloned().unwrap_or(Type::Int);
 
@@ -3372,7 +3683,13 @@ int main(int argc, char** argv) {{
             let is_global = self.global_constants.contains(var_name);
             if !is_param && !is_global {
                 let t = var_types.get(var_name);
-                let should_root = t.map(|ty| needs_gc_root(ty)).unwrap_or(true);
+                let should_root = t.map(|ty| {
+                    if !needs_gc_root(ty) {
+                        func.body.iter().any(|s| stmt_contains_non_primitive_usage(s, var_name))
+                    } else {
+                        true
+                    }
+                }).unwrap_or(true);
                 if should_root {
                     self.out.push_str(&format!("    ep_gc_push_root(&{});\n", Self::sanitize_c_name(var_name)));
                     gc_root_count += 1;
@@ -3382,7 +3699,13 @@ int main(int argc, char** argv) {{
         // Also push params as GC roots
         for param in &func.params {
             let t = var_types.get(&param.0);
-            let should_root = t.map(|ty| needs_gc_root(ty)).unwrap_or(true);
+            let should_root = t.map(|ty| {
+                if !needs_gc_root(ty) {
+                    func.body.iter().any(|s| stmt_contains_non_primitive_usage(s, &param.0))
+                } else {
+                    true
+                }
+            }).unwrap_or(true);
             if should_root {
                 self.out.push_str(&format!("    ep_gc_push_root(&{});\n", param.0));
                 gc_root_count += 1;
@@ -3611,11 +3934,12 @@ int main(int argc, char** argv) {{
             } else if param.1 {
                 Type::RefList
             } else {
-                Type::Int
+                self.infer_param_struct_type(&param.0, &md.body).unwrap_or(Type::Int)
             };
             var_types.insert(param.0.clone(), param_type);
         }
         self.collect_var_types(&md.body, &mut var_types);
+        self.infer_param_types_from_usage(&md.body, &mut var_types);
 
         let key = format!("{}_{}", md.struct_name, md.name);
         self.current_return_type = self.func_return_types.get(&key).cloned().unwrap_or(Type::Int);
@@ -3630,16 +3954,82 @@ int main(int argc, char** argv) {{
         for (var_name, _) in &var_types {
             let is_param = var_name == "self" || md.params.iter().any(|p| &p.0 == var_name);
             if !is_param {
-                self.out.push_str(&format!("    long long {} = 0;\n", var_name));
+                let safe_var = Self::sanitize_c_name(var_name);
+                self.out.push_str(&format!("    long long {} = 0;\n", safe_var));
             }
         }
         self.out.push_str("    long long ret_val = 0;\n\n");
+
+        // Push GC roots for all locals
+        let mut gc_root_count = 0;
+        for (var_name, _) in &var_types {
+            let is_param = var_name == "self" || md.params.iter().any(|p| &p.0 == var_name);
+            if !is_param {
+                let t = var_types.get(var_name);
+                let should_root = t.map(|ty| {
+                    if !needs_gc_root(ty) {
+                        md.body.iter().any(|s| stmt_contains_non_primitive_usage(s, var_name))
+                    } else {
+                        true
+                    }
+                }).unwrap_or(true);
+                if should_root {
+                    self.out.push_str(&format!("    ep_gc_push_root(&{});\n", Self::sanitize_c_name(var_name)));
+                    gc_root_count += 1;
+                }
+            }
+        }
+        // Also push self as GC root
+        {
+            let t = var_types.get("self");
+            let should_root = t.map(|ty| {
+                if !needs_gc_root(ty) {
+                    md.body.iter().any(|s| stmt_contains_non_primitive_usage(s, "self"))
+                } else {
+                    true
+                }
+            }).unwrap_or(true);
+            if should_root {
+                self.out.push_str("    ep_gc_push_root(&self);\n");
+                gc_root_count += 1;
+            }
+        }
+        // Also push params as GC roots
+        for param in &md.params {
+            let t = var_types.get(&param.0);
+            let should_root = t.map(|ty| {
+                if !needs_gc_root(ty) {
+                    md.body.iter().any(|s| stmt_contains_non_primitive_usage(s, &param.0))
+                } else {
+                    true
+                }
+            }).unwrap_or(true);
+            if should_root {
+                self.out.push_str(&format!("    ep_gc_push_root(&{});\n", param.0));
+                gc_root_count += 1;
+            }
+        }
+        if gc_root_count > 0 {
+            self.out.push_str("\n");
+        }
+
+        // GC safe point: collect only if this function uses heap-allocated data
+        let needs_gc = gc_root_count > 0 || var_types.values().any(|t| 
+            matches!(t, Type::List | Type::Map | Type::DynStr | Type::Struct(_) | Type::Enum(_) | Type::RefList)
+        );
+        if needs_gc {
+            self.out.push_str("    ep_gc_maybe_collect();\n\n");
+        }
 
         for stmt in &md.body {
             self.gen_statement(stmt, &var_types)?;
         }
 
         self.out.push_str("L_cleanup:\n");
+        // Pop GC roots
+        if gc_root_count > 0 {
+            self.out.push_str(&format!("    ep_gc_pop_roots({});\n", gc_root_count));
+        }
         self.out.push_str("    return ret_val;\n}\n\n");
 
         Ok(())

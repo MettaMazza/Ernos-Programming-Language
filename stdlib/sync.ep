@@ -3,8 +3,8 @@
 
 # ---- External C Runtime Functions (pthread wrappers) ----
 external define ep_mutex_create:
-external define ep_mutex_lock with m:
-external define ep_mutex_unlock with m:
+external define ep_mutex_lock_fn with m:
+external define ep_mutex_unlock_fn with m:
 external define ep_mutex_trylock with m:
 external define ep_mutex_destroy with m:
 
@@ -43,10 +43,10 @@ define create_mutex:
     return ep_mutex_create()
 
 define lock_mutex with m:
-    return ep_mutex_lock(m)
+    return ep_mutex_lock_fn(m)
 
 define unlock_mutex with m:
-    return ep_mutex_unlock(m)
+    return ep_mutex_unlock_fn(m)
 
 define try_lock_mutex with m:
     return ep_mutex_trylock(m)

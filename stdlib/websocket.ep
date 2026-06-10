@@ -57,7 +57,7 @@ define ws_read_frame with client_fd:
     # Frame format: [FIN|RSV|opcode(4)] [MASK|length(7)] [extended_len] [mask_key(4)] [payload]
     
     set header to ep_net_recv_bytes(client_fd and 2)
-    if string_length(header) < 2:
+    if header == 0:
         return ""
     
     set byte1 to get_character(header and 0)
@@ -81,32 +81,34 @@ define ws_read_frame with client_fd:
         set ping_mask_key to ""
         if ping_masked == 1:
             set ping_mask_key to ep_net_recv_bytes(client_fd and 4)
+            if ping_mask_key == 0:
+                return ""
         if ping_len > 0:
             set ping_data to ep_net_recv_bytes(client_fd and ping_len)
+            if ping_data == 0:
+                return ""
             # Unmask ping payload if masked
-            set actual_ping_len to string_length(ping_data)
-            if ping_masked == 1 and actual_ping_len > 0:
-                if string_length(ping_mask_key) >= 4:
-                    set unmasked to create_list()
-                    set pi to 0
-                    repeat while pi < actual_ping_len:
-                        set db to peek_byte(str_to_ptr(ping_data) and pi)
-                        set mb to peek_byte(str_to_ptr(ping_mask_key) and pi % 4)
-                        set xr to 0
-                        set bv to 128
-                        set dd to db
-                        set mm to mb
-                        repeat while bv >= 1:
-                            set dbit to dd / bv
-                            set mbit to mm / bv
-                            set dd to dd % bv
-                            set mm to mm % bv
-                            if dbit != mbit:
-                                set xr to xr + bv
-                            set bv to bv / 2
-                        set ok to append_list(unmasked and xr)
-                        set pi to pi + 1
-                    set ping_data to string_from_list(unmasked)
+            if ping_masked == 1:
+                set unmasked to create_list()
+                set pi to 0
+                repeat while pi < ping_len:
+                    set db to peek_byte(str_to_ptr(ping_data) and pi)
+                    set mb to peek_byte(str_to_ptr(ping_mask_key) and pi % 4)
+                    set xr to 0
+                    set bv to 128
+                    set dd to db
+                    set mm to mb
+                    repeat while bv >= 1:
+                        set dbit to dd / bv
+                        set mbit to mm / bv
+                        set dd to dd % bv
+                        set mm to mm % bv
+                        if dbit != mbit:
+                            set xr to xr + bv
+                        set bv to bv / 2
+                    set ok to append_list(unmasked and xr)
+                    set pi to pi + 1
+                set ping_data to string_from_list(unmasked)
             ws_send_pong(client_fd and ping_data)
         else:
             ws_send_pong(client_fd and "")
@@ -123,6 +125,8 @@ define ws_read_frame with client_fd:
         # Consume the 4-byte mask key if present (browsers ALWAYS mask)
         if pong_masked == 1:
             set pong_mask_key to ep_net_recv_bytes(client_fd and 4)
+            if pong_mask_key == 0:
+                return ""
         if pong_len > 0:
             set pong_data to ep_net_recv_bytes(client_fd and pong_len)
         return "PONG_IGNORED"
@@ -140,12 +144,12 @@ define ws_read_frame with client_fd:
     # Note: use peek_byte, NOT get_character — binary data may contain null bytes
     if payload_len == 126:
         set ext to ep_net_recv_bytes(client_fd and 2)
-        if string_length(ext) < 2:
+        if ext == 0:
             return ""
         set payload_len to peek_byte(str_to_ptr(ext) and 0) * 256 + peek_byte(str_to_ptr(ext) and 1)
     else if payload_len == 127:
         set ext to ep_net_recv_bytes(client_fd and 8)
-        if string_length(ext) < 8:
+        if ext == 0:
             return ""
         # For simplicity, use lower 4 bytes (up to 4GB)
         set payload_len to peek_byte(str_to_ptr(ext) and 4) * 16777216 + peek_byte(str_to_ptr(ext) and 5) * 65536 + peek_byte(str_to_ptr(ext) and 6) * 256 + peek_byte(str_to_ptr(ext) and 7)
@@ -158,24 +162,26 @@ define ws_read_frame with client_fd:
     set mask_key to ""
     if is_masked == 1:
         set mask_key to ep_net_recv_bytes(client_fd and 4)
-        if string_length(mask_key) < 4:
+        if mask_key == 0:
             return ""
     
     # Read payload
     if payload_len < 1:
         return ""
     set payload to ep_net_recv_bytes(client_fd and payload_len)
+    if payload == 0:
+        return ""
     
-    # Unmask if needed — use actual_len (no strlen)
+    # Unmask if needed — use payload_len (no strlen)
     # because the masked payload may contain null bytes (when ASCII == mask byte)
     # get_character uses strlen which truncates at nulls; peek_byte does not
-    set actual_len to string_length(payload)
-    if is_masked == 1 and actual_len > 0:
+    if is_masked == 1 and payload_len > 0:
         set result_bytes to create_list()
         set idx to 0
-        repeat while idx < actual_len:
+        repeat while idx < payload_len:
             set data_byte to peek_byte(str_to_ptr(payload) and idx)
-            set mask_byte to peek_byte(str_to_ptr(mask_key) and idx % 4)
+            set Prince to str_to_ptr(mask_key)
+            set mask_byte to peek_byte(Prince and idx % 4)
             # XOR via bit decomposition (no bitwise ops in ErnosPlain)
             set xor_result to 0
             set bit_val to 128
