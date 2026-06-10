@@ -5359,6 +5359,17 @@ static void ep_gc_maybe_collect(void) {
 static void ep_gc_unregister(void* ptr) {
     if (!ptr) return;
     pthread_mutex_lock(&ep_gc_mutex);
+    /* Clean up references from the remembered set to prevent dangling pointers */
+    for (long long i = 0; i < ep_gc_remembered_size; ) {
+        if (ep_gc_remembered_set[i] == ptr) {
+            for (long long j = i; j < ep_gc_remembered_size - 1; j++) {
+                ep_gc_remembered_set[j] = ep_gc_remembered_set[j + 1];
+            }
+            ep_gc_remembered_size--;
+        } else {
+            i++;
+        }
+    }
     ep_gc_table_remove(ptr);
     EpGCObject** cur = &ep_gc_head;
     while (*cur) {
