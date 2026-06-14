@@ -1686,6 +1686,13 @@ impl Codegen {
                 if let Type::Struct(struct_name) = obj_type {
                     self.out.push_str(&format!("    ((EpStruct_{}*)({}))->{} = {};\n", struct_name, obj_str, field_name, expr_str));
                     self.out.push_str(&format!("    ep_gc_write_barrier((void*)({}), {});\n", obj_str, expr_str));
+                } else {
+                    // Fail loudly rather than silently dropping the assignment —
+                    // emitting nothing here produced a struct whose field was
+                    // never written (silent miscompile). Mirrors FieldAccess reads.
+                    let var_name = if let ExprNode::Identifier(n) = &obj.node { n.clone() } else { "?".to_string() };
+                    return Err(format!("Field assignment '.{}' on non-struct variable '{}' (type: {:?}) at line {}:{}. Add a type annotation like 'with {} as StructName'",
+                        field_name, var_name, obj_type, stmt.span.line, stmt.span.col, var_name));
                 }
             }
             StmtNode::Match(match_expr, arms) => {
@@ -3368,8 +3375,30 @@ impl Codegen {
         } else {
             // Emit top-level constant init function (globals already declared earlier)
             if !program.top_level_constants.is_empty() {
+                // Generate GC marking functions for top-level globals. These are
+                // roots that live outside any function frame, so the collector
+                // must trace them or objects reachable only via a global get swept.
+                let global_names: Vec<&String> = program.top_level_constants.iter()
+                    .filter_map(|stmt| match &stmt.node {
+                        StmtNode::Set(name, _, _) => Some(name),
+                        _ => None,
+                    })
+                    .collect();
+                self.out.push_str("\nstatic void __ep_mark_globals_major(void) {\n");
+                for name in &global_names {
+                    self.out.push_str(&format!("    if ({} != 0) ep_gc_mark_object((void*){});\n", name, name));
+                }
+                self.out.push_str("}\n");
+                self.out.push_str("static void __ep_mark_globals_minor(void) {\n");
+                for name in &global_names {
+                    self.out.push_str(&format!("    if ({} != 0) ep_gc_mark_object_minor((void*){});\n", name, name));
+                }
+                self.out.push_str("}\n");
+
                 // Generate init function
                 self.out.push_str("\nvoid __ep_init_constants(void) {\n");
+                self.out.push_str("    ep_gc_mark_globals_major = __ep_mark_globals_major;\n");
+                self.out.push_str("    ep_gc_mark_globals_minor = __ep_mark_globals_minor;\n");
                 for stmt in &program.top_level_constants {
                     if let StmtNode::Set(name, expr, _) = &stmt.node {
                         let empty_types: HashMap<String, Type> = HashMap::new();
@@ -4798,10 +4827,26 @@ static long long ep_gc_remembered_size = 0;
 #endif
 static pthread_mutex_t ep_gc_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+/* Stop-the-world coordination. The collector sets ep_gc_stop_requested and, in
+   ep_gc_stop_the_world(), waits until every *other* registered thread has parked
+   at a safepoint (ep_gc_park_if_stopped). This guarantees mark/sweep never runs
+   concurrently with a mutator changing its roots or an object's fields — the
+   "marking races with running mutators" hazard. All three fields are touched
+   only while holding ep_gc_mutex (the lock-free reads of ep_gc_stop_requested at
+   safepoints are a benign optimization: a missed set just defers parking to the
+   next safepoint, and the collector's bounded wait covers it). */
+static volatile int ep_gc_stop_requested = 0;
+static int ep_gc_parked_count = 0;
+static pthread_cond_t ep_gc_resume_cond = PTHREAD_COND_INITIALIZER;
+
 /* Function pointer for channel scanning — set after EpChannel is defined.
    GC mark calls this to scan values in-transit in channel buffers. */
 static void (*ep_gc_scan_channels_major)(void) = NULL;
 static void (*ep_gc_scan_channels_minor)(void) = NULL;
+/* Function pointers for marking top-level constant/global variables, which are
+   GC roots that live outside any function frame. Set by __ep_init_constants. */
+static void (*ep_gc_mark_globals_major)(void) = NULL;
+static void (*ep_gc_mark_globals_minor)(void) = NULL;
 /* Function pointers for map value traversal — set after EpMap is defined.
    GC mark calls these to recursively mark values stored in maps. */
 static void (*ep_gc_mark_map_values)(void* ptr) = NULL;
@@ -4836,24 +4881,92 @@ static __thread long long* ep_gc_root_stack[EP_GC_MAX_ROOTS];
 static __thread int ep_gc_root_sp = 0;
 static __thread int ep_thread_slot = -1;
 
+/* ep_gc_root_sp is the *logical* shadow-stack depth. It always advances on
+   push and retreats on pop so that per-frame push/pop counts stay balanced.
+   Array storage is capped at EP_GC_MAX_ROOTS: once the stack is full, further
+   roots are counted but not stored (those deep-overflow locals are simply not
+   traced) — crucially, we never overwrite or drop an outer frame's stored
+   roots, which the old "silently skip the push but still pop" path did. */
 static void ep_gc_push_root(long long* root) {
-    if (ep_gc_root_sp < EP_GC_MAX_ROOTS) {
-        ep_gc_root_stack[ep_gc_root_sp] = root;
-        ep_gc_root_sp++;
+    int idx = ep_gc_root_sp;
+    ep_gc_root_sp++;
+    if (idx < EP_GC_MAX_ROOTS) {
+        ep_gc_root_stack[idx] = root;
         /* Update the heap-allocated state so GC mark can see it safely */
         if (ep_thread_slot >= 0 && ep_thread_gc_states[ep_thread_slot]) {
-            ep_thread_gc_states[ep_thread_slot]->roots[ep_gc_root_sp - 1] = root;
-            ep_thread_gc_states[ep_thread_slot]->sp = ep_gc_root_sp;
+            ep_thread_gc_states[ep_thread_slot]->roots[idx] = root;
+            ep_thread_gc_states[ep_thread_slot]->sp =
+                (ep_gc_root_sp < EP_GC_MAX_ROOTS) ? ep_gc_root_sp : EP_GC_MAX_ROOTS;
         }
     }
 }
 static void ep_gc_pop_roots(long long count) {
     ep_gc_root_sp -= (int)count;
     if (ep_gc_root_sp < 0) ep_gc_root_sp = 0;
-    /* Update the heap-allocated state */
+    /* Update the heap-allocated state (clamped to the array bound) */
     if (ep_thread_slot >= 0 && ep_thread_gc_states[ep_thread_slot]) {
-        ep_thread_gc_states[ep_thread_slot]->sp = ep_gc_root_sp;
+        ep_thread_gc_states[ep_thread_slot]->sp =
+            (ep_gc_root_sp < EP_GC_MAX_ROOTS) ? ep_gc_root_sp : EP_GC_MAX_ROOTS;
     }
+}
+
+/* Park the calling thread if the collector has stopped the world.
+   MUST be called with ep_gc_mutex held. The thread's shadow stack (its precise
+   root set) is stable while parked, so the collector can scan it race-free. */
+static void ep_gc_park_if_stopped(void) {
+    if (!ep_gc_stop_requested) return;
+    /* Spill registers onto the stack and publish this thread's current stack top
+       so the collector can conservatively scan its frozen C stack while parked —
+       this catches roots held only in registers/temporaries that the precise
+       shadow stack does not yet record. _dummy is declared below _pregs, so its
+       (lower) address bounds a scan range that covers the spilled registers. */
+    jmp_buf _pregs;
+    volatile char _top_marker;  /* function-scope: stays valid while parked */
+    memset(&_pregs, 0, sizeof(_pregs));
+    setjmp(_pregs);
+    /* _top_marker is declared after _pregs, so its (lower) address bounds a scan
+       range [&_top_marker, stack_bottom] that covers the spilled registers. */
+    ep_thread_local_top = (void*)&_top_marker;
+    __sync_synchronize();  /* publish shadow-stack + top writes before parking */
+    ep_gc_parked_count++;
+    while (ep_gc_stop_requested) {
+        pthread_cond_wait(&ep_gc_resume_cond, &ep_gc_mutex);
+    }
+    ep_gc_parked_count--;
+}
+
+/* Begin a stop-the-world pause. MUST be called with ep_gc_mutex held.
+   Waits (briefly releasing the lock so blocked mutators can reach a safepoint)
+   until all other registered threads have parked. After a bounded fallback
+   (~50ms) it proceeds anyway: any thread that hasn't parked by then is blocked
+   or idle with a stable shadow stack, so scanning it is still safe in practice. */
+static void ep_gc_stop_the_world(void) {
+    ep_gc_stop_requested = 1;
+    /* Actively-running threads reach a safepoint (every allocation and every
+       function entry) within microseconds, so they park on the first spin or
+       two. The bound only caps the rare case where a thread is blocked/idle
+       (e.g. just entered a channel op) and won't park — those have a stable
+       shadow stack, so proceeding to scan them is safe. ~40 * 250us ≈ 10ms. */
+    for (int spins = 0; spins < 40; spins++) {
+        int others = 0;
+        for (int t = 0; t < ep_num_threads; t++) {
+            if (ep_thread_active[t] && t != ep_thread_slot) others++;
+        }
+        if (others <= 0 || ep_gc_parked_count >= others) return;
+        pthread_mutex_unlock(&ep_gc_mutex);
+#ifdef _WIN32
+        Sleep(1);
+#elif !defined(__wasm__)
+        usleep(250);
+#endif
+        pthread_mutex_lock(&ep_gc_mutex);
+    }
+}
+
+/* End a stop-the-world pause and wake all parked threads. MUST hold ep_gc_mutex. */
+static void ep_gc_start_the_world(void) {
+    ep_gc_stop_requested = 0;
+    pthread_cond_broadcast(&ep_gc_resume_cond);
 }
 
 static void ep_gc_register_thread(void* stack_bottom) {
@@ -4989,6 +5102,7 @@ static void ep_gc_table_remove(void* key) {
 static EpGCObject* ep_gc_register(void* ptr, EpObjKind kind) {
     if (!ptr) return NULL;
     pthread_mutex_lock(&ep_gc_mutex);
+    ep_gc_park_if_stopped();  /* safepoint: don't allocate/touch the table mid-collection */
     EpGCObject* obj = (EpGCObject*)malloc(sizeof(EpGCObject));
     if (!obj) {
         pthread_mutex_unlock(&ep_gc_mutex);
@@ -5009,18 +5123,31 @@ static EpGCObject* ep_gc_register(void* ptr, EpObjKind kind) {
     return obj;
 }
 
-/* Find GC object by pointer */
+/* Find GC object by pointer.
+   Takes ep_gc_mutex because ep_gc_table_insert may realloc+free the table
+   concurrently (from another thread's allocation). Mutator-side callers
+   (write barrier, free_struct/free_map/free_list, to-string) must use this
+   locking variant; code already holding the mutex (mark/sweep) calls
+   ep_gc_table_get directly to avoid a non-recursive double-lock deadlock. */
 static EpGCObject* ep_gc_find(void* ptr) {
-    return ep_gc_table_get(ptr);
+    pthread_mutex_lock(&ep_gc_mutex);
+    ep_gc_park_if_stopped();  /* safepoint */
+    EpGCObject* obj = ep_gc_table_get(ptr);
+    pthread_mutex_unlock(&ep_gc_mutex);
+    return obj;
 }
 
-/* Write barrier for generational GC: tracks references from old objects (gen 1) to young objects (gen 0) */
+/* Write barrier for generational GC: tracks references from old objects (gen 1) to young objects (gen 0).
+   The whole operation runs under ep_gc_mutex so the table lookups and the
+   remembered-set update see a consistent table (no race with a concurrent
+   resize) and use the no-lock ep_gc_table_get to avoid re-entering the lock. */
 static void ep_gc_write_barrier(void* host_ptr, long long val) {
     if (val == 0) return;
-    EpGCObject* host_obj = ep_gc_find(host_ptr);
-    EpGCObject* val_obj = ep_gc_find((void*)val);
+    pthread_mutex_lock(&ep_gc_mutex);
+    ep_gc_park_if_stopped();  /* safepoint: don't update the remembered set mid-collection */
+    EpGCObject* host_obj = ep_gc_table_get(host_ptr);
+    EpGCObject* val_obj = ep_gc_table_get((void*)val);
     if (host_obj && val_obj && host_obj->generation == 1 && val_obj->generation == 0) {
-        pthread_mutex_lock(&ep_gc_mutex);
         /* Check if already in remembered set */
         int found = 0;
         for (long long i = 0; i < ep_gc_remembered_size; i++) {
@@ -5042,8 +5169,8 @@ static void ep_gc_write_barrier(void* host_ptr, long long val) {
                 ep_gc_remembered_set[ep_gc_remembered_size++] = (void*)val;
             }
         }
-        pthread_mutex_unlock(&ep_gc_mutex);
     }
+    pthread_mutex_unlock(&ep_gc_mutex);
 }
 
 /* Forward declarations for list type (needed by GC mark) */
@@ -5056,7 +5183,8 @@ typedef struct {
 /* Mark a single object and recursively mark its children */
 static void ep_gc_mark_object(void* ptr) {
     if (!ptr) return;
-    EpGCObject* obj = ep_gc_find(ptr);
+    /* Runs under ep_gc_mutex (held by the collector) — use the no-lock lookup. */
+    EpGCObject* obj = ep_gc_table_get(ptr);
     if (!obj || obj->marked) return;
     obj->marked = 1;
 
@@ -5083,7 +5211,8 @@ static void ep_gc_mark_object(void* ptr) {
 /* Mark a single object and recursively mark its children (only if it is Gen 0) */
 static void ep_gc_mark_object_minor(void* ptr) {
     if (!ptr) return;
-    EpGCObject* obj = ep_gc_find(ptr);
+    /* Runs under ep_gc_mutex (held by the collector) — use the no-lock lookup. */
+    EpGCObject* obj = ep_gc_table_get(ptr);
     if (!obj || obj->generation != 0 || obj->marked) return;
     obj->marked = 1;
 
@@ -5107,9 +5236,53 @@ static void ep_gc_mark_object_minor(void* ptr) {
     }
 }
 
+/* Conservatively scan every registered thread's C stack and mark any word that
+   looks like a tracked pointer. The collector spills its own registers and
+   publishes its top here; all other threads are parked at a safepoint with their
+   registers spilled and top published (ep_gc_park_if_stopped), so their stacks
+   are frozen. This complements the precise shadow stacks: it catches roots held
+   only in registers/temporaries (e.g. a freshly allocated object not yet stored
+   into a rooted slot). Non-pointer words are harmlessly ignored by ep_gc_find.
+   Marked no_sanitize_address: a conservative scan deliberately reads whole stack
+   ranges (including ASAN redzones and out-of-frame slots), which is not a bug. */
+#if defined(__SANITIZE_ADDRESS__)
+# define EP_NO_ASAN __attribute__((no_sanitize_address))
+#elif defined(__has_feature)
+# if __has_feature(address_sanitizer)
+#  define EP_NO_ASAN __attribute__((no_sanitize_address))
+# endif
+#endif
+#ifndef EP_NO_ASAN
+# define EP_NO_ASAN
+#endif
+EP_NO_ASAN
+static void ep_gc_scan_thread_stacks(int minor) {
+    jmp_buf _regs;
+    volatile char _top_marker;
+    memset(&_regs, 0, sizeof(_regs));
+    setjmp(_regs);   /* spill the collector's own registers onto its stack */
+    ep_thread_local_top = (void*)&_top_marker;
+    for (int t = 0; t < ep_num_threads; t++) {
+        if (!ep_thread_active[t]) continue;
+        if (!ep_thread_tops[t]) continue;
+        void** start = (void**)*ep_thread_tops[t];
+        void** end = (void**)ep_thread_bottoms[t];
+        if (!start || !end) continue;
+        if (start > end) { void** tmp = start; start = end; end = tmp; }
+        for (void** cur = start; cur < end; cur++) {
+            void* p = *cur;
+            if (p) {
+                if (minor) ep_gc_mark_object_minor(p);
+                else ep_gc_mark_object(p);
+            }
+        }
+    }
+}
+
 /* Mark phase: traverse from ALL threads' explicit GC roots.
    Uses the heap-allocated EpThreadGCState instead of raw __thread pointers. */
 static void ep_gc_mark(void) {
+    ep_gc_scan_thread_stacks(0);  /* conservative C-stack scan of all (parked) threads */
     for (int t = 0; t < ep_num_threads; t++) {
         if (!ep_thread_active[t]) continue;
         EpThreadGCState* state = ep_thread_gc_states[t];
@@ -5126,7 +5299,9 @@ static void ep_gc_mark(void) {
         }
     }
     /* Also mark from main thread's local root stack (thread 0 / unregistered) */
-    for (int i = 0; i < ep_gc_root_sp; i++) {
+    int local_sp = ep_gc_root_sp;
+    if (local_sp > EP_GC_MAX_ROOTS) local_sp = EP_GC_MAX_ROOTS;
+    for (int i = 0; i < local_sp; i++) {
         long long val = *ep_gc_root_stack[i];
         if (val != 0) {
             ep_gc_mark_object((void*)val);
@@ -5165,11 +5340,14 @@ static void ep_gc_mark(void) {
         }
         timer = timer->next;
     }
+    /* Mark top-level constant/global variables (roots outside any frame) */
+    if (ep_gc_mark_globals_major) ep_gc_mark_globals_major();
     /* Scan all registered channel buffers — values in-transit have no root */
     if (ep_gc_scan_channels_major) ep_gc_scan_channels_major();
 }
 
 static void ep_gc_mark_minor(void) {
+    ep_gc_scan_thread_stacks(1);  /* conservative C-stack scan (gen-0) of all (parked) threads */
     for (int t = 0; t < ep_num_threads; t++) {
         if (!ep_thread_active[t]) continue;
         EpThreadGCState* state = ep_thread_gc_states[t];
@@ -5185,7 +5363,9 @@ static void ep_gc_mark_minor(void) {
             }
         }
     }
-    for (int i = 0; i < ep_gc_root_sp; i++) {
+    int local_sp = ep_gc_root_sp;
+    if (local_sp > EP_GC_MAX_ROOTS) local_sp = EP_GC_MAX_ROOTS;
+    for (int i = 0; i < local_sp; i++) {
         long long val = *ep_gc_root_stack[i];
         if (val != 0) {
             ep_gc_mark_object_minor((void*)val);
@@ -5228,6 +5408,8 @@ static void ep_gc_mark_minor(void) {
     for (long long i = 0; i < ep_gc_remembered_size; i++) {
         ep_gc_mark_object_minor(ep_gc_remembered_set[i]);
     }
+    /* Mark top-level constant/global variables (roots outside any frame) */
+    if (ep_gc_mark_globals_minor) ep_gc_mark_globals_minor();
     /* Scan all registered channel buffers — values in-transit have no root */
     if (ep_gc_scan_channels_minor) ep_gc_scan_channels_minor();
 }
@@ -5336,9 +5518,17 @@ static void ep_gc_collect(void) {
     ep_gc_collect_major();
 }
 
-/* Maybe trigger GC if we've exceeded threshold */
+/* Maybe trigger GC if we've exceeded threshold. Also serves as the per-function
+   GC safepoint: if another thread has stopped the world, park here until it's done. */
 static void ep_gc_maybe_collect(void) {
     if (!ep_gc_enabled) return;  /* Early exit if GC suppressed (e.g. during channel ops) */
+    /* Safepoint: lock-free fast check, then park under the lock if a collection
+       is in progress on another thread. Keeps the no-GC path lock-free. */
+    if (ep_gc_stop_requested) {
+        pthread_mutex_lock(&ep_gc_mutex);
+        ep_gc_park_if_stopped();
+        pthread_mutex_unlock(&ep_gc_mutex);
+    }
     /* Fast path: check thresholds before acquiring mutex.
        Counters are only incremented under the mutex, so worst case
        we miss one collection cycle — safe trade-off for avoiding
@@ -5346,11 +5536,18 @@ static void ep_gc_maybe_collect(void) {
     if (ep_gc_nursery_count < ep_gc_nursery_threshold && ep_gc_count < ep_gc_threshold) return;
     EP_GC_UPDATE_TOP();
     pthread_mutex_lock(&ep_gc_mutex);
-    if (ep_gc_nursery_count >= ep_gc_nursery_threshold) {
-        ep_gc_collect_minor();
-    }
-    if (ep_gc_count >= ep_gc_threshold) {
-        ep_gc_collect_major();
+    /* Another thread may have started collecting between the check and the lock —
+       park instead of racing it, then re-check thresholds under the lock. */
+    ep_gc_park_if_stopped();
+    if (ep_gc_nursery_count >= ep_gc_nursery_threshold || ep_gc_count >= ep_gc_threshold) {
+        ep_gc_stop_the_world();
+        if (ep_gc_nursery_count >= ep_gc_nursery_threshold) {
+            ep_gc_collect_minor();
+        }
+        if (ep_gc_count >= ep_gc_threshold) {
+            ep_gc_collect_major();
+        }
+        ep_gc_start_the_world();
     }
     pthread_mutex_unlock(&ep_gc_mutex);
 }
@@ -5359,6 +5556,7 @@ static void ep_gc_maybe_collect(void) {
 static void ep_gc_unregister(void* ptr) {
     if (!ptr) return;
     pthread_mutex_lock(&ep_gc_mutex);
+    ep_gc_park_if_stopped();  /* safepoint: don't mutate the table mid-collection */
     /* Clean up references from the remembered set to prevent dangling pointers */
     for (long long i = 0; i < ep_gc_remembered_size; ) {
         if (ep_gc_remembered_set[i] == ptr) {
@@ -5779,6 +5977,15 @@ long long ep_net_accept(long long server_fd) {
     struct sockaddr_in cli_addr;
     socklen_t clilen = sizeof(cli_addr);
     int newsockfd = accept((int)server_fd, (struct sockaddr*)&cli_addr, &clilen);
+    if (newsockfd >= 0) {
+        /* Bound how long a single recv/send may block so a slow or silent
+           client cannot pin a handler thread forever (slowloris). */
+        struct timeval tv;
+        tv.tv_sec = 30;
+        tv.tv_usec = 0;
+        setsockopt(newsockfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
+        setsockopt(newsockfd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof(tv));
+    }
     return newsockfd;
 }
 

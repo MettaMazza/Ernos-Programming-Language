@@ -348,7 +348,18 @@ define create_parser_state with tokens:
     set state to create_list()
     set ok to append_list(state and tokens)
     set ok to append_list(state and 0)
+    set ok to append_list(state and 0)   # error flag (slot 2): set when a parse error occurs
     return state
+
+# Records that a parse error occurred. Parser functions return placeholder
+# values and continue, but this flag lets the driver abort compilation instead
+# of emitting code from a desynchronized AST.
+define set_parser_error with state:
+    set ok to set_list(state and 2 and 1)
+    return 0
+
+define get_parser_error with state:
+    return get_list(state and 2)
 
 define get_state_tokens with state:
     return get_list(state and 0)
@@ -400,6 +411,7 @@ define expect_token_type with state and expected_type:
     display actual_type
     display "At line:"
     display get_token_line(tok)
+    set ok to set_parser_error(state)
     return 0
 
 define get_token_precedence with tok:
@@ -576,6 +588,7 @@ define parse_program with state:
                                 else:
                                     display "Parser Error: Unexpected token at top level:"
                                     display t
+                                    set ok to set_parser_error(state)
                                     set loop to 0
                     
     set prog to make_node_program(imports and externals and funcs and struct_defs and enum_defs and method_defs and trait_defs and trait_impls) + 0
@@ -1295,6 +1308,7 @@ define parse_prefix with state:
 
     display "Parser Error: Expected expression, found token type:"
     display t
+    set ok to set_parser_error(state)
     return make_node_int(0) + 0
 
 # given x and y:

@@ -78,9 +78,17 @@ define parse_all_modules with current_file and parsed_files and all_functions an
         return 1
         
     set tokens to tokenize_source(source)
+    if tokens == 0:
+        display "Compiler Error: Lexing failed (unterminated string or invalid token) in:"
+        set ok to display_string(current_file)
+        return 1
     set state to create_parser_state(tokens)
     set program_ast to parse_program(state)
-    
+    if get_parser_error(state) == 1:
+        display "Compiler Error: Parsing failed in:"
+        set ok to display_string(current_file)
+        return 1
+
     set imports to get_list(program_ast and 1)
     set externals to get_list(program_ast and 2)
     set funcs to get_list(program_ast and 3)

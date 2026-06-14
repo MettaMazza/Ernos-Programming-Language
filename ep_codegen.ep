@@ -28,6 +28,22 @@ define map_put with keys and values and key and val:
         set ok to append_list(values and val)
     return 0
 
+# Returns the global slot index of `name` in `seen`, appending it first if
+# absent. Used to give every distinct struct field name (and enum variant name)
+# one consistent index across the whole program, so field reads and writes agree
+# without needing struct-type inference at each access site.
+define field_slot_index with seen and name:
+    set name_str to string_concat(name and "")
+    set len to length_list(seen)
+    set idx to 0
+    repeat while idx < len:
+        set k to get_list(seen and idx)
+        if name_str equals k:
+            return idx
+        set idx to idx + 1
+    set ok to append_list(seen and name_str)
+    return len
+
 # String helpers
 define string_concat with s1 and s2:
     set lst to create_list()
@@ -437,15 +453,58 @@ define string_contains with s and sub:
         set i to i + 1
     return 0
 
+define str_starts_with with s and prefix:
+    set slen to string_length(s)
+    set plen to string_length(prefix)
+    if plen > slen:
+        return 0
+    set i to 0
+    repeat while i < plen:
+        if get_character(s and i) != get_character(prefix and i):
+            return 0
+        set i to i + 1
+    return 1
+
+define str_ends_with with s and suffix:
+    set slen to string_length(s)
+    set xlen to string_length(suffix)
+    if xlen > slen:
+        return 0
+    set off to slen - xlen
+    set i to 0
+    repeat while i < xlen:
+        if get_character(s and off + i) != get_character(suffix and i):
+            return 0
+        set i to i + 1
+    return 1
+
+# True only for accessor-style names (get/peek as a whole word), so that
+# functions merely containing the substring — budget_total, forget_entry,
+# target_pos, widget — are no longer misclassified as returning a borrow.
+define is_accessor_name with name:
+    if "get" equals name:
+        return 1
+    if "peek" equals name:
+        return 1
+    if str_starts_with(name and "get_") == 1:
+        return 1
+    if str_starts_with(name and "peek_") == 1:
+        return 1
+    if str_ends_with(name and "_get") == 1:
+        return 1
+    if str_ends_with(name and "_peek") == 1:
+        return 1
+    return 0
+
 define is_borrow_expr with expr and borrowed_keys and borrowed_values:
     set type to get_list(expr and 0)
-    
+
     if type == 20: # NODE_BORROW
         return 1
-        
+
     if type == 6: # NODE_CALL
         set func_name to get_list(expr and 1)
-        if string_contains(func_name and "get") == 1 || string_contains(func_name and "peek") == 1:
+        if is_accessor_name(func_name) == 1:
             return 1
             
     if type == 3: # NODE_IDENT
@@ -1288,9 +1347,8 @@ define gen_expr with state and expr and var_keys and var_values:
         set struct_name to get_list(expr and 1)
         set fields to get_list(expr and 2)
         set field_count to length_list(fields)
-        set res to "({ long long* _s = (long long*)malloc(sizeof(long long) * "
-        set res to string_concat(res and ep_int_to_str(field_count + 8))
-        set res to string_concat(res and "); ")
+        # Allocate enough slots for any global field index (see EP_STRUCT_MAX_SLOTS).
+        set res to "({ long long* _s = (long long*)malloc(sizeof(long long) * EP_STRUCT_MAX_SLOTS); "
         set f_idx to 0
         repeat while f_idx < field_count:
             set fpair to get_list(fields and f_idx)
@@ -1464,6 +1522,14 @@ define get_c_runtime_source:
     set ok to append_list(lines and "static long long ep_gc_threshold = 8192;\n")
     set ok to append_list(lines and "static int ep_gc_enabled = 1;\n")
     set ok to append_list(lines and "static pthread_mutex_t ep_gc_mutex = PTHREAD_MUTEX_INITIALIZER;\n")
+    set ok to append_list(lines and "/* Stop-the-world coordination: the collector sets ep_gc_stop_requested and\n")
+    set ok to append_list(lines and "   waits (ep_gc_stop_the_world) for every other thread to park at a safepoint\n")
+    set ok to append_list(lines and "   before the conservative stack scan, so it never scans a running thread's\n")
+    set ok to append_list(lines and "   stack. Touched only under ep_gc_mutex (the lock-free reads at safepoints are\n")
+    set ok to append_list(lines and "   a benign optimization, covered by the collector's bounded wait). */\n")
+    set ok to append_list(lines and "static volatile int ep_gc_stop_requested = 0;\n")
+    set ok to append_list(lines and "static int ep_gc_parked_count = 0;\n")
+    set ok to append_list(lines and "static pthread_cond_t ep_gc_resume_cond = PTHREAD_COND_INITIALIZER;\n")
     set ok to append_list(lines and "\n")
     set ok to append_list(lines and "/* Thread registry for conservative stack scanning in multi-threaded environment */\n")
     set ok to append_list(lines and "#define EP_MAX_THREADS 256\n")
@@ -1512,6 +1578,47 @@ define get_c_runtime_source:
     set ok to append_list(lines and "}\n")
     set ok to append_list(lines and "\n")
     set ok to append_list(lines and "#define EP_GC_UPDATE_TOP() { volatile int _dummy; ep_thread_local_top = (void*)&_dummy; }\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "/* Park the calling thread if the collector has stopped the world. MUST hold\n")
+    set ok to append_list(lines and "   ep_gc_mutex. Spills registers and publishes the stack top first so the\n")
+    set ok to append_list(lines and "   conservative scan covers this thread's live frame while it is parked. */\n")
+    set ok to append_list(lines and "static void ep_gc_park_if_stopped(void) {\n")
+    set ok to append_list(lines and "    if (!ep_gc_stop_requested) return;\n")
+    set ok to append_list(lines and "    jmp_buf _pregs;\n")
+    set ok to append_list(lines and "    memset(&_pregs, 0, sizeof(_pregs));\n")
+    set ok to append_list(lines and "    setjmp(_pregs);          /* spill registers onto this thread's stack */\n")
+    set ok to append_list(lines and "    EP_GC_UPDATE_TOP();      /* publish stack top (below _pregs) for the scan */\n")
+    set ok to append_list(lines and "    __sync_synchronize();\n")
+    set ok to append_list(lines and "    ep_gc_parked_count++;\n")
+    set ok to append_list(lines and "    while (ep_gc_stop_requested) {\n")
+    set ok to append_list(lines and "        pthread_cond_wait(&ep_gc_resume_cond, &ep_gc_mutex);\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    ep_gc_parked_count--;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "/* Begin a stop-the-world pause. MUST hold ep_gc_mutex. Briefly releases the\n")
+    set ok to append_list(lines and "   lock so blocked mutators can reach a safepoint and park. After ~10ms it\n")
+    set ok to append_list(lines and "   proceeds anyway: a thread that has not parked is blocked/idle with a stable\n")
+    set ok to append_list(lines and "   stack, so scanning it is still safe in practice. */\n")
+    set ok to append_list(lines and "static void ep_gc_stop_the_world(void) {\n")
+    set ok to append_list(lines and "    ep_gc_stop_requested = 1;\n")
+    set ok to append_list(lines and "    for (int spins = 0; spins < 40; spins++) {\n")
+    set ok to append_list(lines and "        int others = 0;\n")
+    set ok to append_list(lines and "        for (int t = 0; t < ep_num_threads; t++) {\n")
+    set ok to append_list(lines and "            if (ep_thread_active[t] && ep_thread_tops[t] != &ep_thread_local_top) others++;\n")
+    set ok to append_list(lines and "        }\n")
+    set ok to append_list(lines and "        if (others <= 0 || ep_gc_parked_count >= others) return;\n")
+    set ok to append_list(lines and "        pthread_mutex_unlock(&ep_gc_mutex);\n")
+    set ok to append_list(lines and "        usleep(250);\n")
+    set ok to append_list(lines and "        pthread_mutex_lock(&ep_gc_mutex);\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "/* End a stop-the-world pause and wake all parked threads. MUST hold ep_gc_mutex. */\n")
+    set ok to append_list(lines and "static void ep_gc_start_the_world(void) {\n")
+    set ok to append_list(lines and "    ep_gc_stop_requested = 0;\n")
+    set ok to append_list(lines and "    pthread_cond_broadcast(&ep_gc_resume_cond);\n")
+    set ok to append_list(lines and "}\n")
     set ok to append_list(lines and "\n")
     set ok to append_list(lines and "/* Simple open-addressed hash map with linear probing for O(1) GC object lookup */\n")
     set ok to append_list(lines and "typedef struct {\n")
@@ -1597,6 +1704,7 @@ define get_c_runtime_source:
     set ok to append_list(lines and "static EpGCObject* ep_gc_register(void* ptr, EpObjKind kind) {\n")
     set ok to append_list(lines and "    if (!ptr) return NULL;\n")
     set ok to append_list(lines and "    pthread_mutex_lock(&ep_gc_mutex);\n")
+    set ok to append_list(lines and "    ep_gc_park_if_stopped();  /* safepoint: don't allocate/touch the table mid-collection */\n")
     set ok to append_list(lines and "    EpGCObject* obj = (EpGCObject*)malloc(sizeof(EpGCObject));\n")
     set ok to append_list(lines and "    if (!obj) {\n")
     set ok to append_list(lines and "        pthread_mutex_unlock(&ep_gc_mutex);\n")
@@ -1732,8 +1840,11 @@ define get_c_runtime_source:
     set ok to append_list(lines and "static void ep_gc_maybe_collect(void) {\n")
     set ok to append_list(lines and "    EP_GC_UPDATE_TOP();\n")
     set ok to append_list(lines and "    pthread_mutex_lock(&ep_gc_mutex);\n")
+    set ok to append_list(lines and "    ep_gc_park_if_stopped();  /* safepoint: park if another thread is collecting */\n")
     set ok to append_list(lines and "    if (ep_gc_count >= ep_gc_threshold) {\n")
+    set ok to append_list(lines and "        ep_gc_stop_the_world();\n")
     set ok to append_list(lines and "        ep_gc_collect();\n")
+    set ok to append_list(lines and "        ep_gc_start_the_world();\n")
     set ok to append_list(lines and "    }\n")
     set ok to append_list(lines and "    pthread_mutex_unlock(&ep_gc_mutex);\n")
     set ok to append_list(lines and "}\n")
@@ -1742,6 +1853,7 @@ define get_c_runtime_source:
     set ok to append_list(lines and "static void ep_gc_unregister(void* ptr) {\n")
     set ok to append_list(lines and "    if (!ptr) return;\n")
     set ok to append_list(lines and "    pthread_mutex_lock(&ep_gc_mutex);\n")
+    set ok to append_list(lines and "    ep_gc_park_if_stopped();  /* safepoint: don't mutate the table mid-collection */\n")
     set ok to append_list(lines and "    ep_gc_table_remove(ptr);\n")
     set ok to append_list(lines and "    EpGCObject** cur = &ep_gc_head;\n")
     set ok to append_list(lines and "    while (*cur) {\n")
@@ -3389,56 +3501,81 @@ define generate_c with program and is_test_mode:
 
     # Emit struct typedefs (if program has struct_defs at index 4)
     set prog_len to length_list(program)
+    # Global field-slot registry: each distinct field name maps to one index used
+    # by every struct, so a field name shared by two structs at different declared
+    # positions can no longer collide on a conflicting #define (silent corruption).
+    set field_slots to create_list()
     if prog_len > 4:
         set struct_defs to get_list(program and 4)
         set sd_len to length_list(struct_defs)
         if sd_len > 0:
-            set ok to emit(state and "\n/* Struct Field Index Defines */\n")
+            set ok to emit(state and "\n/* Struct Field Index Defines (global slots) */\n")
+            # Pass 1: assign a global slot to every distinct field name.
             set sd_idx to 0
             repeat while sd_idx < sd_len:
                 set sdef to get_list(struct_defs and sd_idx)
-                set sname to get_list(sdef and 1)
                 set sfields to get_list(sdef and 2)
                 set sf_len to length_list(sfields)
                 set sf_idx to 0
                 repeat while sf_idx < sf_len:
                     set sf to get_list(sfields and sf_idx)
                     set sf_name to get_list(sf and 0)
-                    set line to "#define EP_FIELD_"
-                    set line to string_concat(line and sf_name)
-                    set line to string_concat(line and " ")
-                    set line to string_concat(line and ep_int_to_str(sf_idx))
-                    set line to string_concat(line and "\n")
-                    set ok to emit(state and line)
+                    set slot to field_slot_index(field_slots and sf_name)
                     set sf_idx to sf_idx + 1
                 set sd_idx to sd_idx + 1
+            # Pass 2: emit one #define per distinct field name.
+            set fs_len to length_list(field_slots)
+            set fs_idx to 0
+            repeat while fs_idx < fs_len:
+                set fname to get_list(field_slots and fs_idx)
+                set line to "#define EP_FIELD_"
+                set line to string_concat(line and fname)
+                set line to string_concat(line and " ")
+                set line to string_concat(line and ep_int_to_str(fs_idx))
+                set line to string_concat(line and "\n")
+                set ok to emit(state and line)
+                set fs_idx to fs_idx + 1
+    # Every struct instance is allocated with room for any global field index.
+    set slot_line to "#define EP_STRUCT_MAX_SLOTS "
+    set slot_line to string_concat(slot_line and ep_int_to_str(length_list(field_slots) + 8))
+    set slot_line to string_concat(slot_line and "\n")
+    set ok to emit(state and slot_line)
 
     # Emit enum tag defines (if program has enum_defs at index 5)
+    # Global tag registry: one tag per distinct variant name. Variant names are
+    # unique within an enum, so within-enum tags stay distinct; sharing a tag
+    # value across enums is harmless (tags are never compared across enum types)
+    # and fixes the old bug where the same variant name in two enums received
+    # mismatched tag numbers.
+    set tag_slots to create_list()
     if prog_len > 5:
         set enum_defs to get_list(program and 5)
         set ed_len to length_list(enum_defs)
         if ed_len > 0:
-            set ok to emit(state and "\n/* Enum Tag Defines */\n")
-            set tag_counter to 0
+            set ok to emit(state and "\n/* Enum Tag Defines (global slots) */\n")
             set ed_idx to 0
             repeat while ed_idx < ed_len:
                 set edef to get_list(enum_defs and ed_idx)
-                set ename to get_list(edef and 1)
                 set evariants to get_list(edef and 2)
                 set ev_len to length_list(evariants)
                 set ev_idx to 0
                 repeat while ev_idx < ev_len:
                     set ev to get_list(evariants and ev_idx)
                     set ev_name to get_list(ev and 0)
-                    set line to "#define EP_TAG_"
-                    set line to string_concat(line and ev_name)
-                    set line to string_concat(line and " ")
-                    set line to string_concat(line and ep_int_to_str(tag_counter))
-                    set line to string_concat(line and "\n")
-                    set ok to emit(state and line)
-                    set tag_counter to tag_counter + 1
+                    set tslot to field_slot_index(tag_slots and ev_name)
                     set ev_idx to ev_idx + 1
                 set ed_idx to ed_idx + 1
+            set ts_len to length_list(tag_slots)
+            set ts_idx to 0
+            repeat while ts_idx < ts_len:
+                set tname to get_list(tag_slots and ts_idx)
+                set line to "#define EP_TAG_"
+                set line to string_concat(line and tname)
+                set line to string_concat(line and " ")
+                set line to string_concat(line and ep_int_to_str(ts_idx))
+                set line to string_concat(line and "\n")
+                set ok to emit(state and line)
+                set ts_idx to ts_idx + 1
     
     # Emit FFI external prototypes
     set externals to get_list(program and 2)
