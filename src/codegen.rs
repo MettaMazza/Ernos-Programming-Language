@@ -5243,6 +5243,14 @@ static void ep_gc_mark_object_minor(void* ptr) {
    are frozen. This complements the precise shadow stacks: it catches roots held
    only in registers/temporaries (e.g. a freshly allocated object not yet stored
    into a rooted slot). Non-pointer words are harmlessly ignored by ep_gc_find.
+
+   Only run on MAJOR collections: minor collections rely on the precise shadow
+   stacks plus the write barrier's remembered set (the standard generational
+   approach), so they do no stack scan at all — which means there is no racy
+   cross-thread stack read on the frequent minor path either. The expensive
+   full-stack scan is paid only on the rarer major collection, where it pins
+   any long-lived object reachable only via a register across many GCs.
+
    Marked no_sanitize_address: a conservative scan deliberately reads whole stack
    ranges (including ASAN redzones and out-of-frame slots), which is not a bug. */
 #if defined(__SANITIZE_ADDRESS__)
@@ -5256,7 +5264,7 @@ static void ep_gc_mark_object_minor(void* ptr) {
 # define EP_NO_ASAN
 #endif
 EP_NO_ASAN
-static void ep_gc_scan_thread_stacks(int minor) {
+static void ep_gc_scan_thread_stacks(void) {
     jmp_buf _regs;
     volatile char _top_marker;
     memset(&_regs, 0, sizeof(_regs));
@@ -5271,10 +5279,7 @@ static void ep_gc_scan_thread_stacks(int minor) {
         if (start > end) { void** tmp = start; start = end; end = tmp; }
         for (void** cur = start; cur < end; cur++) {
             void* p = *cur;
-            if (p) {
-                if (minor) ep_gc_mark_object_minor(p);
-                else ep_gc_mark_object(p);
-            }
+            if (p) ep_gc_mark_object(p);
         }
     }
 }
@@ -5282,7 +5287,7 @@ static void ep_gc_scan_thread_stacks(int minor) {
 /* Mark phase: traverse from ALL threads' explicit GC roots.
    Uses the heap-allocated EpThreadGCState instead of raw __thread pointers. */
 static void ep_gc_mark(void) {
-    ep_gc_scan_thread_stacks(0);  /* conservative C-stack scan of all (parked) threads */
+    ep_gc_scan_thread_stacks();  /* conservative C-stack scan of all (parked) threads — major only */
     for (int t = 0; t < ep_num_threads; t++) {
         if (!ep_thread_active[t]) continue;
         EpThreadGCState* state = ep_thread_gc_states[t];
@@ -5347,7 +5352,9 @@ static void ep_gc_mark(void) {
 }
 
 static void ep_gc_mark_minor(void) {
-    ep_gc_scan_thread_stacks(1);  /* conservative C-stack scan (gen-0) of all (parked) threads */
+    /* No conservative stack scan on minor collections: precise shadow stacks +
+       the write-barrier remembered set cover young objects, and skipping the
+       scan keeps the frequent minor path fast and free of any cross-thread read. */
     for (int t = 0; t < ep_num_threads; t++) {
         if (!ep_thread_active[t]) continue;
         EpThreadGCState* state = ep_thread_gc_states[t];
