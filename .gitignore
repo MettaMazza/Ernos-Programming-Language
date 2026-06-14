@@ -1,55 +1,52 @@
-# Build output
+# === Build output ===
 /target
 
-# Compiled binaries (generated from .ep files)
-/epc
-/epc_v1
-/epc_v2
-/epc_v3
-/hello
-/lexer
-/magic
-/self_hosted_compiler
-/self_hosted_compiler_gen1
-/bootstrap_helper_test
-/compiled_lexer_test
-/compiled_parser_test
-/memory_leak_test
-/string_leak_test
-/shorthand_test
-/runtime_test
-/list_test
-/logic_test
-/loop_test
-/concurrency_test
-/borrow_error_test
-/borrow_param_valid
-/ffi_sqlite_test
-/test_*
-/proof_*
-/verify*
-
-# Generated C files from compilation
+# === Generated / compiled artifacts (by extension) ===
 *_compiled.c
-
-# OS files
-.DS_Store
+*_compiled.ll
+*.ll
+*.o
+*.obj
 *.dSYM/
 
-# Editor
+# === Save-game / runtime data files ===
+*.dat
+
+# === OS / editor cruft ===
+.DS_Store
 .vscode/settings.json
 *.swp
 *.swo
 *~
 
-# Temporary / scratch
+# === Temporary / scratch ===
 /tmp/
+gen2_inferred_types.txt
 
-# Compiled test binaries
-*.o
-*_compiled.c
+# === Nested unrelated repository (creative writing) ===
+/Civ/
+
+# === Compiled binaries produced from .ep sources ===
+# These are extensionless native executables that sit next to their .ep source.
+# git has no extension to match on, so the build/test dirs and known names are
+# listed explicitly. Prefer running builds into /target or /scratch.
+/epc
+/epc_v*
+/epc_gen*
+/epc_asan
+/hello
+/hello2
+/lexer
+/magic
+/self_hosted_compiler*
+/bootstrap_helper_test
+/compiled_lexer_test
+/compiled_parser_test
+/debug_epc*
+!/debug_epc*.ep
+/review_selfhost*
+/creature_quest*
 /cmp
-/creature_quest
 /en
 /eof_test
 /ft
@@ -68,27 +65,33 @@
 /t7
 /t8
 /t9
-/tc1
-/tc2
-/tc3
-/tc4
-/tc5
-/tc6
-/tc7
-/tc8
-/tc9
+/tc[0-9]
 /tc10
 /try1
 /try2
-/z1
+/z[0-9]
 /z1b
-/z2
-/z3
-/z4
-/z5
-/z6
-/z7
-/z8
-/hello
-gen2_inferred_types.txt
-/creature_quest_demo2
+
+# Test/proof/verify one-off binaries (extensionless; keep .ep sources)
+/test_*
+!/test_*.ep
+/proof_*
+!/proof_*.ep
+/verify*
+!/verify*.ep
+/*_test
+!/*_test.ep
+/borrow_*
+!/borrow_*.ep
+
+# Compiled binaries dropped into example/demo/scratch dirs
+demos/*
+!demos/*.ep
+!demos/*.md
+examples/*
+!examples/*.ep
+!examples/*.md
+scratch/*
+!scratch/*.ep
+!scratch/*.md
+!scratch/*.c
