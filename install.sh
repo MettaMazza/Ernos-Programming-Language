@@ -96,12 +96,23 @@ echo -e "${GREEN}✓ Compilation and self-replication successful!${NC}"
 echo ""
 
 # 4. Installation Phase
-echo -e "${BOLD}4. Installing binary...${NC}"
+echo -e "${BOLD}4. Installing binaries...${NC}"
 INSTALL_DIR="$HOME/.local/bin"
 mkdir -p "$INSTALL_DIR"
 
 mv ./self_hosted_compiler "$INSTALL_DIR/epc"
-echo -e "${GREEN}✓ Installed 'epc' binary to $INSTALL_DIR/epc${NC}"
+echo -e "${GREEN}✓ Installed 'epc' (self-hosted compiler) to $INSTALL_DIR/epc${NC}"
+
+# Install the feature-complete driver too. `ernos` provides check/transpile/bind/
+# repl/--release/--native and resolves stdlib imports relative to its own dir.
+cp target/release/ernos "$INSTALL_DIR/ernos"
+echo -e "${GREEN}✓ Installed 'ernos' (full CLI) to $INSTALL_DIR/ernos${NC}"
+
+# Install the standard library next to the binaries so `import "string"` etc.
+# resolve from any directory (the resolver checks <exe_dir>/stdlib).
+rm -rf "$INSTALL_DIR/stdlib"
+cp -R stdlib "$INSTALL_DIR/stdlib"
+echo -e "${GREEN}✓ Installed standard library to $INSTALL_DIR/stdlib${NC}"
 echo ""
 
 # 5. PATH Verification and Guide
@@ -124,7 +135,7 @@ if [[ ":$PATH:" == *":$INSTALL_DIR:"* ]]; then
     echo -e "${GREEN}✓ $INSTALL_DIR is already in your shell's PATH variable.${NC}"
     echo ""
     echo -e "${BOLD}${GREEN}Installation Complete! 🎉${NC}"
-    echo -e "You can now compile ErnosPlain files globally by typing: ${BOLD}epc <file.ep>${NC}"
+    echo -e "You can now compile ErnosPlain files globally by typing: ${BOLD}ernos <file.ep>${NC} (or ${BOLD}epc <file.ep>${NC})"
 else
     echo -e "${YELLOW}Almost done! You need to add $INSTALL_DIR to your shell's PATH.${NC}"
     echo -e "Run the following command to add it to your shell configuration ($(basename "$SHELL_RC")):"
@@ -132,7 +143,7 @@ else
     echo -e "  ${BOLD}echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> $SHELL_RC${NC}"
     echo ""
     echo -e "Then reload your shell: ${BOLD}source $SHELL_RC${NC}"
-    echo -e "After doing this, you can compile globally by typing: ${BOLD}epc <file.ep>${NC}"
+    echo -e "After doing this, you can compile globally by typing: ${BOLD}ernos <file.ep>${NC} (or ${BOLD}epc <file.ep>${NC})"
 fi
 
 echo -e "${BOLD}${BLUE}==============================================${NC}"
