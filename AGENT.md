@@ -384,7 +384,14 @@ These are implemented as C functions in the runtime (codegen.rs). They are NOT E
 ### SQLite
 `ep_sqlite3_open(filename and db_ptr)`, `ep_sqlite3_close(db)`, `ep_sqlite3_exec(db and sql and callback and cb_arg and errmsg_ptr)`, `sqlite_get_callback_ptr(dummy)`
 
-> **Note:** The `ep_sqlite3_*` wrappers properly marshal between SQLite's `int` returns and ErnosPlain's `long long`, preventing arm64 upper-32-bit garbage. The stdlib `sql.ep` module provides a higher-level API: `sql_open`, `sql_close`, `sql_execute`, `sql_query`.
+Prepared-statement primitives (parameterized, injection-safe): `ep_sqlite3_prepare_v2(db and sql)`, `ep_sqlite3_bind_text(stmt and idx and value)`, `ep_sqlite3_bind_int(stmt and idx and value)`, `ep_sqlite3_step(stmt)`, `ep_sqlite3_column_count(stmt)`, `ep_sqlite3_column_text(stmt and col)`, `ep_sqlite3_column_int(stmt and col)`, `ep_sqlite3_finalize(stmt)`
+
+> **Note:** The `ep_sqlite3_*` wrappers properly marshal between SQLite's `int` returns and ErnosPlain's `long long`, preventing arm64 upper-32-bit garbage. The stdlib `sql.ep` module provides a higher-level API: `sql_open`, `sql_close`, `sql_execute`/`sql_query` (RAW — never pass untrusted input), and `sql_execute_params`/`sql_query_params` (parameterized, injection-safe — use these for any user input; `?` placeholders bound from a list).
+
+### Cryptography
+`ep_sha256(s)`, `ep_md5(s)`, `ep_hmac_sha256(key_ptr and key_len and msg_ptr and msg_len)` (RFC 2104, returns hex), `ep_base64_encode(data)`, `ep_uuid_v4()`. The stdlib `crypto.ep` wraps these (`crypto_sha256`, `hmac_sha256`, `uuid_v4`, `random_int`, `random_bytes`).
+
+> **Note:** `ep_random_int` and `ep_uuid_v4` draw from the OS CSPRNG (`arc4random` on Apple/BSD, `getrandom`/`/dev/urandom` on Linux), not `rand()`, so UUIDs and `random_bytes` are suitable for security tokens. `ep_random_int` uses rejection sampling to avoid modulo bias.
 
 ### Math / System
 `ep_random_int(min and max)`, `ep_time_ms()`, `ep_time_now_ms()`, `ep_time_now_sec()`, `ep_time_day()`, `ep_time_month()`, `ep_time_year()`, `ep_sleep_ms(ms)`, `sleep_ms(ms)`, `ep_abs(n)`, `ep_system(cmd)`, `ep_play_sound(path)` (macOS), `run_command(cmd)`
@@ -531,7 +538,7 @@ Usage: `import "stdlib/bridge/sqlite"` — all functions use `ep_dlopen`/`ep_dls
 10. Run ALL verification gates including self-hosting
 
 ### Modifying the type checker
-- The type checker uses Hindley-Milner unification in `type_check.rs`
+- The type checker uses unification-based inference (HM-style, without let-generalization) in `type_check.rs`
 - `MonoType` is the core type enum (`Int`, `Float`, `Bool`, `Str`, `DynStr`, `Any`, `List`, `Struct`, `Enum`, `Fun`, `Var`, `Unit`, `Ref`, `Future`)
 - `MonoType::is_send()` — returns true if the type can be safely transferred across thread boundaries
 - `MonoType::is_sync()` — returns true if the type can be safely shared between threads
@@ -549,6 +556,7 @@ Usage: `import "stdlib/bridge/sqlite"` — all functions use `ep_dlopen`/`ep_dls
 - `ep_gc_maybe_collect` is called after every N allocations
 - If you change the runtime, you change the behavior of ALL compiled programs
 - Test with concurrency programs (channel stress, multi-worker) — GC bugs manifest under concurrent load
+- Minor collections deliberately skip the conservative C-stack scan; they rely on the precise shadow stacks + the write-barrier remembered set. `ep_gc_mark_object_minor` guards every remembered-set entry with `ep_gc_table_get` (skips freed pointers), and `ep_gc_unregister` removes freed pointers from both the table and the remembered set under `ep_gc_mutex`. `tests/test_gc_remembered_uaf.ep` is the ASAN regression guard for this path — compile it `--asan` after any GC change.
 
 ---
 

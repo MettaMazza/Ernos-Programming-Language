@@ -1,6 +1,6 @@
 <p align="center">
   <h1 align="center">Ernos Programming Language</h1>
-  <p align="center">A compiled language with plain English syntax, Hindley-Milner type inference, ownership-based memory safety, and C-level performance.</p>
+  <p align="center">A compiled language with plain English syntax, unification-based type inference, garbage-collected memory with ownership safety checks, and C-level performance.</p>
 </p>
 
 <p align="center">
@@ -38,8 +38,8 @@ define main:
 | Feature | Ernos | Rust | Java | Python |
 |---------|-------|------|------|--------|
 | **Readability** | ✅ Plain English | ❌ Symbolic | ❌ Verbose | ✅ Clean |
-| **Type Safety** | ✅ HM Inference | ✅ Full | ✅ Full | ❌ Dynamic |
-| **Memory Safety** | ✅ Ownership + GC | ✅ Ownership | ⚠️ GC only | ❌ GC only |
+| **Type Safety** | ✅ Inferred + checked | ✅ Full | ✅ Full | ❌ Dynamic |
+| **Memory Safety** | ✅ GC + ownership checks | ✅ Ownership | ⚠️ GC only | ❌ GC only |
 | **Performance** | ✅ C-level | ✅ C-level | ⚠️ JVM overhead | ❌ Interpreted |
 | **Compile Target** | Native binary | Native binary | JVM bytecode | Interpreted |
 | **Self-Hosting** | ✅ | ✅ | ❌ | ❌ |
@@ -53,18 +53,18 @@ Ernos compiles to C, then to a native binary via `clang -O2`. The generated code
 ## Features
 
 ### 🛡️ Compile-Time Safety
-- **Hindley-Milner type inference** — types are inferred even without annotations
-- **Enforced type checking** — type errors stop compilation
-- **Ownership & borrowing analysis** — use-after-move, move-while-borrowed detection
-- **Send/Sync safety** — borrowed references cannot be sent to threads
+- **Type inference with unification** — types are inferred even without annotations (HM-style unification; no let-generalization yet)
+- **Enforced type checking** — declared return types, list-element types, and undefined names are hard errors that stop compilation
+- **Ownership & borrowing analysis** — use-after-move, move-while-borrowed, modify-while-borrowed, and returning a borrow of a local are rejected (enforced in codegen, backed by the GC)
+- **Send/Sync safety** — borrowed references cannot be sent to spawned threads
 
 ```ernos
-define foo with x:
-    display x + 1       # type checker infers x must be Int
-    return 0
+define halve with n as Int returning Int:
+    return "half"           # ✗ REJECTED: returns Str, but Int is declared
 
 define main:
-    set ok to foo("hello")  # ✗ REJECTED: type error
+    set xs to [1, "two", 3] # ✗ REJECTED: list elements have conflicting types
+    display mystery          # ✗ REJECTED: undefined name
     return 0
 ```
 
@@ -281,7 +281,7 @@ Source (.ep)
     ↓
   Parser → AST
     ↓
-  Type Checker (Hindley-Milner inference) — hard errors
+  Type Checker (unification-based inference) — hard errors
     ↓
   Borrow Checker (ownership analysis) — hard errors
     ↓
@@ -300,7 +300,7 @@ Source (.ep)
 |------|-------|-------------|
 | `src/lexer.rs` | ~900 | Tokenizer with indentation tracking |
 | `src/parser.rs` | ~1,640 | Recursive descent parser with Pratt precedence |
-| `src/type_check.rs` | ~1,800 | Hindley-Milner type inference with unification |
+| `src/type_check.rs` | ~1,900 | Type inference via unification (HM-style; no let-generalization) |
 | `src/borrow_check.rs` | ~830 | Ownership, borrowing, Send/Sync analysis |
 | `src/optimizer.rs` | ~1,450 | Constant folding, DCE, CSE, LICM, inlining, loop unrolling |
 | `src/codegen.rs` | ~7,700 | C code generation with full runtime |

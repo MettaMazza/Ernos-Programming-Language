@@ -95,3 +95,11 @@ scratch/*
 !scratch/*.ep
 !scratch/*.md
 !scratch/*.c
+
+# Compiled test binaries (extensionless executables produced next to their .ep
+# sources by run_tests.sh). Keep the sources and expected-output files.
+tests/*
+!tests/*/
+!tests/*.ep
+!tests/*.expected
+!tests/*.md

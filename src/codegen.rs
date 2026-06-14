@@ -400,6 +400,7 @@ impl Codegen {
         self.func_return_types.insert("create_list".to_string(), Type::List);
         self.func_return_types.insert("ep_md5".to_string(), Type::DynStr);
         self.func_return_types.insert("ep_sha256".to_string(), Type::DynStr);
+        self.func_return_types.insert("ep_hmac_sha256".to_string(), Type::DynStr);
         self.func_return_types.insert("ep_net_connect".to_string(), Type::Int);
         self.func_return_types.insert("ep_net_listen".to_string(), Type::Int);
         self.func_return_types.insert("ep_net_accept".to_string(), Type::Int);
@@ -426,6 +427,14 @@ impl Codegen {
         self.func_return_types.insert("ep_sqlite3_open".to_string(), Type::Int);
         self.func_return_types.insert("ep_sqlite3_close".to_string(), Type::Int);
         self.func_return_types.insert("ep_sqlite3_exec".to_string(), Type::Int);
+        self.func_return_types.insert("ep_sqlite3_prepare_v2".to_string(), Type::Int);
+        self.func_return_types.insert("ep_sqlite3_bind_text".to_string(), Type::Int);
+        self.func_return_types.insert("ep_sqlite3_bind_int".to_string(), Type::Int);
+        self.func_return_types.insert("ep_sqlite3_step".to_string(), Type::Int);
+        self.func_return_types.insert("ep_sqlite3_column_count".to_string(), Type::Int);
+        self.func_return_types.insert("ep_sqlite3_column_text".to_string(), Type::DynStr);
+        self.func_return_types.insert("ep_sqlite3_column_int".to_string(), Type::Int);
+        self.func_return_types.insert("ep_sqlite3_finalize".to_string(), Type::Int);
         self.func_return_types.insert("free_list".to_string(), Type::Int);
         self.func_return_types.insert("create_map".to_string(), Type::Map);
         self.func_return_types.insert("map_insert".to_string(), Type::Int);
@@ -4113,7 +4122,39 @@ typedef int pthread_attr_t;
 #if defined(__APPLE__)
 #include <mach/mach.h>
 #endif
+#if defined(__linux__)
+#include <sys/random.h>
+#endif
 #include <fcntl.h>
+
+/* Cryptographically secure random bytes. Uses the OS CSPRNG: arc4random on
+   Apple/BSD, getrandom(2) on Linux (falling back to /dev/urandom), and a
+   /dev/urandom read elsewhere. Only if all of those are unavailable does it
+   fall back to rand() — never on a supported platform. */
+static void ep_secure_random_bytes(unsigned char* buf, size_t n) {
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+    arc4random_buf(buf, n);
+#else
+    size_t got = 0;
+  #if defined(__linux__)
+    while (got < n) {
+        ssize_t r = getrandom(buf + got, n - got, 0);
+        if (r <= 0) break;
+        got += (size_t)r;
+    }
+  #endif
+    if (got < n) {
+        FILE* f = fopen("/dev/urandom", "rb");
+        if (f) {
+            got += fread(buf + got, 1, n - got, f);
+            fclose(f);
+        }
+    }
+    while (got < n) {
+        buf[got++] = (unsigned char)(rand() & 0xFF);
+    }
+#endif
+}
 
 /* Try/catch infrastructure */
 static jmp_buf ep_try_buf;
@@ -6851,6 +6892,61 @@ char* ep_sha256(const char* s) {
     return result;
 }
 
+/* RFC 2104 HMAC-SHA256. Operates on raw bytes with explicit lengths (binary
+   safe), so keys/messages containing NUL bytes hash correctly. Returns a
+   malloc'd 64-char lowercase hex string. */
+long long ep_hmac_sha256(long long key_ptr, long long key_len, long long msg_ptr, long long msg_len) {
+    const unsigned char* key = (const unsigned char*)key_ptr;
+    const unsigned char* msg = (const unsigned char*)msg_ptr;
+    size_t klen = (size_t)key_len;
+    size_t mlen = (size_t)msg_len;
+
+    unsigned char k0[64];
+    memset(k0, 0, sizeof(k0));
+    if (klen > 64) {
+        /* Keys longer than the block size are replaced by their hash. */
+        EP_SHA256_CTX kc;
+        ep_sha256_init(&kc);
+        ep_sha256_update(&kc, key ? key : (const unsigned char*)"", klen);
+        unsigned char kh[32];
+        ep_sha256_final(&kc, kh);
+        memcpy(k0, kh, 32);
+    } else if (key) {
+        memcpy(k0, key, klen);
+    }
+
+    unsigned char ipad[64], opad[64];
+    for (int i = 0; i < 64; i++) {
+        ipad[i] = k0[i] ^ 0x36;
+        opad[i] = k0[i] ^ 0x5c;
+    }
+
+    /* inner = H((K0 ^ ipad) || message) */
+    EP_SHA256_CTX ic;
+    ep_sha256_init(&ic);
+    ep_sha256_update(&ic, ipad, 64);
+    if (msg && mlen) ep_sha256_update(&ic, msg, mlen);
+    unsigned char inner[32];
+    ep_sha256_final(&ic, inner);
+
+    /* mac = H((K0 ^ opad) || inner) */
+    EP_SHA256_CTX oc;
+    ep_sha256_init(&oc);
+    ep_sha256_update(&oc, opad, 64);
+    ep_sha256_update(&oc, inner, 32);
+    unsigned char mac[32];
+    ep_sha256_final(&oc, mac);
+
+    char* out = (char*)malloc(65);
+    if (out) {
+        for (int i = 0; i < 32; i++) {
+            snprintf(out + (i * 2), 3, "%02x", mac[i]);
+        }
+        out[64] = '\0';
+    }
+    return (long long)out;
+}
+
 typedef struct {
     unsigned int count[2];
     unsigned int state[4];
@@ -7110,6 +7206,57 @@ long long ep_sqlite3_exec(long long db, long long sql, long long callback, long 
     return (long long)sqlite3_exec((sqlite3*)db, (const char*)sql,
         (int(*)(void*,int,char**,char**))(callback),
         (void*)cb_arg, (char**)errmsg_ptr);
+}
+
+/* Prepared-statement API for parameterized queries (defeats SQL injection). */
+typedef struct sqlite3_stmt sqlite3_stmt;
+int sqlite3_prepare_v2(sqlite3*, const char*, int, sqlite3_stmt**, const char**);
+int sqlite3_bind_text(sqlite3_stmt*, int, const char*, int, void(*)(void*));
+int sqlite3_bind_int64(sqlite3_stmt*, int, long long);
+int sqlite3_step(sqlite3_stmt*);
+int sqlite3_column_count(sqlite3_stmt*);
+const unsigned char* sqlite3_column_text(sqlite3_stmt*, int);
+long long sqlite3_column_int64(sqlite3_stmt*, int);
+int sqlite3_finalize(sqlite3_stmt*);
+
+long long ep_sqlite3_prepare_v2(long long db, long long sql) {
+    sqlite3_stmt* stmt = NULL;
+    int rc = sqlite3_prepare_v2((sqlite3*)db, (const char*)sql, -1, &stmt, NULL);
+    if (rc != 0) return 0;
+    return (long long)stmt;
+}
+
+long long ep_sqlite3_bind_text(long long stmt, long long idx, long long value) {
+    /* SQLITE_TRANSIENT ((void*)-1): sqlite copies the bound string. The value is
+       a bound parameter, never concatenated into SQL — this is the safe path. */
+    return (long long)sqlite3_bind_text((sqlite3_stmt*)stmt, (int)idx,
+        (const char*)value, -1, (void(*)(void*))(intptr_t)-1);
+}
+
+long long ep_sqlite3_bind_int(long long stmt, long long idx, long long value) {
+    return (long long)sqlite3_bind_int64((sqlite3_stmt*)stmt, (int)idx, value);
+}
+
+long long ep_sqlite3_step(long long stmt) {
+    return (long long)sqlite3_step((sqlite3_stmt*)stmt);
+}
+
+long long ep_sqlite3_column_count(long long stmt) {
+    return (long long)sqlite3_column_count((sqlite3_stmt*)stmt);
+}
+
+long long ep_sqlite3_column_text(long long stmt, long long col) {
+    const unsigned char* t = sqlite3_column_text((sqlite3_stmt*)stmt, (int)col);
+    if (!t) return (long long)strdup("");
+    return (long long)strdup((const char*)t);
+}
+
+long long ep_sqlite3_column_int(long long stmt, long long col) {
+    return sqlite3_column_int64((sqlite3_stmt*)stmt, (int)col);
+}
+
+long long ep_sqlite3_finalize(long long stmt) {
+    return (long long)sqlite3_finalize((sqlite3_stmt*)stmt);
 }
 #endif /* EP_HAS_SQLITE */
 
@@ -7961,7 +8108,7 @@ long long ep_base64_encode(long long data_ptr) {
 long long ep_uuid_v4(void) {
     char* uuid = (char*)malloc(37);
     unsigned char bytes[16];
-    for (int i = 0; i < 16; i++) bytes[i] = rand() & 0xFF;
+    ep_secure_random_bytes(bytes, 16);
     bytes[6] = (bytes[6] & 0x0F) | 0x40;
     bytes[8] = (bytes[8] & 0x3F) | 0x80;
     snprintf(uuid, 37, "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
@@ -8205,7 +8352,14 @@ long long ep_auto_to_string(long long val) {
 
 long long ep_random_int(long long min, long long max) {
     if (max <= min) return min;
-    return min + (rand() % (max - min + 1));
+    /* Draw from the OS CSPRNG with rejection sampling to avoid modulo bias. */
+    unsigned long long range = (unsigned long long)(max - min) + 1ULL;
+    unsigned long long limit = UINT64_MAX - (UINT64_MAX % range);
+    unsigned long long r;
+    do {
+        ep_secure_random_bytes((unsigned char*)&r, sizeof(r));
+    } while (r >= limit);
+    return min + (long long)(r % range);
 }
 
 // JSON built-in functions

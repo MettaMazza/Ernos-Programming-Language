@@ -445,6 +445,10 @@ pub struct TypeChecker {
     pub warnings: Vec<TypeError>,
     /// Variables bound to closures (for call resolution)
     closure_names: std::collections::HashSet<String>,
+    /// Declared return type of the function/method currently being checked.
+    /// `Some` only when the function has an explicit `returning` annotation —
+    /// inferred-return functions are left unconstrained to preserve self-hosting.
+    current_return_type: Option<MonoType>,
 }
 
 impl TypeChecker {
@@ -463,6 +467,7 @@ impl TypeChecker {
             errors: Vec::new(),
             warnings: Vec::new(),
             closure_names: std::collections::HashSet::new(),
+            current_return_type: None,
         }
     }
 
@@ -1050,6 +1055,12 @@ impl TypeChecker {
     pub fn check_program(&mut self, program: &Program) {
         self.register_declarations(program);
 
+        // Register top-level `set` globals into the base scope so they are
+        // visible inside every function body (they outlive any function scope).
+        for stmt in &program.top_level_constants {
+            self.check_stmt(stmt);
+        }
+
         for func in &program.functions {
             self.check_function(func);
         }
@@ -1079,9 +1090,12 @@ impl TypeChecker {
                         }
                     }
                 }
+                let saved_ret = self.current_return_type.take();
+                self.current_return_type = func.return_type.as_ref().map(|ann| self.annotation_to_mono(ann));
                 for stmt in &func.body {
                     self.check_stmt(stmt);
                 }
+                self.current_return_type = saved_ret;
                 self.pop_scope();
             }
         }
@@ -1156,11 +1170,16 @@ impl TypeChecker {
             }
         }
 
+        // Enforce the declared return type only when one is written explicitly.
+        let saved_ret = self.current_return_type.take();
+        self.current_return_type = func.return_type.as_ref().map(|ann| self.annotation_to_mono(ann));
+
         // Check body
         for stmt in &func.body {
             self.check_stmt(stmt);
         }
 
+        self.current_return_type = saved_ret;
         self.pop_scope();
     }
 
@@ -1184,10 +1203,14 @@ impl TypeChecker {
             }
         }
 
+        let saved_ret = self.current_return_type.take();
+        self.current_return_type = md.return_type.as_ref().map(|ann| self.annotation_to_mono(ann));
+
         for stmt in &md.body {
             self.check_stmt(stmt);
         }
 
+        self.current_return_type = saved_ret;
         self.pop_scope();
     }
 
@@ -1238,14 +1261,13 @@ impl TypeChecker {
                     );
                 }
 
-                self.push_scope();
+                // ErnosPlain is function-scoped: a `set` inside a branch is
+                // visible after the block (codegen hoists locals to function
+                // scope). So branch bodies do not open a new scope.
                 for s in then_body { self.check_stmt(s); }
-                self.pop_scope();
 
                 if let Some(else_b) = else_body {
-                    self.push_scope();
                     for s in else_b { self.check_stmt(s); }
-                    self.pop_scope();
                 }
             }
 
@@ -1263,14 +1285,27 @@ impl TypeChecker {
                     );
                 }
 
-                self.push_scope();
+                // Function-scoped: loop-body `set`s persist after the loop.
                 for s in body { self.check_stmt(s); }
-                self.pop_scope();
             }
 
             StmtNode::Return(expr) => {
-                let _ret_type = self.check_expr(expr);
-                // TODO: unify with declared return type
+                let ret_type = self.check_expr(expr);
+                // Enforce the declared return type when the function annotates one.
+                if let Some(declared) = self.current_return_type.clone() {
+                    if unify(&mut self.subst, &ret_type, &declared, stmt.span).is_err() {
+                        let found = self.subst.apply(&ret_type);
+                        let expected = self.subst.apply(&declared);
+                        self.error_with_hint(
+                            format!(
+                                "Return type mismatch: function is declared to return {} but this returns {}",
+                                expected.display_name(), found.display_name()
+                            ),
+                            stmt.span,
+                            format!("Return a {} value, or change the function's declared return type.", expected.display_name()),
+                        );
+                    }
+                }
             }
 
             StmtNode::Display(expr) => {
@@ -1393,7 +1428,8 @@ impl TypeChecker {
                                     );
                                 }
                             }
-                            self.push_scope();
+                            // Pattern bindings and arm-body `set`s define into the
+                            // function scope (function-scoped language; no block scope).
                             if let Some((_, fields)) = variants.iter().find(|(vn, _)| vn == variant_name) {
                                 for (i, binding) in bindings.iter().enumerate() {
                                     if i < fields.len() {
@@ -1402,15 +1438,12 @@ impl TypeChecker {
                                 }
                             }
                             for s in body { self.check_stmt(s); }
-                            self.pop_scope();
                         }
                     }
                 } else {
                     // String or integer match — just type-check the body of each arm
                     for (_pattern, _bindings, body) in arms {
-                        self.push_scope();
                         for s in body { self.check_stmt(s); }
-                        self.pop_scope();
                     }
                 }
             }
@@ -1451,10 +1484,10 @@ impl TypeChecker {
                     }
                 };
                 
-                self.push_scope();
+                // Function-scoped: the loop variable and any body `set`s remain
+                // defined after the loop (matches codegen's local hoisting).
                 self.define(loop_var.clone(), elem_type);
                 for s in body { self.check_stmt(s); }
-                self.pop_scope();
             }
 
             StmtNode::Break | StmtNode::Continue => {}
@@ -1482,10 +1515,22 @@ impl TypeChecker {
                 } else if let Some(enum_name) = self.variant_to_enum.get(name).cloned() {
                     // Bare enum variant (no data)
                     MonoType::Enum(enum_name, vec![])
+                } else if self.func_types.contains_key(name)
+                    || self.closure_names.contains(name)
+                    || self.struct_defs.contains_key(name)
+                    || self.enum_defs.contains_key(name)
+                {
+                    // A named function used as a value (higher-order functions) or a
+                    // type name referenced as a value. Its type is resolved at the
+                    // call/use site, so leave it open here.
+                    self.fresh_var()
                 } else {
-                    // Unknown variable — this might be a runtime-defined global
-                    // Don't error here; the existing compiler allows unresolved identifiers 
-                    // for some built-in variables
+                    // Truly undefined: not a local, parameter, variant, function, or type.
+                    self.error_with_hint(
+                        format!("Undefined name '{}'", name),
+                        expr.span,
+                        "Check the spelling, or bind it with `set ... to` before use.".into(),
+                    );
                     self.fresh_var()
                 }
             }
@@ -1778,7 +1823,11 @@ impl TypeChecker {
                         tv
                     })
                     .collect();
-                
+
+                // A `return` inside a closure returns from the closure, not the
+                // enclosing function — so the outer declared return type must not
+                // apply while checking the closure body.
+                let saved_ret = self.current_return_type.take();
                 let mut last_type = MonoType::Unit;
                 for s in body {
                     self.check_stmt(s);
@@ -1787,8 +1836,9 @@ impl TypeChecker {
                         last_type = self.check_expr(expr);
                     }
                 }
+                self.current_return_type = saved_ret;
                 self.pop_scope();
-                
+
                 MonoType::Fun(param_types, Box::new(last_type))
             }
 
@@ -1804,11 +1854,26 @@ impl TypeChecker {
             }
 
             ExprNode::ListLiteral(elements) => {
+                // Unify every element against a single element type so a literal
+                // like [1, "x"] is rejected. `Any` still unifies with everything,
+                // so intentionally-heterogeneous data via Any is unaffected.
                 let elem_var = self.fresh_var();
                 for elem in elements {
-                    let _elem_type = self.check_expr(elem);
+                    let elem_type = self.check_expr(elem);
+                    if unify(&mut self.subst, &elem_var, &elem_type, expr.span).is_err() {
+                        let prev = self.subst.apply(&elem_var);
+                        let found = self.subst.apply(&elem_type);
+                        self.error_with_hint(
+                            format!(
+                                "List elements have conflicting types: {} and {}",
+                                prev.display_name(), found.display_name()
+                            ),
+                            expr.span,
+                            "All elements of a list literal must share one type.".into(),
+                        );
+                    }
                 }
-                MonoType::List(Box::new(elem_var))
+                MonoType::List(Box::new(self.subst.apply(&elem_var)))
             }
         }
     }

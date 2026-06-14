@@ -2,7 +2,7 @@
 
 **Version 1.0.0**
 
-Ernos is a statically-typed, compiled programming language with plain English syntax, Hindley-Milner type inference, ownership-based memory safety, and native code generation via C.
+Ernos is a statically-typed, compiled programming language with plain English syntax, unification-based type inference, garbage-collected memory with ownership safety checks, and native code generation via C.
 
 ---
 
@@ -61,7 +61,7 @@ set name as Str to "Alice"
 set ratio as Float to 3.14
 ```
 
-Type annotations are optional — the Hindley-Milner inference engine determines types automatically.
+Type annotations are optional — the unification-based inference engine determines types automatically.
 
 ---
 

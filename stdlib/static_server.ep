@@ -45,14 +45,53 @@ define get_mime_type with ext:
 
 # ───────────── Path Security ─────────────
 
+define hex_value with c:
+    # Decode one hex digit (ASCII code) to its value, or -1 if not a hex digit.
+    if c >= 48 && c <= 57:
+        return c - 48
+    if c >= 97 && c <= 102:
+        return c - 87
+    if c >= 65 && c <= 70:
+        return c - 55
+    return -1
+
+define url_decode with s:
+    # Percent-decode %XX escapes so encoded traversal (e.g. %2e%2e) is normalized
+    # before the safety check. A NUL byte (%00) is dropped rather than embedded.
+    set out to create_list()
+    set i to 0
+    set n to string_length(s)
+    repeat while i < n:
+        set c to get_character(s and i)
+        if c == 37 && i + 2 < n:
+            set h1 to hex_value(get_character(s and (i + 1)))
+            set h2 to hex_value(get_character(s and (i + 2)))
+            if h1 >= 0 && h2 >= 0:
+                set decoded to (h1 * 16) + h2
+                if decoded > 0:
+                    set ok to append_list(out and decoded)
+                set i to i + 3
+            else:
+                set ok to append_list(out and c)
+                set i to i + 1
+        else:
+            set ok to append_list(out and c)
+            set i to i + 1
+    return string_from_list(out)
+
 define sanitize_path with path:
-    # Prevent directory traversal attacks
-    if string_contains(path and ".."):
+    # Decode percent-escapes FIRST, then reject directory traversal — otherwise
+    # an attacker can bypass the check with %2e%2e%2f ("../").
+    set decoded to url_decode(path)
+    if string_contains(decoded and ".."):
+        return "/index.html"
+    # Reject Windows-style separators that could also escape the root.
+    if string_contains(decoded and char_from_code(92)):
         return "/index.html"
     # Default to index.html for root
-    if concat(path and "") equals "/":
+    if concat(decoded and "") equals "/":
         return "/index.html"
-    return path
+    return decoded
 
 # ───────────── HTTP Request Parsing ─────────────
 

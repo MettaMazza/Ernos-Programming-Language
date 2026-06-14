@@ -291,45 +291,6 @@ impl BorrowChecker {
         }
     }
 
-    #[allow(dead_code)]
-    fn move_var(&mut self, name: &str, target: &str, span: Span) {
-        if let Some(state) = self.get_state(name) {
-            match state {
-                VarState::Moved(prev_target) => {
-                    self.diagnostics.push(
-                        Diagnostic::error(format!("value '{}' used after move", name))
-                            .with_code(ErrorCode::DOUBLE_MOVE)
-                            .at("", span.line, span.col)
-                            .with_suggestion(format!(
-                                "'{}' was already moved to '{}'. Each value can only be moved once.",
-                                name, prev_target
-                            ))
-                    );
-                }
-                VarState::BorrowedImmutable(_) | VarState::BorrowedMutable => {
-                    // NLL: check if any borrow of this variable is still active
-                    if self.has_active_borrow_of(name, span.line) {
-                        self.diagnostics.push(
-                            Diagnostic::error(format!("cannot move '{}' while it is borrowed", name))
-                                .with_code(ErrorCode::MOVE_WHILE_BORROWED)
-                                .at("", span.line, span.col)
-                                .with_suggestion(
-                                    "Wait for all borrows to expire before moving the value. \
-                                     With NLL, borrows expire at their last use point."
-                                )
-                        );
-                    } else {
-                        // NLL: borrow has expired (last use was before this line)
-                        self.set_state(name, VarState::Moved(target.to_string()));
-                    }
-                }
-                VarState::Owned => {
-                    self.set_state(name, VarState::Moved(target.to_string()));
-                }
-            }
-        }
-    }
-
     fn borrow_var(&mut self, name: &str, mutable: bool, span: Span) {
         if let Some(state) = self.get_state(name) {
             match state {
@@ -431,17 +392,6 @@ impl BorrowChecker {
     }
 
     /// Check if any borrow of `lender` is still active at the given line
-    fn has_active_borrow_of(&self, lender: &str, at_line: usize) -> bool {
-        for scope in self.scopes.iter().rev() {
-            for borrow in &scope.live_borrows {
-                if borrow.lender == lender && borrow.is_active_at(at_line) {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
     /// Check if any mutable borrow of `lender` is still active at the given line
     fn has_active_mutable_borrow_of(&self, lender: &str, at_line: usize) -> bool {
         for scope in self.scopes.iter().rev() {

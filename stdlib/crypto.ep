@@ -110,10 +110,11 @@ define random_bytes with count:
         set i to i + 1
     return result
 
-# ---- HMAC-SHA256 (simplified) ----
+# ---- HMAC-SHA256 (RFC 2104) ----
 
+external define ep_hmac_sha256 with key_ptr and key_len and msg_ptr and msg_len
+
+# Proper keyed-hash MAC: H((K0 ^ opad) || H((K0 ^ ipad) || message)), computed
+# in the C runtime over raw bytes (binary safe). Returns a 64-char hex string.
 define hmac_sha256 with key and data:
-    # Simple HMAC: H(key XOR opad || H(key XOR ipad || message))
-    # For now, use a simplified version: SHA256(key + data)
-    set combined to concat(key and data)
-    return crypto_sha256(combined)
+    return ep_hmac_sha256(str_to_ptr(key) and string_length(key) and str_to_ptr(data) and string_length(data))

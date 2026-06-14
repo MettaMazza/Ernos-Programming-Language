@@ -2271,7 +2271,7 @@ fn emit_cond(out: &mut String, expr: &PyExpr, ctx: &mut EmitCtx) {
             out.push_str("not ");
             emit_cond(out, expr, ctx);
         }
-        PyExpr::Subscript(obj, idx) => {
+        PyExpr::Subscript(_, _) => {
             emit_expr(out, expr, ctx);
             out.push_str(" equals true");
         }

@@ -1,0 +1,8 @@
+# expected_compile_error
+# A function declared to return Int must not return a Str.
+define bad_return returning Int:
+    return "not an int"
+
+define main:
+    display bad_return()
+    return 0

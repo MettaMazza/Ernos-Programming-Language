@@ -695,7 +695,21 @@ impl Optimizer {
 
         for (expr_node, indices) in &expr_occurrences {
             if indices.len() < 2 { continue; }
-            
+
+            // Soundness (available-expression rule): an expression may be hoisted
+            // to a single temp only if none of the variables it READS are written
+            // anywhere between its first and last occurrence. Otherwise the cached
+            // value goes stale — e.g. after loop unrolling, three copies of
+            // `set total to total + 10` each read a `total` that the previous copy
+            // just reassigned. Checking the inclusive range also excludes
+            // accumulators, whose own target is written by every occurrence.
+            let first = indices[0];
+            let last = *indices.last().unwrap();
+            let written_in_range = writes_vars(&body[first..=last]);
+            if written_in_range.iter().any(|v| reads_var(expr_node, v)) {
+                continue;
+            }
+
             let temp_name = format!("_cse_{}", cse_count);
             cse_count += 1;
 
@@ -982,7 +996,27 @@ impl Optimizer {
                 self.substitute_var_in_expr(o, var_name, value);
                 self.substitute_var_in_expr(v, var_name, value);
             }
-            _ => {}
+            // Spawn arguments must be substituted too — otherwise unrolling a loop
+            // like `repeat while w < 4: spawn worker(w and ch)` leaves `w` in every
+            // copy, so every spawned task sees the same (wrong) value.
+            StmtNode::Spawn(_, args) => {
+                for a in args { self.substitute_var_in_expr(a, var_name, value); }
+            }
+            StmtNode::RepeatWhile(cond, body) => {
+                self.substitute_var_in_expr(cond, var_name, value);
+                for s in body { self.substitute_var_in_stmt(s, var_name, value); }
+            }
+            StmtNode::ForEach(_, iterable, body) => {
+                self.substitute_var_in_expr(iterable, var_name, value);
+                for s in body { self.substitute_var_in_stmt(s, var_name, value); }
+            }
+            StmtNode::Match(scrutinee, arms) => {
+                self.substitute_var_in_expr(scrutinee, var_name, value);
+                for (_, _, body) in arms {
+                    for s in body { self.substitute_var_in_stmt(s, var_name, value); }
+                }
+            }
+            StmtNode::Break | StmtNode::Continue => {}
         }
     }
 

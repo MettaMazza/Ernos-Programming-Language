@@ -192,8 +192,12 @@ define json_parse_number with state:
     repeat while pos is less than len && loop == 1:
         set ch to get_character(s and pos)
         if ch > 47 && ch < 58:
-            set val to val * 10
-            set val to val + (ch - 48)
+            # Clamp accumulation to avoid signed 64-bit overflow/wraparound on
+            # absurdly long numbers (922337203685477580 = INT64_MAX / 10). Extra
+            # digits are still consumed so the cursor advances past the token.
+            if val < 922337203685477580:
+                set val to val * 10
+                set val to val + (ch - 48)
             set pos to pos + 1
         else:
             set loop to 0
@@ -288,6 +292,7 @@ define json_parse_object with state:
     set ok to set_list(state and 2 and pos)
     set keys to create_list()
     set values to create_list()
+    set count to 0
     set loop to 1
     repeat while loop == 1:
         set ok to json_skip_whitespace(state)
@@ -315,6 +320,10 @@ define json_parse_object with state:
                     set val_node to json_parse_value(state)
                     set ok to append_list(keys and key_val)
                     set ok to append_list(values and val_node)
+                    # Cap object size to bound memory on hostile input.
+                    set count to count + 1
+                    if count >= 1000000:
+                        set loop to 0
                     set ok to json_skip_whitespace(state)
                     set pos to get_list(state and 2)
                     if pos > len - 1:
@@ -340,6 +349,7 @@ define json_parse_list with state:
     set pos to pos + 1
     set ok to set_list(state and 2 and pos)
     set items to create_list()
+    set count to 0
     set loop to 1
     repeat while loop == 1:
         set ok to json_skip_whitespace(state)
@@ -355,6 +365,10 @@ define json_parse_list with state:
             else:
                 set item_node to json_parse_value(state)
                 set ok to append_list(items and item_node)
+                # Cap array size to bound memory on hostile input.
+                set count to count + 1
+                if count >= 1000000:
+                    set loop to 0
                 set ok to json_skip_whitespace(state)
                 set pos to get_list(state and 2)
                 if pos > len - 1:

@@ -72,7 +72,8 @@ set name as Str to "Alice"
 
 ### 2.4 Type Inference
 When type annotations are omitted, the compiler infers types using
-Hindley-Milner unification. All type errors are caught at compile time.
+unification-based inference (HM-style, without let-generalization). Declared
+return types, list-element types, and undefined names are enforced at compile time.
 
 ---
 
