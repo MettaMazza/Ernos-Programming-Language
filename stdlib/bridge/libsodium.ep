@@ -51,6 +51,10 @@ define sodium_load:
         set SODIUM_HANDLE to ep_dlopen("libsodium.so.23")
     if SODIUM_HANDLE equals 0:
         set SODIUM_HANDLE to ep_dlopen("/usr/lib/x86_64-linux-gnu/libsodium.so.23")
+    if SODIUM_HANDLE equals 0:
+        set SODIUM_HANDLE to ep_dlopen("libsodium.dll")
+    if SODIUM_HANDLE equals 0:
+        set SODIUM_HANDLE to ep_dlopen("sodium.dll")
     return SODIUM_HANDLE
 
 # ============================================================

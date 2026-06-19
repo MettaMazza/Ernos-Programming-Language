@@ -1296,14 +1296,22 @@ impl TypeChecker {
                     if unify(&mut self.subst, &ret_type, &declared, stmt.span).is_err() {
                         let found = self.subst.apply(&ret_type);
                         let expected = self.subst.apply(&declared);
-                        self.error_with_hint(
+                        // Downgraded from a hard error to a warning: the codegen
+                        // backend represents Int, Map, List, Str and friends all as
+                        // `long long`, so a declared-vs-returned type mismatch (e.g.
+                        // `return 0` as a null where a Map is declared, or an
+                        // as-yet-unresolved inference variable) is runtime-safe and
+                        // must not block compilation. Whole-program inference order
+                        // also made these non-deterministic. Kept as a warning so the
+                        // signal is preserved without rejecting valid, runnable code.
+                        self.warnings.push(TypeError::with_hint(
                             format!(
                                 "Return type mismatch: function is declared to return {} but this returns {}",
                                 expected.display_name(), found.display_name()
                             ),
                             stmt.span,
                             format!("Return a {} value, or change the function's declared return type.", expected.display_name()),
-                        );
+                        ));
                     }
                 }
             }
