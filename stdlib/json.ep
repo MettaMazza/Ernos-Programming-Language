@@ -144,6 +144,51 @@ define json_skip_whitespace with state:
     set ok to set_list(state and 2 and pos)
     return 0
 
+# Hex digit -> value (0..15), or -1 if not a hex digit.
+define json_hex_val with c:
+    if c >= 48 and also c <= 57:
+        return c - 48
+    if c >= 97 and also c <= 102:
+        return c - 87
+    if c >= 65 and also c <= 70:
+        return c - 55
+    return -1
+
+# Decode exactly 4 hex digits at s[p..p+3] into a 16-bit value, or -1 if any are
+# missing/invalid.
+define json_parse_hex4 with s and p and len:
+    if p + 3 >= len:
+        return -1
+    set h0 to json_hex_val(get_character(s and p))
+    set h1 to json_hex_val(get_character(s and p + 1))
+    set h2 to json_hex_val(get_character(s and p + 2))
+    set h3 to json_hex_val(get_character(s and p + 3))
+    if h0 < 0 or else h1 < 0 or else h2 < 0 or else h3 < 0:
+        return -1
+    return ((h0 * 4096) + (h1 * 256)) + ((h2 * 16) + h3)
+
+# Append a Unicode code point to the byte list as UTF-8 (1..4 bytes). Uses integer
+# division for the shifts/masks (no % operator in EP).
+define json_append_utf8 with lst and cp:
+    if cp < 128:
+        set ok to append_list(lst and cp)
+    else if cp < 2048:
+        set ok to append_list(lst and (192 + (cp / 64)))
+        set ok to append_list(lst and (128 + (cp - ((cp / 64) * 64))))
+    else if cp < 65536:
+        set ok to append_list(lst and (224 + (cp / 4096)))
+        set r2 to cp - ((cp / 4096) * 4096)
+        set ok to append_list(lst and (128 + (r2 / 64)))
+        set ok to append_list(lst and (128 + (r2 - ((r2 / 64) * 64))))
+    else:
+        set ok to append_list(lst and (240 + (cp / 262144)))
+        set r3 to cp - ((cp / 262144) * 262144)
+        set ok to append_list(lst and (128 + (r3 / 4096)))
+        set r3 to r3 - ((r3 / 4096) * 4096)
+        set ok to append_list(lst and (128 + (r3 / 64)))
+        set ok to append_list(lst and (128 + (r3 - ((r3 / 64) * 64))))
+    return 0
+
 define json_parse_string with state:
     set s to get_list(state and 0)
     set len to get_list(state and 1)
@@ -163,12 +208,42 @@ define json_parse_string with state:
                     set esc to get_character(s and pos)
                     if esc == 110:
                         set ok to append_list(lst and 10)
-                    else:
-                        if esc == 116:
-                            set ok to append_list(lst and 9)
-                        else:
+                        set pos to pos + 1
+                    else if esc == 116:
+                        set ok to append_list(lst and 9)
+                        set pos to pos + 1
+                    else if esc == 114:
+                        set ok to append_list(lst and 13)
+                        set pos to pos + 1
+                    else if esc == 98:
+                        set ok to append_list(lst and 8)
+                        set pos to pos + 1
+                    else if esc == 102:
+                        set ok to append_list(lst and 12)
+                        set pos to pos + 1
+                    else if esc == 117:
+                        # \uXXXX — decode the 4 hex digits to a code point. Without
+                        # this, e.g. "&" (&) and ">" (>) leak through as the
+                        # literal text "u0026"/"u003e", corrupting any decoded command.
+                        set cp to json_parse_hex4(s and pos + 1 and len)
+                        if cp < 0:
+                            # Malformed escape — keep the 'u' literally, lose nothing.
                             set ok to append_list(lst and esc)
-                    set pos to pos + 1
+                            set pos to pos + 1
+                        else:
+                            set pos to pos + 5
+                            # UTF-16 surrogate pair: high (D800..DBFF) + low (DC00..DFFF).
+                            if cp >= 55296 and also cp <= 56319:
+                                if pos + 1 < len:
+                                    if get_character(s and pos) == 92 and also get_character(s and pos + 1) == 117:
+                                        set lo to json_parse_hex4(s and pos + 2 and len)
+                                        if lo >= 56320 and also lo <= 57343:
+                                            set cp to 65536 + (((cp - 55296) * 1024) + (lo - 56320))
+                                            set pos to pos + 6
+                            set ok to json_append_utf8(lst and cp)
+                    else:
+                        set ok to append_list(lst and esc)
+                        set pos to pos + 1
             else:
                 set ok to append_list(lst and ch)
                 set pos to pos + 1

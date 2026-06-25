@@ -874,6 +874,7 @@ impl TypeChecker {
         self.func_types.insert("string_trim".into(), (vec![MonoType::Str], MonoType::DynStr));
         let v_split = self.fresh_var();
         self.func_types.insert("string_split".into(), (vec![MonoType::Str, MonoType::Str], MonoType::List(Box::new(v_split))));
+        self.func_types.insert("string_to_list".into(), (vec![MonoType::Str], MonoType::List(Box::new(MonoType::Int))));
         self.func_types.insert("char_at".into(), (vec![MonoType::Str, MonoType::Int], MonoType::Int));
         self.func_types.insert("char_from_code".into(), (vec![MonoType::Int], MonoType::DynStr));
         self.func_types.insert("string_contains".into(), (vec![MonoType::Str, MonoType::Str], MonoType::Int));

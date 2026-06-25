@@ -520,6 +520,7 @@ impl Codegen {
         self.func_return_types.insert("string_lower".to_string(), Type::DynStr);
         self.func_return_types.insert("string_trim".to_string(), Type::DynStr);
         self.func_return_types.insert("string_split".to_string(), Type::List);
+        self.func_return_types.insert("string_to_list".to_string(), Type::List);
         self.func_return_types.insert("char_at".to_string(), Type::Int);
         self.func_return_types.insert("char_from_code".to_string(), Type::DynStr);
         self.func_return_types.insert("ep_abs".to_string(), Type::Int);
@@ -823,10 +824,10 @@ impl Codegen {
                             }
                         }
                     }
-                    if name == "string_length" || name == "get_character" || name == "char_at" || 
-                       name == "string_contains" || name == "string_index_of" || name == "string_replace" || 
-                       name == "string_upper" || name == "string_lower" || name == "string_trim" || 
-                       name == "string_split" || name == "json_get_string" || name == "json_get_int" || 
+                    if name == "string_length" || name == "get_character" || name == "char_at" ||
+                       name == "string_contains" || name == "string_index_of" || name == "string_replace" ||
+                       name == "string_upper" || name == "string_lower" || name == "string_trim" ||
+                       name == "string_split" || name == "string_to_list" || name == "json_get_string" || name == "json_get_int" ||
                        name == "json_get_bool" {
                         if let Some(ExprNode::Identifier(pname)) = args.first().map(|e| &e.node) {
                             if let Some(ty) = var_types.get_mut(pname) {
@@ -2050,7 +2051,7 @@ impl Codegen {
                         "read_file_content" | "string_length" | "display_string" | "run_command" | "ep_md5" | "ep_sha256" | "ep_net_connect" if i == 0 => {
                             format!("(char*){}", arg_val)
                         }
-                        "get_character" | "substring" if i == 0 => {
+                        "get_character" | "substring" | "string_to_list" if i == 0 => {
                             format!("(char*){}", arg_val)
                         }
                         "write_file_content" => {
@@ -4221,6 +4222,9 @@ static void ep_install_signal_handlers(void) {
   #include <arpa/inet.h>
   #include <unistd.h>
   #include <netdb.h>
+  #include <fcntl.h>
+  #include <errno.h>
+  #include <sys/select.h>
   #include <pthread.h>
   typedef pthread_t ep_thread_t;
   typedef pthread_mutex_t ep_mutex_t;
@@ -5670,6 +5674,7 @@ long long free_list(long long list_ptr);
 long long pop_list(long long list_ptr);
 long long remove_list(long long list_ptr, long long index);
 char* string_from_list(long long list_ptr);
+long long string_to_list(const char* s);
 long long string_length(const char* s);
 long long display_string(const char* s);
 long long file_read(long long path_val);
@@ -5981,14 +5986,32 @@ long long ep_net_connect(const char* host, long long port) {
     serv_addr.sin_family = AF_INET;
     memcpy(&serv_addr.sin_addr.s_addr, server->h_addr_list[0], server->h_length);
     serv_addr.sin_port = htons(port);
-    if (connect(sockfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
 #ifdef _WIN32
+    if (connect(sockfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
         closesocket(sockfd);
-#else
-        close(sockfd);
-#endif
         return -1;
     }
+#else
+    // Bounded connect: an unreachable peer must not block ~75s on the OS SYN
+    // timeout (this stalled node startup). Non-blocking connect + 5s select, then
+    // restore blocking mode for the rest of the session.
+    int _ep_flags = fcntl(sockfd, F_GETFL, 0);
+    fcntl(sockfd, F_SETFL, _ep_flags | O_NONBLOCK);
+    int _ep_cr = connect(sockfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
+    if (_ep_cr < 0) {
+        if (errno != EINPROGRESS) { close(sockfd); return -1; }
+        fd_set _ep_wset; FD_ZERO(&_ep_wset); FD_SET(sockfd, &_ep_wset);
+        struct timeval _ep_tv; _ep_tv.tv_sec = 5; _ep_tv.tv_usec = 0;
+        int _ep_sel = select(sockfd + 1, NULL, &_ep_wset, NULL, &_ep_tv);
+        if (_ep_sel <= 0) { close(sockfd); return -1; } // timeout or error
+        int _ep_so_err = 0; socklen_t _ep_slen = sizeof(_ep_so_err);
+        if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &_ep_so_err, &_ep_slen) < 0 || _ep_so_err != 0) {
+            close(sockfd);
+            return -1;
+        }
+    }
+    fcntl(sockfd, F_SETFL, _ep_flags);
+#endif
     return sockfd;
 }
 
@@ -7357,6 +7380,30 @@ char* string_from_list(long long list_ptr) {
     s[list->length] = '\0';
     ep_gc_register(s, EP_OBJ_STRING);
     return s;
+}
+
+// Inverse of string_from_list: convert a string to a list of its byte values in
+// a single O(n) pass (one strlen + one copy). This lets callers iterate a string
+// in O(n) total via O(1) get_list, instead of O(n) get_character per index
+// (which is O(n^2) over the whole string).
+long long string_to_list(const char* s) {
+    EpList* list = malloc(sizeof(EpList));
+    if (!list) return 0;
+    long long len = s ? (long long)strlen(s) : 0;
+    list->capacity = len > 0 ? len : 4;
+    list->length = len;
+    list->data = malloc(list->capacity * sizeof(long long));
+    if (!list->data) {
+        list->capacity = 0;
+        list->length = 0;
+        ep_gc_register(list, EP_OBJ_LIST);
+        return (long long)list;
+    }
+    for (long long i = 0; i < len; i++) {
+        list->data[i] = (unsigned char)s[i];
+    }
+    ep_gc_register(list, EP_OBJ_LIST);
+    return (long long)list;
 }
 
 long long pop_list(long long list_ptr) {
