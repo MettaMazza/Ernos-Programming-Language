@@ -6084,7 +6084,17 @@ long long ep_net_accept(long long server_fd) {
 
 long long ep_net_send(long long fd, const char* data) {
     if (!data) return 0;
-    return send((int)fd, data, strlen(data), 0);
+    /* send() may write fewer bytes than requested (partial write under load/
+       backpressure). A single send() therefore silently truncated large IPC
+       responses, cutting agent replies mid-stream. Loop until all bytes are sent. */
+    size_t total = strlen(data);
+    size_t off = 0;
+    while (off < total) {
+        ssize_t n = send((int)fd, data + off, total - off, 0);
+        if (n <= 0) break;
+        off += (size_t)n;
+    }
+    return (long long)off;
 }
 
 char* ep_net_recv(long long fd, long long max_len) {
