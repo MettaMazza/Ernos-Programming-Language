@@ -5075,69 +5075,91 @@ static EpGCEntry* ep_gc_table = NULL;
 static long long ep_gc_table_cap = 0;
 static long long ep_gc_table_size = 0;
 
-static void ep_gc_table_insert(void* key, EpGCObject* value) {
-    if (ep_gc_table_size * 2 >= ep_gc_table_cap) {
-        long long old_cap = ep_gc_table_cap;
-        long long new_cap = old_cap == 0 ? 512 : old_cap * 2;
-        EpGCEntry* new_table = (EpGCEntry*)calloc(new_cap, sizeof(EpGCEntry));
-        for (long long i = 0; i < old_cap; i++) {
-            if (ep_gc_table[i].key != NULL) {
-                long long idx = ((uintptr_t)ep_gc_table[i].key) % new_cap;
-                while (new_table[idx].key != NULL) {
-                    idx = (idx + 1) % new_cap;
-                }
-                new_table[idx] = ep_gc_table[i];
-            }
-        }
-        free(ep_gc_table);
-        ep_gc_table = new_table;
-        ep_gc_table_cap = new_cap;
-    }
-    
-    long long idx = ((uintptr_t)key) % ep_gc_table_cap;
+/* Bucket index for a pointer key. The previous hash was ((uintptr_t)key % cap)
+   with cap a power of two; malloc returns 16-byte-aligned pointers, so the low 4
+   bits are always 0 and only every 16th bucket was ever a home slot. That caused
+   catastrophic primary clustering -> O(n) probe runs -> ep_gc_table_remove's
+   rehash became O(n^2), which (under the single global GC mutex) wedged the whole
+   node when a large object list was freed. A splitmix64 finalizer avalanches all
+   bits, so even the low bits taken by the (cap-1) mask are well distributed. */
+static inline long long ep_gc_index(void* key, long long cap) {
+    uint64_t z = (uint64_t)(uintptr_t)key;
+    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+    z = z ^ (z >> 31);
+    return (long long)(z & (uint64_t)(cap - 1));   /* cap is always a power of two */
+}
+
+/* Insert without growing — assumes a free slot exists. Used by the resize and by
+   ep_gc_table_remove's rehash, neither of which may trigger a (re)allocation of
+   the table mid-iteration. */
+static void ep_gc_table_place(void* key, EpGCObject* value) {
+    long long idx = ep_gc_index(key, ep_gc_table_cap);
     while (ep_gc_table[idx].key != NULL) {
         if (ep_gc_table[idx].key == key) {
             ep_gc_table[idx].value = value;
             return;
         }
-        idx = (idx + 1) % ep_gc_table_cap;
+        idx = (idx + 1) & (ep_gc_table_cap - 1);
     }
     ep_gc_table[idx].key = key;
     ep_gc_table[idx].value = value;
     ep_gc_table_size++;
 }
 
+static void ep_gc_table_insert(void* key, EpGCObject* value) {
+    if (ep_gc_table_size * 2 >= ep_gc_table_cap) {
+        long long old_cap = ep_gc_table_cap;
+        long long new_cap = old_cap == 0 ? 512 : old_cap * 2;
+        EpGCEntry* new_table = (EpGCEntry*)calloc(new_cap, sizeof(EpGCEntry));
+        EpGCEntry* old_table = ep_gc_table;
+        ep_gc_table = new_table;
+        ep_gc_table_cap = new_cap;
+        ep_gc_table_size = 0;
+        for (long long i = 0; i < old_cap; i++) {
+            if (old_table[i].key != NULL) {
+                ep_gc_table_place(old_table[i].key, old_table[i].value);
+            }
+        }
+        free(old_table);
+    }
+    ep_gc_table_place(key, value);
+}
+
 static EpGCObject* ep_gc_table_get(void* key) {
     if (ep_gc_table_cap == 0) return NULL;
-    long long idx = ((uintptr_t)key) % ep_gc_table_cap;
+    long long idx = ep_gc_index(key, ep_gc_table_cap);
     while (ep_gc_table[idx].key != NULL) {
         if (ep_gc_table[idx].key == key) return ep_gc_table[idx].value;
-        idx = (idx + 1) % ep_gc_table_cap;
+        idx = (idx + 1) & (ep_gc_table_cap - 1);
     }
     return NULL;
 }
 
 static void ep_gc_table_remove(void* key) {
     if (ep_gc_table_cap == 0) return;
-    long long idx = ((uintptr_t)key) % ep_gc_table_cap;
+    long long idx = ep_gc_index(key, ep_gc_table_cap);
     while (ep_gc_table[idx].key != NULL) {
         if (ep_gc_table[idx].key == key) {
             ep_gc_table[idx].key = NULL;
             ep_gc_table[idx].value = NULL;
             ep_gc_table_size--;
-            long long next_idx = (idx + 1) % ep_gc_table_cap;
+            /* Backward-shift rehash of the rest of this cluster. Re-place (no
+               resize: size is not growing) so a mid-iteration realloc can never
+               free the table out from under this loop. */
+            long long next_idx = (idx + 1) & (ep_gc_table_cap - 1);
             while (ep_gc_table[next_idx].key != NULL) {
                 void* rehash_key = ep_gc_table[next_idx].key;
                 EpGCObject* rehash_val = ep_gc_table[next_idx].value;
                 ep_gc_table[next_idx].key = NULL;
                 ep_gc_table[next_idx].value = NULL;
                 ep_gc_table_size--;
-                ep_gc_table_insert(rehash_key, rehash_val);
-                next_idx = (next_idx + 1) % ep_gc_table_cap;
+                ep_gc_table_place(rehash_key, rehash_val);
+                next_idx = (next_idx + 1) & (ep_gc_table_cap - 1);
             }
             return;
         }
-        idx = (idx + 1) % ep_gc_table_cap;
+        idx = (idx + 1) & (ep_gc_table_cap - 1);
     }
 }
 
