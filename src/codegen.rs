@@ -5247,6 +5247,14 @@ typedef struct {
     long long capacity;
 } EpList;
 
+/* A real heap object (list/map/string) is malloc'd, so its address is far above
+   the never-mapped first page. EP values that are NOT pointers — small ints,
+   booleans, and JSON type-tags (2=string, 3=list, 4=object) — land in [0,4096).
+   Guarding the object accessors with this turns "deref a non-pointer" (the cause
+   of the read_transcripts segfault, and that whole class) into a safe null return
+   instead of a daemon-killing SIGSEGV. One comparison; negligible on hot paths. */
+#define EP_BADPTR(p) (((unsigned long long)(p)) < 4096ULL)
+
 /* Mark a single object and recursively mark its children */
 static void ep_gc_mark_object(void* ptr) {
     if (!ptr) return;
@@ -6401,6 +6409,7 @@ static const char* ep_map_key_str(long long key_val, char* buf, int bufsize) {
 }
 
 long long map_insert(long long map_ptr, long long key_val, long long value) {
+    if (EP_BADPTR(map_ptr)) return 0;
     EpMap* map = (EpMap*)map_ptr;
     char keybuf[32];
     const char* key = ep_map_key_str(key_val, keybuf, sizeof(keybuf));
@@ -6426,6 +6435,7 @@ long long map_insert(long long map_ptr, long long key_val, long long value) {
 }
 
 long long map_get_val(long long map_ptr, long long key_val) {
+    if (EP_BADPTR(map_ptr)) return 0;
     EpMap* map = (EpMap*)map_ptr;
     char keybuf[32];
     const char* key = ep_map_key_str(key_val, keybuf, sizeof(keybuf));
@@ -6455,6 +6465,7 @@ long long map_get_str(long long map_ptr, long long key_val) {
 }
 
 long long map_contains(long long map_ptr, long long key_val) {
+    if (EP_BADPTR(map_ptr)) return 0;
     EpMap* map = (EpMap*)map_ptr;
     char keybuf[32];
     const char* key = ep_map_key_str(key_val, keybuf, sizeof(keybuf));
@@ -6472,6 +6483,7 @@ long long map_contains(long long map_ptr, long long key_val) {
 }
 
 long long map_delete(long long map_ptr, long long key_val) {
+    if (EP_BADPTR(map_ptr)) return 0;
     EpMap* map = (EpMap*)map_ptr;
     char keybuf[32];
     const char* key = ep_map_key_str(key_val, keybuf, sizeof(keybuf));
@@ -7173,12 +7185,14 @@ long long create_list(void) {
 }
 
 long long get_list_data_ptr(long long list_ptr) {
+    if (EP_BADPTR(list_ptr)) return 0;
     EpList* list = (EpList*)list_ptr;
     if (!list) return 0;
     return (long long)list->data;
 }
 
 long long append_list(long long list_ptr, long long value) {
+    if (EP_BADPTR(list_ptr)) return 0;
     EpList* list = (EpList*)list_ptr;
     if (!list) return 0;
     if (list->length >= list->capacity) {
@@ -7192,22 +7206,24 @@ long long append_list(long long list_ptr, long long value) {
 }
 
 long long get_list(long long list_ptr, long long index) {
+    if (EP_BADPTR(list_ptr)) return 0;
     EpList* list = (EpList*)list_ptr;
-    if (!list || index < 0 || index >= list->length) return 0;
+    if (index < 0 || index >= list->length) return 0;
     return list->data[index];
 }
 
 long long set_list(long long list_ptr, long long index, long long value) {
+    if (EP_BADPTR(list_ptr)) return 0;
     EpList* list = (EpList*)list_ptr;
-    if (!list || index < 0 || index >= list->length) return 0;
+    if (index < 0 || index >= list->length) return 0;
     list->data[index] = value;
     ep_gc_write_barrier((void*)list_ptr, value);
     return value;
 }
 
 long long length_list(long long list_ptr) {
+    if (EP_BADPTR(list_ptr)) return 0;
     EpList* list = (EpList*)list_ptr;
-    if (!list) return 0;
     return list->length;
 }
 
@@ -7439,6 +7455,7 @@ long long string_to_list(const char* s) {
 }
 
 long long pop_list(long long list_ptr) {
+    if (EP_BADPTR(list_ptr)) return 0;
     EpList* list = (EpList*)list_ptr;
     if (!list || list->length <= 0) return 0;
     list->length -= 1;
@@ -7446,6 +7463,7 @@ long long pop_list(long long list_ptr) {
 }
 
 long long remove_list(long long list_ptr, long long index) {
+    if (EP_BADPTR(list_ptr)) return 0;
     EpList* list = (EpList*)list_ptr;
     if (!list || index < 0 || index >= list->length) return 0;
     long long removed = list->data[index];
