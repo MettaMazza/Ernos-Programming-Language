@@ -4172,6 +4172,29 @@ static void ep_signal_handler(int sig) {
                      : sig == SIGABRT ? "aborted"
                      : "unknown signal";
     fprintf(stderr, "\nRuntime Error: %s (signal %d)\n", name, sig);
+
+    /* Write to daemon/general log file if environment variable is set */
+    const char* daemon_log = getenv("ERNOS_DAEMON_LOG");
+    if (!daemon_log || daemon_log[0] == '\0') {
+        daemon_log = getenv("ERNOS_LOG_FILE");
+    }
+    if (daemon_log && daemon_log[0] != '\0') {
+        FILE* f = fopen(daemon_log, "ab");
+        if (f) {
+            time_t rawtime;
+            time(&rawtime);
+            struct tm * timeinfo = localtime(&rawtime);
+            char time_buf[80];
+            if (timeinfo) {
+                strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", timeinfo);
+            } else {
+                snprintf(time_buf, sizeof(time_buf), "%lld", (long long)rawtime);
+            }
+            fprintf(f, "[%s] FATAL: Runtime Error: %s (signal %d)\n", time_buf, name, sig);
+            fclose(f);
+        }
+    }
+
     _exit(128 + sig);
 }
 
