@@ -104,3 +104,6 @@ tests/*
 !tests/*.expected
 !tests/*.md
 !tests/*.sh
+
+# Bootstrap build output (keep the frozen C, not the binary)
+/epc-bootstrapped
