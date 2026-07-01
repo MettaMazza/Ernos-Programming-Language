@@ -330,20 +330,39 @@ Source (.ep)
 
 Ernos compiles its own compiler. The self-hosted compiler modules:
 
-- `ep_lexer.ep` — Lexer (540 lines)
-- `ep_parser.ep` — Parser (1,396 lines)
-- `ep_codegen.ep` — Code generator (3,622 lines)
-- `epc.ep` — Compiler driver (266 lines)
-- **Total: 5,824 lines of ErnosPlain**
+- `ep_lexer.ep` — Lexer (incl. f-string desugaring, English keyword aliases)
+- `ep_parser.ep` — Parser (incl. `import "x" as alias`)
+- `ep_codegen.ep` — Code generator (closures, enums, the shared runtime)
+- `epc.ep` — Compiler driver (module flattening, aliased imports)
 
-### Bootstrap
+The self-hosted compiler and the Rust compiler **share one C runtime**
+(`runtime/ep_runtime.c` + `runtime/ep_builtins.c`), embedded by the Rust
+compiler via `include_str!` and by the self-hosted compiler via the generated
+`ep_runtime_gen.ep` (regenerate with `tools/gen_runtime_ep.ep`). So both emit
+the same generational GC, pointer-safe accessors, and OOM-guarded allocators.
+
+### Stable fixpoint
+
+`epc` compiling itself reaches a **byte-identical fixpoint** (gen2 == gen3),
+verified by `tests/run_fixpoint.sh`. Self-hosted coverage of the test suite is
+tracked by `tests/run_epc_parity.sh`.
+
+### Fully self-contained bootstrap (no Rust required)
+
+`bootstrap/epc_bootstrap.c` is `epc` compiled by `epc` — the whole toolchain
+builds with only a C compiler:
+
 ```bash
-# The Rust compiler compiles the self-hosted compiler
-./target/release/ernos epc.ep
+bash bootstrap/build.sh     # clang bootstrap/epc_bootstrap.c -> epc, then epc rebuilds epc.ep
+bash bootstrap/verify.sh    # proves the clang-only 3-stage fixpoint + artifact freshness
+```
 
-# The self-hosted compiler can compile programs
-./epc hello.ep
-./hello
+The Rust compiler builds the same self-hosted compiler and is still used for the
+LSP and the cross-language transpilers:
+
+```bash
+./target/release/ernos epc.ep   # Rust compiler builds epc
+./epc hello.ep && ./hello       # epc compiles programs
 ```
 
 ---

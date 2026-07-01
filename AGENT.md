@@ -56,9 +56,17 @@ If a function isn't registered in `src/type_check.rs` (`register_builtins`) AND 
 ```bash
 # This MUST pass after any change to the type system, parser, or codegen:
 cargo run -- epc.ep && ./epc tests/test_basic_math.ep && ./test_basic_math
+
+# Stronger gates (run after any epc-visible change):
+bash tests/run_fixpoint.sh      # 3-stage byte-identical self-compile
+bash tests/run_epc_parity.sh    # self-hosted coverage scoreboard (must not regress)
 ```
 
 The self-hosted compiler is 5,800+ lines of real ErnosPlain that exercises the full type system, all builtin functions, list operations, string operations, struct creation, pattern matching, and closures. If it doesn't compile, you broke something.
+
+**Shared runtime.** `runtime/ep_runtime.c` + `runtime/ep_builtins.c` are the single source of truth for the emitted C runtime. The Rust compiler embeds them via `include_str!`; the self-hosted compiler embeds them via the generated `ep_runtime_gen.ep`. After editing either `runtime/*.c` file, regenerate: `./target/release/ernos tools/gen_runtime_ep.ep && ./tools/gen_runtime_ep`.
+
+**Bootstrap freshness.** `bootstrap/epc_bootstrap.c` is `epc` compiled by `epc`. After ANY change that alters epc's output, regenerate it in the same commit: `./epc epc.ep && cp epc_compiled.c bootstrap/epc_bootstrap.c`. `bash bootstrap/verify.sh` enforces freshness and the clang-only fixpoint.
 
 ### Rule 5: Read Source, Never Guess
 
