@@ -1,0 +1,128 @@
+# gen_runtime_ep.ep — generates ep_runtime_gen.ep from the shared C runtime.
+#
+# The single-source-of-truth C runtime lives in runtime/ep_runtime.c and
+# runtime/ep_builtins.c (embedded by the Rust compiler via include_str!).
+# This tool converts those files into an ErnosPlain module of chunked string
+# builders so the SELF-HOSTED compiler embeds the exact same runtime text.
+#
+# Regenerate after any change to runtime/*.c:
+#     ./target/release/ernos tools/gen_runtime_ep.ep && ./tools/gen_runtime_ep
+#
+# Output: ep_runtime_gen.ep (committed, imported by epc.ep).
+
+# Emit one C source line as:  set ok to append_list(lines and "<escaped>\n")
+# Escapes: " -> \"   \ -> \\   tab -> \t   CR skipped.  Returns 0.
+define emit_line_chars with out and src and line_start and line_end:
+    set prefix to "    set ok to append_list(lines and \""
+    set plen to string_length(prefix)
+    set pi to 0
+    repeat while pi < plen:
+        set ok to append_list(out and get_character(prefix and pi))
+        set pi to pi + 1
+    set i to line_start
+    repeat while i < line_end:
+        set c to get_character(src and i)
+        if c == 34:
+            set ok to append_list(out and 92)
+            set ok to append_list(out and 34)
+        else:
+            if c == 92:
+                set ok to append_list(out and 92)
+                set ok to append_list(out and 92)
+            else:
+                if c == 9:
+                    set ok to append_list(out and 92)
+                    set ok to append_list(out and 116)
+                else:
+                    if c is not equal to 13:
+                        set ok to append_list(out and c)
+        set i to i + 1
+    # closing:  \n")  then newline
+    set ok to append_list(out and 92)
+    set ok to append_list(out and 110)
+    set ok to append_list(out and 34)
+    set ok to append_list(out and 41)
+    set ok to append_list(out and 10)
+    return 0
+
+# Append every character of a plain string to the output char list. Returns 0.
+define emit_str with out and s:
+    set n to string_length(s)
+    set i to 0
+    repeat while i < n:
+        set ok to append_list(out and get_character(s and i))
+        set i to i + 1
+    return 0
+
+# Convert one C source file into chunk functions named <base>_<k> appended to
+# `out`, recording each chunk function name (string) into `names`. Returns 0.
+define emit_chunks with out and names and src and base:
+    set src_len to string_length(src)
+    set pos to 0
+    set line_count to 0
+    set chunk_index to 0
+    set in_chunk to 0
+    repeat while pos < src_len:
+        if in_chunk == 0:
+            set fname to concat(base and int_to_string(chunk_index))
+            set ok to append_list(names and fname)
+            set ok2 to emit_str(out and "define ")
+            set ok3 to emit_str(out and fname)
+            set ok4 to emit_str(out and ":\n    set lines to create_list()\n")
+            set in_chunk to 1
+        # find end of current line
+        set line_start to pos
+        set scan to 1
+        repeat while pos < src_len && scan == 1:
+            if get_character(src and pos) == 10:
+                set scan to 0
+            else:
+                set pos to pos + 1
+        set ok5 to emit_line_chars(out and src and line_start and pos)
+        if pos < src_len:
+            set pos to pos + 1
+        set line_count to line_count + 1
+        if line_count >= 150:
+            set ok6 to emit_str(out and "    return join_strings(lines)\n\n")
+            set in_chunk to 0
+            set line_count to 0
+            set chunk_index to chunk_index + 1
+    if in_chunk == 1:
+        set ok7 to emit_str(out and "    return join_strings(lines)\n\n")
+        set chunk_index to chunk_index + 1
+    return 0
+
+define main:
+    set runtime_src to read_file_content("runtime/ep_runtime.c")
+    set builtins_src to read_file_content("runtime/ep_builtins.c")
+    if string_length(runtime_src) == 0:
+        display "error: runtime/ep_runtime.c not found or empty (run from repo root)"
+        return 1
+    if string_length(builtins_src) == 0:
+        display "error: runtime/ep_builtins.c not found or empty (run from repo root)"
+        return 1
+
+    set out to create_list()
+    set names to create_list()
+    set h to emit_str(out and "# GENERATED FILE - DO NOT EDIT.\n")
+    set h2 to emit_str(out and "# Source of truth: runtime/ep_runtime.c + runtime/ep_builtins.c\n")
+    set h3 to emit_str(out and "# Regenerate: ./target/release/ernos tools/gen_runtime_ep.ep && ./tools/gen_runtime_ep\n\n")
+
+    set r1 to emit_chunks(out and names and runtime_src and "ep_rt_core_")
+    set r2 to emit_chunks(out and names and builtins_src and "ep_rt_builtins_")
+
+    # get_shared_runtime_source: concatenation of every chunk, in order.
+    set f to emit_str(out and "define get_shared_runtime_source:\n    set parts to create_list()\n")
+    set n_names to length_list(names)
+    set i to 0
+    repeat while i < n_names:
+        set f2 to emit_str(out and "    set ok to append_list(parts and ")
+        set f3 to emit_str(out and get_list(names and i))
+        set f4 to emit_str(out and "())\n")
+        set i to i + 1
+    set f5 to emit_str(out and "    return join_strings(parts)\n")
+
+    set content to string_from_list(out)
+    set w to write_file_content("ep_runtime_gen.ep" and content)
+    display concat("wrote ep_runtime_gen.ep with chunks: " and int_to_string(n_names))
+    return 0

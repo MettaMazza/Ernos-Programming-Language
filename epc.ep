@@ -2,6 +2,7 @@
 import "ep_lexer"
 import "ep_parser"
 import "ep_codegen"
+import "ep_runtime_gen"
 
 define get_file_stem with path:
     set len to string_length(path)
