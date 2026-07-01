@@ -278,6 +278,7 @@ define create_codegen_state:
     set ok to append_list(state and (create_list() + 0)) # current_borrowed_values (9)
     set ok to append_list(state and 0)                 # builtin_count (10): entries in func_keys[0..n) that are C-runtime builtins
     set ok to append_list(state and (create_list() + 0)) # closure_bodies (11): lifted closure C functions, spliced at the marker
+    set ok to append_list(state and (create_list() + 0)) # enum_variant_names (12): every declared variant, for bare-variant identifiers
     return state
 
 # A user/imported .ep function whose name matches a C-runtime builtin must NOT
@@ -1365,6 +1366,14 @@ define gen_expr with state and expr and var_keys and var_values:
         
     if type == 3: # NODE_IDENT
         set name to get_list(expr and 1)
+        # A bare enum variant (e.g. `North`) constructs the zero-payload
+        # variant. Local variables shadow variant names.
+        if map_contains_key(var_keys and name) == 0:
+            if map_contains_key(get_list(state and 12) and name) == 1:
+                set eres to "({ long long* _v = (long long*)malloc(sizeof(long long) * 1); _v[0] = EP_TAG_"
+                set eres to string_concat(eres and name)
+                set eres to string_concat(eres and "; ep_gc_register(_v, EP_OBJ_STRUCT); (long long)_v; })")
+                return eres
         # A bare function name used as a value (HOF argument, `set f to double`)
         # becomes its function pointer. Local variables shadow function names.
         if map_contains_key(var_keys and name) == 0:
@@ -2522,6 +2531,7 @@ define generate_c with program and is_test_mode:
                     set ev to get_list(evariants and ev_idx)
                     set ev_name to get_list(ev and 0)
                     set tslot to field_slot_index(tag_slots and ev_name)
+                    set okvn to append_list(get_list(state and 12) and ev_name)
                     set ev_idx to ev_idx + 1
                 set ed_idx to ed_idx + 1
             set ts_len to length_list(tag_slots)
