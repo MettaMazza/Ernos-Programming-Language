@@ -522,7 +522,18 @@ define parse_program with state:
                     set path_type to get_token_type(tok_path)
                     if path_type == 26: # string
                         set path_val to get_token_value(tok_path)
-                        set ok to append_list(imports and path_val)
+                        # Optional namespace alias: import "x" as m
+                        set alias_val to ""
+                        set peek_as to peek_token(state)
+                        if get_token_type(peek_as) == 42: # as
+                            set dummy2 to advance_token(state)
+                            set tok_alias to advance_token(state)
+                            set alias_val to get_token_value(tok_alias)
+                        # Each import entry is a [path, alias] pair (alias "" if none)
+                        set imp_pair to create_list() + 0
+                        set ok to append_list(imp_pair and path_val)
+                        set ok to append_list(imp_pair and alias_val)
+                        set ok to append_list(imports and imp_pair)
                     else:
                         display "Parser Error: Expected string literal after import at line:"
                         display get_token_line(tok_path)

@@ -149,13 +149,60 @@ define parse_all_modules with current_file and parsed_files and all_functions an
     set imp_len to length_list(imports)
     set i_idx to 0
     repeat while i_idx < imp_len:
-        set imp to get_list(imports and i_idx)
+        # Import entries are [path, alias] pairs (alias "" when no `as`).
+        set imp_pair to get_list(imports and i_idx)
+        set imp to get_list(imp_pair and 0)
+        set imp_alias to string_concat(get_list(imp_pair and 1) and "")
         set resolved_path to resolve_import_path(current_file and imp)
-        set status to parse_all_modules(resolved_path and parsed_files and all_functions and all_externals and all_struct_defs and all_enum_defs and all_method_defs and all_trait_defs and all_trait_impls)
-        if status != 0:
-            return status
+        if string_length(imp_alias) == 0:
+            set status to parse_all_modules(resolved_path and parsed_files and all_functions and all_externals and all_struct_defs and all_enum_defs and all_method_defs and all_trait_defs and all_trait_impls)
+            if status != 0:
+                return status
+        else:
+            # Aliased import: parse the module into fresh lists, then add BOTH
+            # the original names (the module's functions call each other) and
+            # alias_-prefixed duplicates (what the importer calls) — mirroring
+            # the Rust driver.
+            set mod_funcs to create_list()
+            set mod_externals to create_list()
+            set status to parse_all_modules(resolved_path and parsed_files and mod_funcs and mod_externals and all_struct_defs and all_enum_defs and all_method_defs and all_trait_defs and all_trait_impls)
+            if status != 0:
+                return status
+            set mf_len to length_list(mod_funcs)
+            set mf_i to 0
+            repeat while mf_i < mf_len:
+                set mfunc to get_list(mod_funcs and mf_i)
+                set ok to append_list(all_functions and mfunc)
+                # shallow copy with alias_-prefixed name
+                set acopy to create_list() + 0
+                set mfl to length_list(mfunc)
+                set mc_i to 0
+                repeat while mc_i < mfl:
+                    set ok2 to append_list(acopy and get_list(mfunc and mc_i))
+                    set mc_i to mc_i + 1
+                set aname to string_concat(imp_alias and "_")
+                set aname to string_concat(aname and get_list(mfunc and 1))
+                set ok3 to set_list(acopy and 1 and aname)
+                set ok4 to append_list(all_functions and acopy)
+                set mf_i to mf_i + 1
+            set me_len to length_list(mod_externals)
+            set me_i to 0
+            repeat while me_i < me_len:
+                set mext to get_list(mod_externals and me_i)
+                set ok5 to append_list(all_externals and mext)
+                set ecopy to create_list() + 0
+                set mel to length_list(mext)
+                set me_ci to 0
+                repeat while me_ci < mel:
+                    set ok6 to append_list(ecopy and get_list(mext and me_ci))
+                    set me_ci to me_ci + 1
+                set ename to string_concat(imp_alias and "_")
+                set ename to string_concat(ename and get_list(mext and 1))
+                set ok7 to set_list(ecopy and 1 and ename)
+                set ok8 to append_list(all_externals and ecopy)
+                set me_i to me_i + 1
         set i_idx to i_idx + 1
-        
+
     return 0
 
 define main:
