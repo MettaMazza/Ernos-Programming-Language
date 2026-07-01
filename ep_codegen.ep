@@ -617,6 +617,8 @@ define infer_type with state and expr and var_keys and var_values:
         return 1
     if type == 4 || type == 5 || type == 14: # NODE_BINARY, NODE_COMP, NODE_LOGICAL
         return 1
+    if type == 31 || type == 32: # NODE_BOOL_LIT, NODE_UNARY_NOT -> TYPE_BOOL = 7
+        return 7
     if type == 6: # NODE_CALL
         set name to get_list(expr and 1)
         set func_keys to get_list(state and 3)
@@ -1114,6 +1116,12 @@ define gen_statement with state and stmt and var_keys and var_values:
             set line to string_concat(line and ");\n")
             set ok to emit(state and line)
         else:
+          if t == 7: # TYPE_BOOL
+            set line to "    printf(\"%s\\n\", ("
+            set line to string_concat(line and expr_str)
+            set line to string_concat(line and ") ? \"true\" : \"false\");\n")
+            set ok to emit(state and line)
+          else:
             set line to "    printf(\"%lld\\n\", "
             set line to string_concat(line and expr_str)
             set line to string_concat(line and ");\n")
