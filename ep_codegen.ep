@@ -12,6 +12,133 @@ define map_get with keys and values and key:
         set idx to idx + 1
     return 0
 
+define map_contains_key with keys and key:
+    set key_str to string_concat(key and "")
+    set len to length_list(keys)
+    set idx to 0
+    repeat while idx < len:
+        if key_str equals get_list(keys and idx):
+            return 1
+        set idx to idx + 1
+    return 0
+
+# ---- Identifier collection (closure capture analysis) ----
+# Appends every identifier name read inside an expression / statement list to
+# out_names. Over-approximates (set targets, callee names, loop vars are
+# included) — the closure codegen filters against the outer scope's variables,
+# so spurious names are harmless.
+define collect_idents_expr with expr and out_names:
+    if expr == 0:
+        return 0
+    set t to get_list(expr and 0)
+    if t == 3: # NODE_IDENT
+        set ok to append_list(out_names and get_list(expr and 1))
+        return 0
+    if t == 4 || t == 5 || t == 14: # BINARY / COMP / LOGICAL
+        set okl to collect_idents_expr(get_list(expr and 1) and out_names)
+        set okr to collect_idents_expr(get_list(expr and 3) and out_names)
+        return 0
+    if t == 6: # NODE_CALL — callee may itself be a captured closure variable
+        set ok to append_list(out_names and get_list(expr and 1))
+        set args to create_list()
+        set args to get_list(expr and 2)
+        set a_len to length_list(args)
+        set a_i to 0
+        repeat while a_i < a_len:
+            set oka to collect_idents_expr(get_list(args and a_i) and out_names)
+            set a_i to a_i + 1
+        return 0
+    if t == 18 || t == 20 || t == 21 || t == 32 || t == 33: # RECEIVE/BORROW/AWAIT/NOT/TRY
+        return collect_idents_expr(get_list(expr and 1) and out_names)
+    if t == 22: # FIELD_ACCESS
+        return collect_idents_expr(get_list(expr and 1) and out_names)
+    if t == 24: # STRUCT_CREATE — fields are [name, expr] pairs
+        set fields to get_list(expr and 2)
+        set f_len to length_list(fields)
+        set f_i to 0
+        repeat while f_i < f_len:
+            set fpair to get_list(fields and f_i)
+            set okf to collect_idents_expr(get_list(fpair and 1) and out_names)
+            set f_i to f_i + 1
+        return 0
+    if t == 25: # METHOD_CALL
+        set okm to collect_idents_expr(get_list(expr and 1) and out_names)
+        set margs to get_list(expr and 3)
+        set m_len to length_list(margs)
+        set m_i to 0
+        repeat while m_i < m_len:
+            set okma to collect_idents_expr(get_list(margs and m_i) and out_names)
+            set m_i to m_i + 1
+        return 0
+    if t == 26: # ENUM_CREATE
+        set eargs to get_list(expr and 2)
+        set e_len to length_list(eargs)
+        set e_i to 0
+        repeat while e_i < e_len:
+            set oke to collect_idents_expr(get_list(eargs and e_i) and out_names)
+            set e_i to e_i + 1
+        return 0
+    if t == 34: # nested closure — walk its body; filtering handles shadowing
+        return collect_idents_stmts(get_list(expr and 2) and out_names)
+    if t == 35: # LIST_LIT
+        set elems to get_list(expr and 1)
+        set l_len to length_list(elems)
+        set l_i to 0
+        repeat while l_i < l_len:
+            set okl2 to collect_idents_expr(get_list(elems and l_i) and out_names)
+            set l_i to l_i + 1
+        return 0
+    return 0
+
+define collect_idents_stmts with stmts and out_names:
+    set len to length_list(stmts)
+    set idx to 0
+    repeat while idx < len:
+        set stmt to get_list(stmts and idx)
+        set t to get_list(stmt and 0)
+        if t == 7: # SET — target counts as a read (set x to x + 1 captures x)
+            set ok7 to append_list(out_names and get_list(stmt and 1))
+            set ok7b to collect_idents_expr(get_list(stmt and 2) and out_names)
+        if t == 8 || t == 9 || t == 36: # RETURN / DISPLAY / EXPR_STMT
+            set ok8 to collect_idents_expr(get_list(stmt and 1) and out_names)
+        if t == 10: # IF
+            set okc to collect_idents_expr(get_list(stmt and 1) and out_names)
+            set okt to collect_idents_stmts(get_list(stmt and 2) and out_names)
+            set else_b to get_list(stmt and 3)
+            if else_b != 0:
+                set oke2 to collect_idents_stmts(else_b and out_names)
+        if t == 11: # REPEAT_WHILE
+            set okw to collect_idents_expr(get_list(stmt and 1) and out_names)
+            set okwb to collect_idents_stmts(get_list(stmt and 2) and out_names)
+        if t == 15: # SPAWN
+            set oks to append_list(out_names and get_list(stmt and 1))
+            set sargs to get_list(stmt and 2)
+            set s_len to length_list(sargs)
+            set s_i to 0
+            repeat while s_i < s_len:
+                set oksa to collect_idents_expr(get_list(sargs and s_i) and out_names)
+                set s_i to s_i + 1
+        if t == 16: # SEND
+            set okn1 to collect_idents_expr(get_list(stmt and 1) and out_names)
+            set okn2 to collect_idents_expr(get_list(stmt and 2) and out_names)
+        if t == 23: # FIELD_SET
+            set okf1 to collect_idents_expr(get_list(stmt and 1) and out_names)
+            set okf2 to collect_idents_expr(get_list(stmt and 3) and out_names)
+        if t == 27: # MATCH
+            set okm1 to collect_idents_expr(get_list(stmt and 1) and out_names)
+            set arms to get_list(stmt and 2)
+            set ar_len to length_list(arms)
+            set ar_i to 0
+            repeat while ar_i < ar_len:
+                set arm to get_list(arms and ar_i)
+                set okab to collect_idents_stmts(get_list(arm and 2) and out_names)
+                set ar_i to ar_i + 1
+        if t == 28: # FOR_EACH
+            set okfe1 to collect_idents_expr(get_list(stmt and 2) and out_names)
+            set okfe2 to collect_idents_stmts(get_list(stmt and 3) and out_names)
+        set idx to idx + 1
+    return 0
+
 define map_put with keys and values and key and val:
     set key_str to string_concat(key and "")
     set len to length_list(keys)
@@ -150,6 +277,7 @@ define create_codegen_state:
     set ok to append_list(state and (create_list() + 0)) # current_borrowed_keys (8)
     set ok to append_list(state and (create_list() + 0)) # current_borrowed_values (9)
     set ok to append_list(state and 0)                 # builtin_count (10): entries in func_keys[0..n) that are C-runtime builtins
+    set ok to append_list(state and (create_list() + 0)) # closure_bodies (11): lifted closure C functions, spliced at the marker
     return state
 
 # A user/imported .ep function whose name matches a C-runtime builtin must NOT
@@ -1236,6 +1364,14 @@ define gen_expr with state and expr and var_keys and var_values:
         
     if type == 3: # NODE_IDENT
         set name to get_list(expr and 1)
+        # A bare function name used as a value (HOF argument, `set f to double`)
+        # becomes its function pointer. Local variables shadow function names.
+        if map_contains_key(var_keys and name) == 0:
+            set fk to get_list(state and 3)
+            if map_contains_key(fk and name) == 1:
+                set fres to "(long long)"
+                set fres to string_concat(fres and name)
+                return fres
         return name
         
     if type == 4: # NODE_BINARY
@@ -1396,7 +1532,42 @@ define gen_expr with state and expr and var_keys and var_values:
                 set ok to append_list(args_str_list and ", ")
             set idx to idx + 1
         set args_joined to join_strings(args_str_list)
-        
+
+        # Indirect call through a variable (not a known function): the value
+        # may be an EpClosure or a raw function pointer — dispatch on the
+        # magic number, mirroring the Rust compiler.
+        set func_keys to get_list(state and 3)
+        if map_contains_key(func_keys and name) == 0:
+            if map_contains_key(var_keys and name) == 1:
+                set cl_sig to "long long(*)(long long"
+                set rw_sig to "long long(*)("
+                set sg_i to 0
+                repeat while sg_i < args_len:
+                    set cl_sig to string_concat(cl_sig and ", long long")
+                    if sg_i > 0:
+                        set rw_sig to string_concat(rw_sig and ", long long")
+                    else:
+                        set rw_sig to string_concat(rw_sig and "long long")
+                    set sg_i to sg_i + 1
+                if args_len == 0:
+                    set rw_sig to string_concat(rw_sig and "void")
+                set cl_sig to string_concat(cl_sig and ")")
+                set rw_sig to string_concat(rw_sig and ")")
+                set res to "({ long long _fv = "
+                set res to string_concat(res and name)
+                set res to string_concat(res and "; EpClosure* _cl = (EpClosure*)_fv; (_fv != 0 && _cl->magic == EP_CLOSURE_MAGIC) ? ((")
+                set res to string_concat(res and cl_sig)
+                set res to string_concat(res and ")_cl->fn_ptr)((long long)_cl->env")
+                if args_len > 0:
+                    set res to string_concat(res and ", ")
+                    set res to string_concat(res and args_joined)
+                set res to string_concat(res and ") : ((")
+                set res to string_concat(res and rw_sig)
+                set res to string_concat(res and ")_fv)(")
+                set res to string_concat(res and args_joined)
+                set res to string_concat(res and "); })")
+                return res
+
         set call_str to name
         set call_str to string_concat(call_str and "(")
         set call_str to string_concat(call_str and args_joined)
@@ -1526,12 +1697,154 @@ define gen_expr with state and expr and var_keys and var_values:
         return inner_str
 
     if type == 34: # NODE_CLOSURE
-        # Closures: for now, emit as named static functions (simplified)
+        # Mirrors the Rust compiler's EpClosure ABI:
+        #   long long _ep_closure_N(long long _ep_env, <params...>)
+        # captures unpacked from ((long long*)_ep_env)[i]; the creation site
+        # mallocs {magic, fn_ptr, env[]} and packs current capture values.
         set params to get_list(expr and 1)
         set body to get_list(expr and 2)
-        set label to get_new_label(state and "closure")
-        # Emit closure as inline block returning function pointer cast
-        return "0 /* closure not yet implemented */"
+        set cidx to get_codegen_spawn_index(state)
+        set dummy to set_codegen_spawn_index(state and cidx + 1)
+        set cname to string_concat("_ep_closure_" and cg_int_to_str(cidx))
+
+        # ---- capture analysis: identifiers read in the body that are outer
+        # variables (not params, not functions, not ret_val) ----
+        set raw_names to create_list()
+        set okr to collect_idents_stmts(body and raw_names)
+        set func_keys to get_list(state and 3)
+        set p_len to length_list(params)
+        set captured to create_list()
+        set rn_len to length_list(raw_names)
+        set rn_i to 0
+        repeat while rn_i < rn_len:
+            set nm to get_list(raw_names and rn_i)
+            set skip to 0
+            if nm equals "ret_val":
+                set skip to 1
+            if skip == 0:
+                if map_contains_key(captured and nm) == 1:
+                    set skip to 1
+            if skip == 0:
+                set pp_i to 0
+                repeat while pp_i < p_len:
+                    set p_node to get_list(params and pp_i)
+                    if nm equals get_list(p_node and 0):
+                        set skip to 1
+                    set pp_i to pp_i + 1
+            if skip == 0:
+                if map_contains_key(var_keys and nm) == 0:
+                    set skip to 1
+            if skip == 0:
+                if map_contains_key(func_keys and nm) == 1:
+                    set skip to 1
+            if skip == 0:
+                set okc to append_list(captured and nm)
+            set rn_i to rn_i + 1
+        set n_caps to length_list(captured)
+
+        # ---- generate the lifted function into a swap buffer ----
+        set saved_lines to get_list(state and 0)
+        set fresh to create_list() + 0
+        set dummy2 to set_list(state and 0 and fresh)
+
+        set hdr to "long long "
+        set hdr to string_concat(hdr and cname)
+        set hdr to string_concat(hdr and "(long long _ep_env")
+        set hp_i to 0
+        repeat while hp_i < p_len:
+            set p_node to get_list(params and hp_i)
+            set hdr to string_concat(hdr and ", long long ")
+            set hdr to string_concat(hdr and get_list(p_node and 0))
+            set hp_i to hp_i + 1
+        set hdr to string_concat(hdr and ") {\n    long long ret_val = 0;\n")
+        set okh to emit(state and hdr)
+        set cp_i to 0
+        repeat while cp_i < n_caps:
+            set unp to "    long long "
+            set unp to string_concat(unp and get_list(captured and cp_i))
+            set unp to string_concat(unp and " = ((long long*)_ep_env)[")
+            set unp to string_concat(unp and cg_int_to_str(cp_i))
+            set unp to string_concat(unp and "];\n")
+            set oku to emit(state and unp)
+            set cp_i to cp_i + 1
+
+        # closure-body scope: outer vars + params + body locals
+        set c_keys to create_list()
+        set c_values to create_list()
+        set ov_len to length_list(var_keys)
+        set ov_i to 0
+        repeat while ov_i < ov_len:
+            set okov to map_put(c_keys and c_values and get_list(var_keys and ov_i) and get_list(var_values and ov_i))
+            set ov_i to ov_i + 1
+        set pv_i to 0
+        repeat while pv_i < p_len:
+            set p_node to get_list(params and pv_i)
+            set okpv to map_put(c_keys and c_values and get_list(p_node and 0) and 1)
+            set pv_i to pv_i + 1
+        set b_keys to create_list()
+        set b_values to create_list()
+        set okbv to collect_var_types(state and body and b_keys and b_values)
+        set bv_len to length_list(b_keys)
+        set bv_i to 0
+        repeat while bv_i < bv_len:
+            set bname to get_list(b_keys and bv_i)
+            set is_p to 0
+            set bp_i to 0
+            repeat while bp_i < p_len:
+                set p_node to get_list(params and bp_i)
+                if bname equals get_list(p_node and 0):
+                    set is_p to 1
+                set bp_i to bp_i + 1
+            if is_p == 0:
+                if map_contains_key(captured and bname) == 0:
+                    if bname equals "ret_val":
+                        set is_p to 1
+                    else:
+                        set dec to "    long long "
+                        set dec to string_concat(dec and bname)
+                        set dec to string_concat(dec and " = 0;\n")
+                        set okd to emit(state and dec)
+            set okbm to map_put(c_keys and c_values and bname and get_list(b_values and bv_i))
+            set bv_i to bv_i + 1
+
+        set bs_len to length_list(body)
+        set bs_i to 0
+        repeat while bs_i < bs_len:
+            set okst to gen_statement(state and get_list(body and bs_i) and c_keys and c_values)
+            set bs_i to bs_i + 1
+        set okft to emit(state and "L_cleanup:\n    return ret_val;\n}\n\n")
+
+        set closure_text to join_strings(fresh)
+        set dummy3 to set_list(state and 0 and saved_lines)
+        set cbodies to get_list(state and 11)
+        set okcb to append_list(cbodies and closure_text)
+
+        # ---- creation expression ----
+        set res to "({ EpClosure* _cl_"
+        set res to string_concat(res and cg_int_to_str(cidx))
+        set res to string_concat(res and " = (EpClosure*)malloc(sizeof(EpClosure) + ")
+        set res to string_concat(res and cg_int_to_str(n_caps))
+        set res to string_concat(res and " * sizeof(long long)); _cl_")
+        set res to string_concat(res and cg_int_to_str(cidx))
+        set res to string_concat(res and "->magic = EP_CLOSURE_MAGIC; _cl_")
+        set res to string_concat(res and cg_int_to_str(cidx))
+        set res to string_concat(res and "->fn_ptr = (long long)")
+        set res to string_concat(res and cname)
+        set res to string_concat(res and ";")
+        set ce_i to 0
+        repeat while ce_i < n_caps:
+            set res to string_concat(res and " _cl_")
+            set res to string_concat(res and cg_int_to_str(cidx))
+            set res to string_concat(res and "->env[")
+            set res to string_concat(res and cg_int_to_str(ce_i))
+            set res to string_concat(res and "] = ")
+            set res to string_concat(res and get_list(captured and ce_i))
+            set res to string_concat(res and ";")
+            set ce_i to ce_i + 1
+        set res to string_concat(res and " (long long)_cl_")
+        set res to string_concat(res and cg_int_to_str(cidx))
+        set res to string_concat(res and "; })")
+        return res
 
     if type == 35: # NODE_LIST_LIT
         set elements to get_list(expr and 1)
@@ -2358,6 +2671,13 @@ define generate_c with program and is_test_mode:
         set idx to idx + 1
     set ok to emit(state and "\n")
     
+    # Closure bodies are lifted to top level during function generation; they
+    # must appear after the runtime + prototypes but before their users. Emit a
+    # placeholder line here and splice the accumulated bodies into it at the end.
+    set out_lines to get_list(state and 0)
+    set closure_slot to length_list(out_lines)
+    set ok to emit(state and "\n/* EP_CLOSURE_BODIES */\n")
+
     # Reset spawn index
     set dummy to set_codegen_spawn_index(state and 0)
 
@@ -2404,7 +2724,13 @@ define generate_c with program and is_test_mode:
     else:
         set ok to emit(state and get_c_main_source())
     
+    # Splice lifted closure bodies into the placeholder slot.
     set lines to get_list(state and 0)
+    set cbodies to get_list(state and 11)
+    if length_list(cbodies) > 0:
+        set marker_line to get_list(lines and closure_slot)
+        set spliced to string_concat(marker_line and join_strings(cbodies))
+        set oksp to set_list(lines and closure_slot and spliced)
     set c_code to join_strings(lines)
     return c_code
 
