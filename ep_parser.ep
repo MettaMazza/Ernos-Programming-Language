@@ -1244,7 +1244,13 @@ define parse_prefix with state:
     
     if t == 69: # [ (list literal)
         return parse_list_literal(state) + 0
-    
+
+    # Keyword tokens that double as variable names in expression position
+    # (mirrors the Rust parser's expect_identifier leniency — e.g. variables
+    # named loop, skip, show, check, field…). The token value holds the word.
+    if t == 1 || t == 7 || t == 8 || t == 43 || t == 44 || t == 45 || t == 47 || t == 48 || t == 49 || t == 54 || t == 57 || t == 58 || t == 60 || t == 61 || t == 62:
+        set t to 27
+
     if t == 27: # TOK_IDENTIFIER
         set name to get_token_value(tok)
         # Check for function call: name(args)

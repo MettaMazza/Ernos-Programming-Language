@@ -446,6 +446,16 @@ define tokenize_source with source:
                                             set is_multi_phrase to 1
                                             
                                 if is_multi_phrase == 0:
+                                    if "give" equals id_str:
+                                        set next_p to match_next_word(source and pos and "back")
+                                        if next_p > 0:
+                                            set tok_type to 6 # TOK_RETURN ("give back" alias)
+                                            set id_str to "return"
+                                            set current_col to current_col + (next_p - pos)
+                                            set pos to next_p
+                                            set is_multi_phrase to 1
+
+                                if is_multi_phrase == 0:
                                     if "or" equals id_str:
                                         set next_p to match_next_word(source and pos and "else")
                                         if next_p > 0:
@@ -553,7 +563,30 @@ define tokenize_source with source:
                                         set tok_type to 66
                                     if "modulo" equals id_str:
                                         set tok_type to 41
-                                
+                                    # English keyword aliases (mirror src/lexer.rs)
+                                    if "describe" equals id_str:
+                                        set tok_type to 1
+                                    if "let" equals id_str:
+                                        set tok_type to 2
+                                    if "be" equals id_str:
+                                        set tok_type to 3
+                                    if "show" equals id_str:
+                                        set tok_type to 7
+                                    if "print" equals id_str:
+                                        set tok_type to 7
+                                    if "loop" equals id_str:
+                                        set tok_type to 8
+                                    if "every" equals id_str:
+                                        set tok_type to 54
+                                    if "returns" equals id_str:
+                                        set tok_type to 43
+                                    if "stop" equals id_str:
+                                        set tok_type to 61
+                                    if "skip" equals id_str:
+                                        set tok_type to 62
+                                    if "times" equals id_str:
+                                        set tok_type to 14
+
                                 set tok to create_token(tok_type and id_str and current_line and current_col - id_len) + 0
                                 set ok to append_list(tokens and tok)
                             else:
