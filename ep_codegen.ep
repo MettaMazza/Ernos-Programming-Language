@@ -149,7 +149,21 @@ define create_codegen_state:
     set ok to append_list(state and 0)                 # spawn_index (7)
     set ok to append_list(state and (create_list() + 0)) # current_borrowed_keys (8)
     set ok to append_list(state and (create_list() + 0)) # current_borrowed_values (9)
+    set ok to append_list(state and 0)                 # builtin_count (10): entries in func_keys[0..n) that are C-runtime builtins
     return state
+
+# A user/imported .ep function whose name matches a C-runtime builtin must NOT
+# be emitted — the C builtin wins (mirrors the Rust compiler's builtin_c_funcs
+# skip). Builtins occupy the first builtin_count slots of func_keys.
+define is_builtin_c_func with state and name:
+    set keys to get_list(state and 3)
+    set n to get_list(state and 10)
+    set idx to 0
+    repeat while idx < n:
+        if name equals get_list(keys and idx):
+            return 1
+        set idx to idx + 1
+    return 0
 
 define get_codegen_borrowed_keys with state:
     return get_list(state and 8)
@@ -336,6 +350,10 @@ define analyze_return_types with state and program:
     set ok to map_put(keys and values and "ep_gc_get_major_count" and 1)
     set ok to map_put(keys and values and "ep_gc_get_nursery_count" and 1)
 
+    # Everything registered above is a C-runtime builtin; user/imported
+    # functions are appended after this point (see is_builtin_c_func).
+    set ok to set_list(state and 10 and length_list(keys))
+
     set externals to get_list(program and 2)
     set ext_len to length_list(externals)
     set idx to 0
@@ -493,16 +511,23 @@ define infer_type with state and expr and var_keys and var_values:
 # Variable offset collection is no longer needed for C transpilation
 
 define is_global_var with name:
+    # A global constant is ALL_CAPS: no lowercase letters AND at least one
+    # uppercase letter. Names like "_" (the discard variable) are ordinary
+    # locals — without the uppercase requirement they were misclassified as
+    # globals and never declared.
     set len to string_length(name)
     if len == 0:
         return 0
+    set has_upper to 0
     set idx to 0
     repeat while idx < len:
         set ch to get_character(name and idx)
         if ch >= 97 && ch <= 122:
             return 0
+        if ch >= 65 && ch <= 90:
+            set has_upper to 1
         set idx to idx + 1
-    return 1
+    return has_upper
 
 define cg_string_contains with s and sub:
     set len to string_length(s)
@@ -2203,21 +2228,22 @@ define generate_c with program and is_test_mode:
     repeat while idx < ext_len:
         set ext to get_list(externals and idx)
         set name to get_list(ext and 1)
-        set params to get_list(ext and 2)
-        set p_len to length_list(params)
-        
-        set proto to "long long "
-        set proto to string_concat(proto and name)
-        set proto to string_concat(proto and "(")
-        
-        set p_i to 0
-        repeat while p_i < p_len:
-            set proto to string_concat(proto and "long long")
-            if p_i < p_len - 1:
-                set proto to string_concat(proto and ", ")
-            set p_i to p_i + 1
-        set proto to string_concat(proto and ");\n")
-        set ok to emit(state and proto)
+        # Skip prototypes for functions already defined by the C runtime — a
+        # differing arity here would be a conflicting redeclaration.
+        if is_builtin_c_func(state and name) == 0:
+            set params to get_list(ext and 2)
+            set p_len to length_list(params)
+            set proto to "long long "
+            set proto to string_concat(proto and name)
+            set proto to string_concat(proto and "(")
+            set p_i to 0
+            repeat while p_i < p_len:
+                set proto to string_concat(proto and "long long")
+                if p_i < p_len - 1:
+                    set proto to string_concat(proto and ", ")
+                set p_i to p_i + 1
+            set proto to string_concat(proto and ");\n")
+            set ok to emit(state and proto)
         set idx to idx + 1
     set ok to emit(state and "\n")
         
@@ -2230,13 +2256,18 @@ define generate_c with program and is_test_mode:
     repeat while idx < len:
         set func to get_list(funcs and idx)
         set name to get_list(func and 1)
+        # A user/imported function shadowing a C-runtime builtin is not emitted
+        # (the builtin wins) — so no prototype either.
+        if is_builtin_c_func(state and name) == 1:
+            set idx to idx + 1
+            continue
         set params to get_list(func and 2)
         set p_len to length_list(params)
-        
+
         set is_async to 0
         if length_list(func) > 4:
             set is_async to get_list(func and 4)
-            
+
         set proto to "long long "
         set proto to string_concat(proto and get_fn_c_name(func))
         set proto to string_concat(proto and "(")
@@ -2358,11 +2389,13 @@ define generate_c with program and is_test_mode:
             set ok to gen_function(state and method_func)
             set md_idx to md_idx + 1
     
-    # Emit functions
+    # Emit functions (skipping any that shadow a C-runtime builtin — the
+    # builtin definition wins, mirroring the Rust compiler)
     set idx to 0
     repeat while idx < len:
         set func to get_list(funcs and idx)
-        set ok to gen_function(state and func)
+        if is_builtin_c_func(state and get_list(func and 1)) == 0:
+            set ok to gen_function(state and func)
         set idx to idx + 1
         
     # Emit main bootstrapper

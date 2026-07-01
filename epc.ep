@@ -245,11 +245,18 @@ define main:
         set pf_str to string_concat(pf and "")
         set pf_len_str to string_length(pf_str)
         
-        # Check for sql.ep
+        # Check for sql.ep — the runtime's ep_sqlite3_* wrappers are compiled
+        # behind #ifdef EP_HAS_SQLITE, so the define is required as well.
         if pf_len_str > 5:
             set ext_sql to substring(pf_str and pf_len_str - 6 and 6)
             if "sql.ep" equals ext_sql:
-                set compile_cmd to string_concat(compile_cmd and " -lsqlite3")
+                set compile_cmd to string_concat(compile_cmd and " -DEP_HAS_SQLITE -lsqlite3")
+
+        # Check for crypto.ep (OpenSSL, matching the Rust driver's flags)
+        if pf_len_str > 8:
+            set ext_crypto to substring(pf_str and pf_len_str - 9 and 9)
+            if "crypto.ep" equals ext_crypto:
+                set compile_cmd to string_concat(compile_cmd and " -L/opt/homebrew/opt/openssl/lib -lcrypto")
         
         # Check for gui.ep
         if pf_len_str > 5:
