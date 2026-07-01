@@ -103,3 +103,4 @@ tests/*
 !tests/*.ep
 !tests/*.expected
 !tests/*.md
+!tests/*.sh
