@@ -284,11 +284,15 @@ define create_codegen_state:
 # be emitted — the C builtin wins (mirrors the Rust compiler's builtin_c_funcs
 # skip). Builtins occupy the first builtin_count slots of func_keys.
 define is_builtin_c_func with state and name:
+    # Coerce to a known-string type so `equals` compiles to strcmp, not a
+    # pointer comparison (the codegen only string-compares when the LEFT
+    # operand's type is known to be a string — same idiom as map_get).
+    set name_str to string_concat(name and "")
     set keys to get_list(state and 3)
     set n to get_list(state and 10)
     set idx to 0
     repeat while idx < n:
-        if name equals get_list(keys and idx):
+        if name_str equals get_list(keys and idx):
             return 1
         set idx to idx + 1
     return 0
@@ -1717,7 +1721,8 @@ define gen_expr with state and expr and var_keys and var_values:
         set rn_len to length_list(raw_names)
         set rn_i to 0
         repeat while rn_i < rn_len:
-            set nm to get_list(raw_names and rn_i)
+            # Coerce so `equals` is a string comparison (see is_builtin_c_func).
+            set nm to string_concat(get_list(raw_names and rn_i) and "")
             set skip to 0
             if nm equals "ret_val":
                 set skip to 1
@@ -1787,7 +1792,8 @@ define gen_expr with state and expr and var_keys and var_values:
         set bv_len to length_list(b_keys)
         set bv_i to 0
         repeat while bv_i < bv_len:
-            set bname to get_list(b_keys and bv_i)
+            # Coerce so `equals` is a string comparison (see is_builtin_c_func).
+            set bname to string_concat(get_list(b_keys and bv_i) and "")
             set is_p to 0
             set bp_i to 0
             repeat while bp_i < p_len:
