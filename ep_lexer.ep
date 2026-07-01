@@ -54,6 +54,186 @@ define match_next_word with source and start_pos and next_word:
             
     return 0
 
+# Lex a string-literal body starting at the opening quote `pos0`, appending the
+# resulting token(s) to `tokens`. Plain strings emit one STRING token (26).
+# F-strings are desugared IN THE TOKEN STREAM, mirroring the Rust parser:
+#   f"a{x}b"  ->  concat("a" and concat(ep_auto_to_string(x) and "b"))
+# via a streaming right-fold: each part except the final trailing literal opens
+# a frame `concat (` <part> `and`, and the final literal closes every frame.
+# Interpolated expressions are lexed by calling tokenize_source recursively and
+# splicing the tokens (dropping NEWLINE/INDENT/DEDENT/EOF = 28/29/30/31).
+# Returns [new_pos, new_col, err].
+define lex_string_body with source and pos0 and source_len and tokens and current_line and start_col and is_fstring:
+    set pos to pos0 + 1
+    set col to start_col + 1
+    set opens to 0
+    set str_chars to create_list()
+    set closed to 0
+    set err to 0
+    set looping to 1
+    repeat while pos < source_len && looping == 1:
+        set ch to get_character(source and pos)
+        if ch == 34: # closing '"'
+            set closed to 1
+            set looping to 0
+            set pos to pos + 1
+            set col to col + 1
+        else:
+            if ch == 123 && is_fstring == 1: # '{' — interpolation begins
+                set pos to pos + 1
+                set col to col + 1
+                set lit to string_from_list(str_chars)
+                set str_chars to create_list()
+                if string_length(lit) != 0:
+                    set t1 to create_token(27 and "concat" and current_line and col) + 0
+                    set ok1 to append_list(tokens and t1)
+                    set t2 to create_token(23 and "(" and current_line and col) + 0
+                    set ok2 to append_list(tokens and t2)
+                    set t3 to create_token(26 and lit and current_line and col) + 0
+                    set ok3 to append_list(tokens and t3)
+                    set t4 to create_token(11 and "and" and current_line and col) + 0
+                    set ok4 to append_list(tokens and t4)
+                    set opens to opens + 1
+                set t5 to create_token(27 and "concat" and current_line and col) + 0
+                set ok5 to append_list(tokens and t5)
+                set t6 to create_token(23 and "(" and current_line and col) + 0
+                set ok6 to append_list(tokens and t6)
+                set t7 to create_token(27 and "ep_auto_to_string" and current_line and col) + 0
+                set ok7 to append_list(tokens and t7)
+                set t8 to create_token(23 and "(" and current_line and col) + 0
+                set ok8 to append_list(tokens and t8)
+                # extract the expression source up to the matching '}' —
+                # brace-depth aware, and skips through nested string literals
+                set depth to 1
+                set expr_chars to create_list()
+                set eloop to 1
+                repeat while pos < source_len && eloop == 1:
+                    set ec to get_character(source and pos)
+                    if ec == 34: # nested string inside interpolation
+                        set okq to append_list(expr_chars and ec)
+                        set pos to pos + 1
+                        set col to col + 1
+                        set sloop to 1
+                        repeat while pos < source_len && sloop == 1:
+                            set sc to get_character(source and pos)
+                            set okq2 to append_list(expr_chars and sc)
+                            set pos to pos + 1
+                            set col to col + 1
+                            if sc == 34:
+                                set sloop to 0
+                            else:
+                                if sc == 92:
+                                    if pos < source_len:
+                                        set qc to get_character(source and pos)
+                                        set okq3 to append_list(expr_chars and qc)
+                                        set pos to pos + 1
+                                        set col to col + 1
+                    else:
+                        if ec == 125: # '}'
+                            set depth to depth - 1
+                            if depth == 0:
+                                set pos to pos + 1
+                                set col to col + 1
+                                set eloop to 0
+                            else:
+                                set oka to append_list(expr_chars and ec)
+                                set pos to pos + 1
+                                set col to col + 1
+                        else:
+                            if ec == 123:
+                                set depth to depth + 1
+                            set okb to append_list(expr_chars and ec)
+                            set pos to pos + 1
+                            set col to col + 1
+                if eloop == 1:
+                    display "Lexer Error: Unterminated interpolation in f-string"
+                    set err to 1
+                    set looping to 0
+                else:
+                    set expr_src to string_from_list(expr_chars)
+                    set expr_tokens to tokenize_source(expr_src) + 0
+                    if expr_tokens == 0:
+                        display "Lexer Error: Invalid expression inside f-string interpolation"
+                        set err to 1
+                        set looping to 0
+                    else:
+                        set et_len to length_list(expr_tokens)
+                        set ei to 0
+                        repeat while ei < et_len:
+                            set et to get_list(expr_tokens and ei)
+                            set ett to get_token_type(et)
+                            if ett != 28 && ett != 29 && ett != 30 && ett != 31:
+                                set okc to append_list(tokens and et)
+                            set ei to ei + 1
+                        set t9 to create_token(24 and ")" and current_line and col) + 0
+                        set ok9 to append_list(tokens and t9)
+                        set t10 to create_token(11 and "and" and current_line and col) + 0
+                        set ok10 to append_list(tokens and t10)
+                        set opens to opens + 1
+            else:
+                if ch == 92: # '\' escape
+                    set pos to pos + 1
+                    set col to col + 1
+                    if pos < source_len:
+                        set esc_ch to get_character(source and pos)
+                        if esc_ch == 110: # 'n'
+                            set oke to append_list(str_chars and 10)
+                        else:
+                            if esc_ch == 116: # 't'
+                                set oke to append_list(str_chars and 9)
+                            else:
+                                if esc_ch == 114: # 'r'
+                                    set oke to append_list(str_chars and 13)
+                                else:
+                                    if esc_ch == 34: # '"'
+                                        set oke to append_list(str_chars and 34)
+                                    else:
+                                        if esc_ch == 92: # '\'
+                                            set oke to append_list(str_chars and 92)
+                                        else:
+                                            if esc_ch == 123: # '{'
+                                                set oke to append_list(str_chars and 123)
+                                            else:
+                                                if esc_ch == 125: # '}'
+                                                    set oke to append_list(str_chars and 125)
+                                                else:
+                                                    set oke to append_list(str_chars and 92)
+                                                    set oke2 to append_list(str_chars and esc_ch)
+                        set pos to pos + 1
+                        set col to col + 1
+                    else:
+                        display "Lexer Error: Unterminated string literal at escape sequence"
+                        set err to 1
+                        set looping to 0
+                else:
+                    if ch == 10 || ch == 13:
+                        display "Lexer Error: Unterminated string literal"
+                        set err to 1
+                        set looping to 0
+                    else:
+                        set okp to append_list(str_chars and ch)
+                        set pos to pos + 1
+                        set col to col + 1
+    if closed == 0:
+        if err == 0:
+            display "Lexer Error: Unterminated string literal"
+            set err to 1
+    if err == 0:
+        set lit2 to string_from_list(str_chars)
+        set tokf to create_token(26 and lit2 and current_line and start_col) + 0
+        set okf to append_list(tokens and tokf)
+        if is_fstring == 1:
+            set ci to 0
+            repeat while ci < opens:
+                set tcp to create_token(24 and ")" and current_line and col) + 0
+                set okcp to append_list(tokens and tcp)
+                set ci to ci + 1
+    set res to create_list()
+    set okr1 to append_list(res and pos)
+    set okr2 to append_list(res and col)
+    set okr3 to append_list(res and err)
+    return res
+
 define tokenize_source with source:
     set tokens to create_list()
     set source_len to string_length(source)
@@ -377,65 +557,22 @@ define tokenize_source with source:
                                 set tok to create_token(tok_type and id_str and current_line and current_col - id_len) + 0
                                 set ok to append_list(tokens and tok)
                             else:
-                                if c == 34: # String Literal '"'
+                                if c == 34: # String Literal (plain or f-string)
                                     set start_col to current_col
-                                    set pos to pos + 1
-                                    set current_col to current_col + 1
-                                    set str_chars to create_list()
-                                    set str_loop to 1
-                                    set closed to 0
-                                    repeat while pos < source_len && str_loop == 1:
-                                        set ch to get_character(source and pos)
-                                        if ch == 34: # '"'
-                                            set closed to 1
-                                            set str_loop to 0
-                                            set pos to pos + 1
-                                            set current_col to current_col + 1
-                                        else:
-                                            if ch == 92: # '\'
-                                                set pos to pos + 1
-                                                set current_col to current_col + 1
-                                                if pos < source_len:
-                                                    set esc_ch to get_character(source and pos)
-                                                    if esc_ch == 110: # 'n'
-                                                        set ok to append_list(str_chars and 10)
-                                                    else:
-                                                        if esc_ch == 116: # 't'
-                                                            set ok to append_list(str_chars and 9)
-                                                        else:
-                                                            if esc_ch == 114: # 'r'
-                                                                set ok to append_list(str_chars and 13)
-                                                            else:
-                                                                if esc_ch == 34: # '"'
-                                                                    set ok to append_list(str_chars and 34)
-                                                                else:
-                                                                    if esc_ch == 92: # '\'
-                                                                        set ok to append_list(str_chars and 92)
-                                                                    else:
-                                                                        # Push raw backslash and the other character
-                                                                        set ok to append_list(str_chars and 92)
-                                                                        set ok to append_list(str_chars and esc_ch)
-                                                    set pos to pos + 1
-                                                    set current_col to current_col + 1
-                                                else:
-                                                    display "Lexer Error: Unterminated string literal at escape sequence"
-                                                    set str_loop to 0
-                                            else:
-                                                if ch == 10 || ch == 13:
-                                                    display "Lexer Error: Unterminated string literal"
-                                                    set str_loop to 0
-                                                else:
-                                                    set ok to append_list(str_chars and ch)
-                                                    set pos to pos + 1
-                                                    set current_col to current_col + 1
-                                                    
-                                    if closed == 0:
-                                        display "Lexer Error: Unterminated string literal"
+                                    # f-string: the previous token is the bare identifier `f`
+                                    set is_fstring to 0
+                                    set tok_count to length_list(tokens)
+                                    if tok_count > 0:
+                                        set last_tok to get_list(tokens and tok_count - 1)
+                                        if get_token_type(last_tok) == 27:
+                                            if "f" equals get_token_value(last_tok):
+                                                set is_fstring to 1
+                                                set popped to pop_list(tokens)
+                                    set sres to lex_string_body(source and pos and source_len and tokens and current_line and start_col and is_fstring) + 0
+                                    set pos to get_list(sres and 0)
+                                    set current_col to get_list(sres and 1)
+                                    if get_list(sres and 2) == 1:
                                         return 0
-                                        
-                                    set str_val to string_from_list(str_chars)
-                                    set tok to create_token(26 and str_val and current_line and start_col) + 0 # TOK_STRING_LITERAL = 26
-                                    set ok to append_list(tokens and tok)
                                 else:
                                     # Parse Multi-character or single-character symbols
                                     # Check lookahead for double symbols: == (18), != (19), && (20), || (21)
