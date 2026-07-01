@@ -539,6 +539,7 @@ impl Codegen {
         self.func_return_types.insert("async_timeout".to_string(), Type::Int);
         self.func_return_types.insert("cancel_task".to_string(), Type::Int);
         self.func_return_types.insert("sleep_ms".to_string(), Type::Int);
+        self.func_return_types.insert("async_wait_readable".to_string(), Type::Int);
 
         // FFI pointer/byte builtins
         self.func_return_types.insert("str_to_ptr".to_string(), Type::Int);
@@ -4810,6 +4811,48 @@ static long long async_timeout(long long timeout_ms, long long fut_ptr) {
     return fut->value;
 }
 
+/* ── Awaitable async socket-readability ─────────────────────────────────────
+   `await async_wait_readable(fd)` suspends the calling async task until `fd` is
+   readable, letting the event loop run other tasks (e.g. another agent waiting on
+   its own LLM socket) meanwhile. Mirrors sleep_ms: build a future, register a
+   oneshot read-readiness task with the loop, return the future. When fd becomes
+   readable, ep_async_wait_step re-enqueues the task; its step completes the future
+   and wakes whoever awaited it. This is what lets I/O-bound agents run concurrently
+   on ONE thread — no OS threads, no shared-heap GC race. */
+typedef struct { EpFuture* fut; } EpReadReadyArgs;
+static long long ep_read_ready_step(void* r) {
+    EpReadReadyArgs* args = (EpReadReadyArgs*)r;
+    if (args && args->fut) {
+        args->fut->completed = 1;
+        args->fut->value = 1;
+        if (args->fut->waiting_task) {
+            ep_task_enqueue(args->fut->waiting_task);
+            args->fut->waiting_task = NULL;
+        }
+    }
+    return 0;
+}
+long long async_wait_readable(long long fd) {
+    EpFuture* fut = (EpFuture*)malloc(sizeof(EpFuture));
+    fut->completed = 0;
+    fut->value = 0;
+    fut->waiting_task = NULL;
+    fut->chan = 0;
+    { EpGCObject* _go = ep_gc_register(fut, EP_OBJ_STRUCT); if(_go) _go->num_fields = 3; }
+    EpReadReadyArgs* args = (EpReadReadyArgs*)malloc(sizeof(EpReadReadyArgs));
+    args->fut = fut;
+    EpTask* task = (EpTask*)malloc(sizeof(EpTask));
+    task->step = ep_read_ready_step;
+    task->args = args;
+    task->args_size_bytes = sizeof(EpReadReadyArgs);
+    task->fut = NULL;
+    task->state = 0;
+    task->is_cancelled = 0;
+    task->parent = ep_current_task;
+    ep_async_register_read((int)fd, task);
+    return (long long)fut;
+}
+
 typedef struct {
     EpFuture* fut;
 } EpSleepTimerArgs;
@@ -5367,7 +5410,11 @@ static void ep_gc_scan_thread_stacks(void) {
     volatile char _top_marker;
     memset(&_regs, 0, sizeof(_regs));
     setjmp(_regs);   /* spill the collector's own registers onto its stack */
-    ep_thread_local_top = (void*)&_top_marker;
+    /* Publish the LOWEST of our own local addresses as this thread's live top, so the
+       scanned range covers both the stack marker and the register-spill buffer whatever
+       order the compiler laid them out (a missed _regs would drop a register-only root). */
+    { char* _a = (char*)(void*)&_top_marker; char* _b = (char*)(void*)&_regs;
+      ep_thread_local_top = (void*)((_a < _b) ? _a : _b); }
     for (int t = 0; t < ep_num_threads; t++) {
         if (!ep_thread_active[t]) continue;
         if (!ep_thread_tops[t]) continue;
@@ -5449,10 +5496,44 @@ static void ep_gc_mark(void) {
     if (ep_gc_scan_channels_major) ep_gc_scan_channels_major();
 }
 
+/* Conservatively scan the CURRENT thread's own live C stack and mark any YOUNG object it
+   finds. This closes a use-after-free on the frequent minor path: a freshly-allocated
+   argument temporary — e.g. the result of g() while f(g() and h()) is still evaluating
+   h() — lives only on the C stack / in registers and is not yet on the precise shadow
+   stack, so a minor collection triggered mid-expression would otherwise free it. Scanning
+   ONLY the collecting thread's own stack is race-free (no cross-thread read) and cheap
+   (one bounded stack, current thread only). Non-pointer words are harmlessly ignored by
+   ep_gc_table_get; only generation-0 objects are marked. The setjmp spills register-held
+   roots onto the stack so the scan can see them. */
+EP_NO_ASAN
+static void ep_gc_scan_own_stack_minor(void) {
+    jmp_buf _regs;
+    volatile char _marker;
+    memset(&_regs, 0, sizeof(_regs));
+    setjmp(_regs);   /* spill callee-saved registers into _regs, on the stack */
+    void* bottom = ep_thread_local_bottom;
+    if (!bottom) return;
+    /* Start at the LOWEST of our own local addresses so the scanned range covers both
+       the current stack top (_marker) and the register-spill buffer (_regs), regardless
+       of how the compiler ordered these locals on the stack. Missing _regs would drop a
+       root held only in a callee-saved register -> a rare use-after-free. */
+    char* a = (char*)(void*)&_marker;
+    char* b = (char*)(void*)&_regs;
+    char* lo = (a < b) ? a : b;
+    void** start = (void**)lo;
+    void** end = (void**)bottom;
+    if (start > end) { void** tmp = start; start = end; end = tmp; }
+    for (void** cur = start; cur < end; cur++) {
+        void* p = *cur;
+        if (p) ep_gc_mark_object_minor(p);
+    }
+}
+
 static void ep_gc_mark_minor(void) {
-    /* No conservative stack scan on minor collections: precise shadow stacks +
-       the write-barrier remembered set cover young objects, and skipping the
-       scan keeps the frequent minor path fast and free of any cross-thread read. */
+    /* Conservatively scan our OWN live C stack first, to catch freshly-allocated argument
+       temporaries (only on the stack / in registers, not yet on the shadow stack) that a
+       minor collection mid-expression would otherwise free. Own-thread only, so race-free. */
+    ep_gc_scan_own_stack_minor();
     for (int t = 0; t < ep_num_threads; t++) {
         if (!ep_thread_active[t]) continue;
         EpThreadGCState* state = ep_thread_gc_states[t];
