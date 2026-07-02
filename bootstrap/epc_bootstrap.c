@@ -5001,6 +5001,7 @@ long long cg_int_to_str(long long);
 long long escape_string(long long);
 long long join_strings(long long);
 long long create_codegen_state();
+long long type_name_to_code(long long);
 long long is_builtin_c_func(long long, long long);
 long long get_codegen_borrowed_keys(long long);
 long long set_codegen_borrowed_keys(long long, long long);
@@ -8886,10 +8887,13 @@ long long parse_function_async(long long state, long long is_async) {
     long long tok_name = 0;
     long long name = 0;
     long long params = 0;
+    long long ret_type = 0;
     long long next_ret = 0;
     long long dummy = 0;
+    long long ret_tok = 0;
     long long tok_nl = 0;
     long long body = 0;
+    long long fnode = 0;
     long long ret_val = 0;
 
     ep_gc_maybe_collect();
@@ -8898,10 +8902,12 @@ long long parse_function_async(long long state, long long is_async) {
     tok_name = advance_token(state);
     name = get_token_value(tok_name);
     params = (parse_param_list(state) + 0LL);
+    ret_type = (long long)"";
     next_ret = peek_token(state);
     if (get_token_type(next_ret) == 43LL) {
     dummy = advance_token(state);
-    dummy = advance_token(state);
+    ret_tok = advance_token(state);
+    ret_type = get_token_value(ret_tok);
     }
     ok = expect_token_type(state, 22LL);
     tok_nl = peek_token(state);
@@ -8909,7 +8915,9 @@ long long parse_function_async(long long state, long long is_async) {
     dummy = advance_token(state);
     }
     body = (parse_block(state) + 0LL);
-    ret_val = make_node_func(name, params, body, is_async);
+    fnode = (make_node_func(name, params, body, is_async) + 0LL);
+    ok = append_list(fnode, ret_type);
+    ret_val = fnode;
     goto L_cleanup;
 L_cleanup:
     return ret_val;
@@ -11003,12 +11011,43 @@ long long create_codegen_state() {
     ok = append_list(state, (create_list() + 0LL));
     ok = append_list(state, (create_list() + 0LL));
     ok = append_list(state, 0LL);
+    ok = append_list(state, (create_list() + 0LL));
+    ok = append_list(state, (create_list() + 0LL));
+    ok = append_list(state, (create_list() + 0LL));
+    ok = append_list(state, (create_list() + 0LL));
     ret_val = state;
     state = 0;
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
     free_list(state);
+    return ret_val;
+}
+
+long long type_name_to_code(long long tname) {
+    long long t = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&t);
+    ep_gc_maybe_collect();
+
+    t = string_concat(tname, (long long)"");
+    if ((strcmp((char*)(long long)"Str", (char*)t) == 0)) {
+    ret_val = 2LL;
+    goto L_cleanup;
+    }
+    if ((strcmp((char*)(long long)"Float", (char*)t) == 0)) {
+    ret_val = 8LL;
+    goto L_cleanup;
+    }
+    if ((strcmp((char*)(long long)"Bool", (char*)t) == 0)) {
+    ret_val = 7LL;
+    goto L_cleanup;
+    }
+    ret_val = 1LL;
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
     return ret_val;
 }
 
@@ -12278,7 +12317,13 @@ long long gen_statement(long long state, long long stmt, long long var_keys, lon
     long long arm_body = 0;
     long long pat_kind = 0;
     long long kw = 0;
+    long long vp_codes = 0;
+    long long vpk = 0;
+    long long vpv = 0;
+    long long vpk_i = 0;
+    long long vpk_len = 0;
     long long bname = 0;
+    long long bcode = 0;
     long long ab_len = 0;
     long long ab_idx = 0;
     long long var_name = 0;
@@ -12560,6 +12605,17 @@ long long gen_statement(long long state, long long stmt, long long var_keys, lon
     }
     ok = emit(state, line);
     b_len = length_list(bindings);
+    vp_codes = 0LL;
+    vpk = get_list(state, 16LL);
+    vpv = get_list(state, 17LL);
+    vpk_i = 0LL;
+    vpk_len = length_list(vpk);
+    while (vpk_i < vpk_len) {
+    if ((strcmp((char*)string_concat(vname, (long long)""), (char*)get_list(vpk, vpk_i)) == 0)) {
+    vp_codes = get_list(vpv, vpk_i);
+    }
+    vpk_i = (vpk_i + 1LL);
+    }
     b_idx = 0LL;
     while (b_idx < b_len) {
     bname = get_list(bindings, b_idx);
@@ -12569,6 +12625,13 @@ long long gen_statement(long long state, long long stmt, long long var_keys, lon
     line = string_concat(line, cg_int_to_str((b_idx + 1LL)));
     line = string_concat(line, (long long)"];\n");
     ok = emit(state, line);
+    bcode = 1LL;
+    if (vp_codes != 0LL) {
+    if (b_idx < length_list(vp_codes)) {
+    bcode = get_list(vp_codes, b_idx);
+    }
+    }
+    ok = map_put(var_keys, var_values, bname, bcode);
     b_idx = (b_idx + 1LL);
     }
     ab_len = length_list(arm_body);
@@ -12705,10 +12768,19 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     long long variant_name = 0;
     long long alloc_size = 0;
     long long a_idx = 0;
+    long long ok_variant = 0;
+    long long fkeys = 0;
+    long long fvals = 0;
+    long long callee = 0;
+    long long fi = 0;
+    long long fn = 0;
+    long long tid = 0;
+    long long dummy = 0;
+    long long tv = 0;
+    long long r = 0;
     long long params = 0;
     long long body = 0;
     long long cidx = 0;
-    long long dummy = 0;
     long long cname = 0;
     long long raw_names = 0;
     long long okr = 0;
@@ -12787,6 +12859,8 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     ep_gc_push_root(&obj_str);
     ep_gc_push_root(&fval_str);
     ep_gc_push_root(&arg_str);
+    ep_gc_push_root(&tv);
+    ep_gc_push_root(&r);
     ep_gc_push_root(&cname);
     ep_gc_push_root(&raw_names);
     ep_gc_push_root(&captured);
@@ -13254,7 +13328,41 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     if (type == 33LL) {
     inner = get_list(expr, 1LL);
     inner_str = gen_expr(state, inner, var_keys, var_values);
+    ok_variant = (long long)"";
+    if (get_list(inner, 0LL) == 6LL) {
+    fkeys = get_list(state, 14LL);
+    fvals = get_list(state, 15LL);
+    callee = get_list(inner, 1LL);
+    fi = 0LL;
+    fn = length_list(fkeys);
+    while (fi < fn) {
+    if ((strcmp((char*)string_concat(callee, (long long)""), (char*)get_list(fkeys, fi)) == 0)) {
+    ok_variant = get_list(fvals, fi);
+    }
+    fi = (fi + 1LL);
+    }
+    }
+    if (string_length((char*)ok_variant) == 0LL) {
     ret_val = inner_str;
+    goto L_cleanup;
+    }
+    tid = get_list(state, 13LL);
+    dummy = set_list(state, 13LL, (tid + 1LL));
+    tv = string_concat((long long)"_try", cg_int_to_str(tid));
+    r = (long long)"({ long long ";
+    r = string_concat(r, tv);
+    r = string_concat(r, (long long)" = ");
+    r = string_concat(r, inner_str);
+    r = string_concat(r, (long long)"; if (((long long*)");
+    r = string_concat(r, tv);
+    r = string_concat(r, (long long)")[0] != EP_TAG_");
+    r = string_concat(r, ok_variant);
+    r = string_concat(r, (long long)") { ret_val = ");
+    r = string_concat(r, tv);
+    r = string_concat(r, (long long)"; goto L_cleanup; } ((long long*)");
+    r = string_concat(r, tv);
+    r = string_concat(r, (long long)")[1]; })");
+    ret_val = r;
     goto L_cleanup;
     }
     if (type == 34LL) {
@@ -13460,7 +13568,7 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     ret_val = (long long)"";
     goto L_cleanup;
 L_cleanup:
-    ep_gc_pop_roots(36);
+    ep_gc_pop_roots(38);
     free_list(formatted_args);
     free_list(args_str_list);
     free_list(raw_names);
@@ -14534,6 +14642,30 @@ long long generate_c(long long program, long long is_test_mode) {
     long long ts_len = 0;
     long long ts_idx = 0;
     long long tname = 0;
+    long long vpat_keys = 0;
+    long long vpat_vals = 0;
+    long long vp_enums = 0;
+    long long vp_i = 0;
+    long long vp_len = 0;
+    long long vp_variants = 0;
+    long long vpv_i = 0;
+    long long vpv_len = 0;
+    long long vp_var = 0;
+    long long vp_fields = 0;
+    long long vp_codes = 0;
+    long long vpf_i = 0;
+    long long vpf_len = 0;
+    long long try_keys = 0;
+    long long try_vals = 0;
+    long long all_enums = 0;
+    long long try_funcs = 0;
+    long long tf_len = 0;
+    long long tf_i = 0;
+    long long tf = 0;
+    long long rt = 0;
+    long long en_i = 0;
+    long long en_len = 0;
+    long long evs = 0;
     long long constants = 0;
     long long const_n = 0;
     long long ci = 0;
@@ -14617,6 +14749,8 @@ long long generate_c(long long program, long long is_test_mode) {
     ep_gc_push_root(&line);
     ep_gc_push_root(&slot_line);
     ep_gc_push_root(&tag_slots);
+    ep_gc_push_root(&vp_codes);
+    ep_gc_push_root(&rt);
     ep_gc_push_root(&gline);
     ep_gc_push_root(&ml);
     ep_gc_push_root(&gk);
@@ -14726,6 +14860,67 @@ long long generate_c(long long program, long long is_test_mode) {
     ok = emit(state, line);
     ts_idx = (ts_idx + 1LL);
     }
+    }
+    }
+    vpat_keys = get_list(state, 16LL);
+    vpat_vals = get_list(state, 17LL);
+    if (prog_len > 5LL) {
+    vp_enums = get_list(program, 5LL);
+    vp_i = 0LL;
+    vp_len = length_list(vp_enums);
+    while (vp_i < vp_len) {
+    vp_variants = get_list(get_list(vp_enums, vp_i), 2LL);
+    vpv_i = 0LL;
+    vpv_len = length_list(vp_variants);
+    while (vpv_i < vpv_len) {
+    vp_var = get_list(vp_variants, vpv_i);
+    vp_fields = get_list(vp_var, 1LL);
+    {
+        long long tmp_val = create_list();
+        free_list(vp_codes);
+        vp_codes = tmp_val;
+    }
+    vpf_i = 0LL;
+    vpf_len = length_list(vp_fields);
+    while (vpf_i < vpf_len) {
+    ok = append_list(vp_codes, type_name_to_code(get_list(get_list(vp_fields, vpf_i), 1LL)));
+    vpf_i = (vpf_i + 1LL);
+    }
+    ok = append_list(vpat_keys, get_list(vp_var, 0LL));
+    ok = append_list(vpat_vals, vp_codes);
+    vpv_i = (vpv_i + 1LL);
+    }
+    vp_i = (vp_i + 1LL);
+    }
+    }
+    try_keys = get_list(state, 14LL);
+    try_vals = get_list(state, 15LL);
+    if (prog_len > 5LL) {
+    all_enums = get_list(program, 5LL);
+    try_funcs = get_list(program, 3LL);
+    tf_len = length_list(try_funcs);
+    tf_i = 0LL;
+    while (tf_i < tf_len) {
+    tf = get_list(try_funcs, tf_i);
+    if (length_list(tf) > 5LL) {
+    rt = string_concat(get_list(tf, 5LL), (long long)"");
+    if (string_length((char*)rt) > 0LL) {
+    en_i = 0LL;
+    en_len = length_list(all_enums);
+    while (en_i < en_len) {
+    edef = get_list(all_enums, en_i);
+    if ((strcmp((char*)rt, (char*)get_list(edef, 1LL)) == 0)) {
+    evs = get_list(edef, 2LL);
+    if (length_list(evs) > 0LL) {
+    ok = append_list(try_keys, get_list(tf, 1LL));
+    ok = append_list(try_vals, get_list(get_list(evs, 0LL), 0LL));
+    }
+    }
+    en_i = (en_i + 1LL);
+    }
+    }
+    }
+    tf_i = (tf_i + 1LL);
     }
     }
     constants = create_list();
@@ -15029,10 +15224,11 @@ long long generate_c(long long program, long long is_test_mode) {
     ret_val = c_code;
     goto L_cleanup;
 L_cleanup:
-    ep_gc_pop_roots(20);
+    ep_gc_pop_roots(22);
     free_list(state);
     free_list(field_slots);
     free_list(tag_slots);
+    free_list(vp_codes);
     free_list(gk);
     free_list(gv);
     free_list(spawn_list);

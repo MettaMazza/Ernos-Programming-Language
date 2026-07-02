@@ -357,7 +357,22 @@ define create_codegen_state:
     set ok to append_list(state and (create_list() + 0)) # closure_bodies (11): lifted closure C functions, spliced at the marker
     set ok to append_list(state and (create_list() + 0)) # enum_variant_names (12): every declared variant, for bare-variant identifiers
     set ok to append_list(state and 0)                 # closure_index (13): separate counter so closures don't perturb spawn_index
+    set ok to append_list(state and (create_list() + 0)) # try_ok_keys (14): function names returning an enum
+    set ok to append_list(state and (create_list() + 0)) # try_ok_vals (15): that enum's first (Ok) variant name
+    set ok to append_list(state and (create_list() + 0)) # vpat_keys (16): variant name
+    set ok to append_list(state and (create_list() + 0)) # vpat_vals (17): list of field type-codes for that variant
     return state
+
+# Map an ErnosPlain type-annotation name to the codegen's coarse type code.
+define type_name_to_code with tname:
+    set t to string_concat(tname and "")
+    if "Str" equals t:
+        return 2
+    if "Float" equals t:
+        return 8
+    if "Bool" equals t:
+        return 7
+    return 1
 
 # A user/imported .ep function whose name matches a C-runtime builtin must NOT
 # be emitted — the C builtin wins (mirrors the Rust compiler's builtin_c_funcs
@@ -1397,6 +1412,16 @@ define gen_statement with state and stmt and var_keys and var_values:
             set ok to emit(state and line)
             # Extract bindings
             set b_len to length_list(bindings)
+            # Look up this variant's field type-codes so bindings are typed.
+            set vp_codes to 0
+            set vpk to get_list(state and 16)
+            set vpv to get_list(state and 17)
+            set vpk_i to 0
+            set vpk_len to length_list(vpk)
+            repeat while vpk_i < vpk_len:
+                if string_concat(vname and "") equals get_list(vpk and vpk_i):
+                    set vp_codes to get_list(vpv and vpk_i)
+                set vpk_i to vpk_i + 1
             set b_idx to 0
             repeat while b_idx < b_len:
                 set bname to get_list(bindings and b_idx)
@@ -1406,6 +1431,12 @@ define gen_statement with state and stmt and var_keys and var_values:
                 set line to string_concat(line and cg_int_to_str(b_idx + 1))
                 set line to string_concat(line and "];\n")
                 set ok to emit(state and line)
+                # Register the binding's type so display/uses format correctly.
+                set bcode to 1
+                if vp_codes != 0:
+                    if b_idx < length_list(vp_codes):
+                        set bcode to get_list(vp_codes and b_idx)
+                set ok to map_put(var_keys and var_values and bname and bcode)
                 set b_idx to b_idx + 1
             # Emit arm body
             set ab_len to length_list(arm_body)
@@ -1863,7 +1894,40 @@ define gen_expr with state and expr and var_keys and var_values:
     if type == 33: # NODE_TRY
         set inner to get_list(expr and 1)
         set inner_str to gen_expr(state and inner and var_keys and var_values)
-        return inner_str
+        # If the inner expression is a call to a function returning a Result-style
+        # enum, unwrap it: on a non-Ok tag, propagate (ret_val = enum; goto
+        # L_cleanup); otherwise yield the Ok payload (_v[1]). Convention: first
+        # variant is the success/Ok variant (mirrors the Rust compiler).
+        set ok_variant to ""
+        if get_list(inner and 0) == 6: # NODE_CALL
+            set fkeys to get_list(state and 14)
+            set fvals to get_list(state and 15)
+            set callee to get_list(inner and 1)
+            set fi to 0
+            set fn to length_list(fkeys)
+            repeat while fi < fn:
+                if string_concat(callee and "") equals get_list(fkeys and fi):
+                    set ok_variant to get_list(fvals and fi)
+                set fi to fi + 1
+        if string_length(ok_variant) == 0:
+            return inner_str
+        set tid to get_list(state and 13)
+        set dummy to set_list(state and 13 and tid + 1)
+        set tv to string_concat("_try" and cg_int_to_str(tid))
+        set r to "({ long long "
+        set r to string_concat(r and tv)
+        set r to string_concat(r and " = ")
+        set r to string_concat(r and inner_str)
+        set r to string_concat(r and "; if (((long long*)")
+        set r to string_concat(r and tv)
+        set r to string_concat(r and ")[0] != EP_TAG_")
+        set r to string_concat(r and ok_variant)
+        set r to string_concat(r and ") { ret_val = ")
+        set r to string_concat(r and tv)
+        set r to string_concat(r and "; goto L_cleanup; } ((long long*)")
+        set r to string_concat(r and tv)
+        set r to string_concat(r and ")[1]; })")
+        return r
 
     if type == 34: # NODE_CLOSURE
         # Mirrors the Rust compiler's EpClosure ABI:
@@ -2709,6 +2773,58 @@ define generate_c with program and is_test_mode:
                 set ok to emit(state and line)
                 set ts_idx to ts_idx + 1
     
+    # Build the variant -> field-type-codes map so `check` bindings get typed
+    # (e.g. an Error(message as Str) payload displays as %s, not %lld).
+    set vpat_keys to get_list(state and 16)
+    set vpat_vals to get_list(state and 17)
+    if prog_len > 5:
+        set vp_enums to get_list(program and 5)
+        set vp_i to 0
+        set vp_len to length_list(vp_enums)
+        repeat while vp_i < vp_len:
+            set vp_variants to get_list(get_list(vp_enums and vp_i) and 2)
+            set vpv_i to 0
+            set vpv_len to length_list(vp_variants)
+            repeat while vpv_i < vpv_len:
+                set vp_var to get_list(vp_variants and vpv_i)
+                set vp_fields to get_list(vp_var and 1)
+                set vp_codes to create_list()
+                set vpf_i to 0
+                set vpf_len to length_list(vp_fields)
+                repeat while vpf_i < vpf_len:
+                    set ok to append_list(vp_codes and type_name_to_code(get_list(get_list(vp_fields and vpf_i) and 1)))
+                    set vpf_i to vpf_i + 1
+                set ok to append_list(vpat_keys and get_list(vp_var and 0))
+                set ok to append_list(vpat_vals and vp_codes)
+                set vpv_i to vpv_i + 1
+            set vp_i to vp_i + 1
+
+    # Build the try-unwrap map: function name -> its return enum's first (Ok)
+    # variant, for every function whose declared return type is an enum.
+    set try_keys to get_list(state and 14)
+    set try_vals to get_list(state and 15)
+    if prog_len > 5:
+        set all_enums to get_list(program and 5)
+        set try_funcs to get_list(program and 3)
+        set tf_len to length_list(try_funcs)
+        set tf_i to 0
+        repeat while tf_i < tf_len:
+            set tf to get_list(try_funcs and tf_i)
+            if length_list(tf) > 5:
+                set rt to string_concat(get_list(tf and 5) and "")
+                if string_length(rt) > 0:
+                    set en_i to 0
+                    set en_len to length_list(all_enums)
+                    repeat while en_i < en_len:
+                        set edef to get_list(all_enums and en_i)
+                        if rt equals get_list(edef and 1):
+                            set evs to get_list(edef and 2)
+                            if length_list(evs) > 0:
+                                set ok to append_list(try_keys and get_list(tf and 1))
+                                set ok to append_list(try_vals and get_list(get_list(evs and 0) and 0))
+                        set en_i to en_i + 1
+            set tf_i to tf_i + 1
+
     # Emit top-level constant globals (file scope), their GC mark functions, and
     # an __ep_init_constants() that runs their initializers. Always emit the init
     # function (empty if no globals) so main can unconditionally call it.

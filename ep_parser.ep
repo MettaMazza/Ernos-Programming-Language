@@ -838,22 +838,28 @@ define parse_function_async with state and is_async:
     set name to get_token_value(tok_name)
     
     set params to parse_param_list(state) + 0
-        
-    # Skip optional 'returning Type' clause
+
+    # Optional 'returning Type' clause — capture the type name (index 5 on the
+    # func node) so codegen can map a function to its declared return enum
+    # (used by `try`).
+    set ret_type to ""
     set next_ret to peek_token(state)
     if get_token_type(next_ret) == 43: # returning
         set dummy to advance_token(state) # consume "returning"
-        set dummy to advance_token(state) # consume the type name
-        
+        set ret_tok to advance_token(state) # the type name
+        set ret_type to get_token_value(ret_tok)
+
     set ok to expect_token_type(state and 22) # :
-    
+
     set tok_nl to peek_token(state)
     if get_token_type(tok_nl) == 28: # Newline
         set dummy to advance_token(state)
-        
+
     set body to parse_block(state) + 0
-    
-    return make_node_func(name and params and body and is_async)
+
+    set fnode to make_node_func(name and params and body and is_async) + 0
+    set ok to append_list(fnode and ret_type) # index 5: declared return type name
+    return fnode
 
 define parse_block with state:
     set ok to expect_token_type(state and 29) # INDENT
