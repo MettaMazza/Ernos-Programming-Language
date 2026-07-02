@@ -5178,6 +5178,8 @@ L_cleanup:
 }
 
 long long resolve_import_path(long long current_file, long long import_path) {
+    long long p = 0;
+    long long is_std = 0;
     long long std_path = 0;
     long long std_path_ep = 0;
     long long dir = 0;
@@ -5186,13 +5188,22 @@ long long resolve_import_path(long long current_file, long long import_path) {
     long long ext = 0;
     long long ret_val = 0;
 
+    ep_gc_push_root(&p);
     ep_gc_push_root(&std_path);
     ep_gc_push_root(&std_path_ep);
     ep_gc_push_root(&resolved);
     ep_gc_push_root(&ext);
     ep_gc_maybe_collect();
 
-    if ((((((((((((strcmp((char*)(long long)"math", (char*)import_path) == 0) || (strcmp((char*)(long long)"hash", (char*)import_path) == 0)) || (strcmp((char*)(long long)"net", (char*)import_path) == 0)) || (strcmp((char*)(long long)"json", (char*)import_path) == 0)) || (strcmp((char*)(long long)"string", (char*)import_path) == 0)) || (strcmp((char*)(long long)"sql", (char*)import_path) == 0)) || (strcmp((char*)(long long)"gui", (char*)import_path) == 0)) || (strcmp((char*)(long long)"crypto", (char*)import_path) == 0)) || (strcmp((char*)(long long)"fs", (char*)import_path) == 0)) || (strcmp((char*)(long long)"http", (char*)import_path) == 0)) || (strcmp((char*)(long long)"collections", (char*)import_path) == 0))) {
+    p = string_concat(import_path, (long long)"");
+    is_std = 0LL;
+    if ((((((((((((strcmp((char*)(long long)"math", (char*)p) == 0) || (strcmp((char*)(long long)"hash", (char*)p) == 0)) || (strcmp((char*)(long long)"net", (char*)p) == 0)) || (strcmp((char*)(long long)"json", (char*)p) == 0)) || (strcmp((char*)(long long)"string", (char*)p) == 0)) || (strcmp((char*)(long long)"sql", (char*)p) == 0)) || (strcmp((char*)(long long)"gui", (char*)p) == 0)) || (strcmp((char*)(long long)"crypto", (char*)p) == 0)) || (strcmp((char*)(long long)"fs", (char*)p) == 0)) || (strcmp((char*)(long long)"http", (char*)p) == 0)) || (strcmp((char*)(long long)"collections", (char*)p) == 0))) {
+    is_std = 1LL;
+    }
+    if ((((((((((((((strcmp((char*)(long long)"sort", (char*)p) == 0) || (strcmp((char*)(long long)"datetime", (char*)p) == 0)) || (strcmp((char*)(long long)"os", (char*)p) == 0)) || (strcmp((char*)(long long)"test", (char*)p) == 0)) || (strcmp((char*)(long long)"log", (char*)p) == 0)) || (strcmp((char*)(long long)"sync", (char*)p) == 0)) || (strcmp((char*)(long long)"regex", (char*)p) == 0)) || (strcmp((char*)(long long)"csv", (char*)p) == 0)) || (strcmp((char*)(long long)"websocket", (char*)p) == 0)) || (strcmp((char*)(long long)"static_server", (char*)p) == 0)) || (strcmp((char*)(long long)"toml", (char*)p) == 0)) || (strcmp((char*)(long long)"select", (char*)p) == 0)) || (strcmp((char*)(long long)"structured", (char*)p) == 0))) {
+    is_std = 1LL;
+    }
+    if (is_std == 1LL) {
     std_path = string_concat((long long)"stdlib/", import_path);
     std_path_ep = string_concat(std_path, (long long)".ep");
     ret_val = std_path_ep;
@@ -5211,7 +5222,7 @@ long long resolve_import_path(long long current_file, long long import_path) {
     ret_val = string_concat(resolved, (long long)".ep");
     goto L_cleanup;
 L_cleanup:
-    ep_gc_pop_roots(4);
+    ep_gc_pop_roots(5);
     return ret_val;
 }
 

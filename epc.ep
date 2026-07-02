@@ -54,7 +54,15 @@ define contains_string with list and s:
     return 0
 
 define resolve_import_path with current_file and import_path:
-    if "math" equals import_path || "hash" equals import_path || "net" equals import_path || "json" equals import_path || "string" equals import_path || "sql" equals import_path || "gui" equals import_path || "crypto" equals import_path || "fs" equals import_path || "http" equals import_path || "collections" equals import_path:
+    # Bare stdlib module names resolve to stdlib/<name>.ep (matches the Rust
+    # driver's stdlib_modules list).
+    set p to string_concat(import_path and "")
+    set is_std to 0
+    if "math" equals p || "hash" equals p || "net" equals p || "json" equals p || "string" equals p || "sql" equals p || "gui" equals p || "crypto" equals p || "fs" equals p || "http" equals p || "collections" equals p:
+        set is_std to 1
+    if "sort" equals p || "datetime" equals p || "os" equals p || "test" equals p || "log" equals p || "sync" equals p || "regex" equals p || "csv" equals p || "websocket" equals p || "static_server" equals p || "toml" equals p || "select" equals p || "structured" equals p:
+        set is_std to 1
+    if is_std == 1:
         set std_path to string_concat("stdlib/" and import_path)
         set std_path_ep to string_concat(std_path and ".ep")
         return std_path_ep
