@@ -5482,9 +5482,6 @@ long long parse_all_modules(long long current_file, long long parsed_files, long
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(8);
-    free_list(state);
-    free_list(mod_funcs);
-    free_list(mod_externals);
     return ret_val;
 }
 
@@ -5747,18 +5744,6 @@ long long _main() {
     }
 L_cleanup:
     ep_gc_pop_roots(20);
-    free_list(all_functions);
-    free_list(all_externals);
-    free_list(all_struct_defs);
-    free_list(all_enum_defs);
-    free_list(all_method_defs);
-    free_list(all_trait_defs);
-    free_list(all_trait_impls);
-    free_list(all_constants);
-    free_list(parsed_files);
-    free_list(f_names);
-    free_list(empty_imports);
-    free_list(program_ast);
     return ret_val;
 }
 
@@ -6179,8 +6164,6 @@ long long lex_string_body(long long source, long long pos0, long long source_len
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(6);
-    free_list(str_chars);
-    free_list(expr_chars);
     return ret_val;
 }
 
@@ -6959,7 +6942,6 @@ long long tokenize_source(long long source) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(3);
-    free_list(indent_stack);
     return ret_val;
 }
 
@@ -10054,7 +10036,6 @@ long long check_program(long long program) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(errs);
     return ret_val;
 }
 
@@ -10658,7 +10639,6 @@ long long string_concat(long long s1, long long s2) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(2);
-    free_list(lst);
     return ret_val;
 }
 
@@ -10737,7 +10717,6 @@ long long cg_sanitize_name(long long name) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(2);
-    free_list(kws);
     return ret_val;
 }
 
@@ -10835,8 +10814,6 @@ long long cg_int_to_str(long long n) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(3);
-    free_list(lst);
-    free_list(digits);
     return ret_val;
 }
 
@@ -10895,7 +10872,6 @@ long long escape_string(long long s) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(2);
-    free_list(lst);
     return ret_val;
 }
 
@@ -10936,7 +10912,6 @@ long long join_strings(long long lines) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(2);
-    free_list(lst);
     return ret_val;
 }
 
@@ -11995,7 +11970,6 @@ long long var_returned_in_stmts(long long name, long long stmts) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(ids);
     return ret_val;
 }
 
@@ -12039,8 +12013,6 @@ long long gen_function(long long state, long long func) {
     long long stmt = 0;
     long long gc_count_str = 0;
     long long root_pop = 0;
-    long long is_borrowed = 0;
-    long long cleanup_line = 0;
     long long ret_val = 0;
 
     ep_gc_push_root(&struct_decl);
@@ -12051,7 +12023,6 @@ long long gen_function(long long state, long long func) {
     ep_gc_push_root(&decl);
     ep_gc_push_root(&root_line);
     ep_gc_push_root(&root_pop);
-    ep_gc_push_root(&cleanup_line);
     ep_gc_maybe_collect();
 
     name = get_list(func, 1LL);
@@ -12285,28 +12256,13 @@ long long gen_function(long long state, long long func) {
     }
     p_i = (p_i + 1LL);
     }
-    if (is_param == 0LL) {
-    is_global = is_global_var(var_name);
-    is_borrowed = map_get(borrowed_keys, borrowed_values, var_name);
-    if ((is_global == 0LL && is_borrowed == 0LL)) {
-    t = map_get(var_types_keys, var_types_values, var_name);
-    if (t == 4LL) {
-    if (var_returned_in_stmts(var_name, body) == 0LL) {
-    cleanup_line = (long long)"    free_list(";
-    cleanup_line = string_concat(cleanup_line, var_name);
-    cleanup_line = string_concat(cleanup_line, (long long)");\n");
-    ok = emit(state, cleanup_line);
-    }
-    }
-    }
-    }
     idx = (idx + 1LL);
     }
     ok = emit(state, (long long)"    return ret_val;\n}\n\n");
     ret_val = 0LL;
     goto L_cleanup;
 L_cleanup:
-    ep_gc_pop_roots(9);
+    ep_gc_pop_roots(8);
     return ret_val;
 }
 
@@ -13645,14 +13601,6 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(38);
-    free_list(formatted_args);
-    free_list(args_str_list);
-    free_list(raw_names);
-    free_list(captured);
-    free_list(c_keys);
-    free_list(c_values);
-    free_list(b_keys);
-    free_list(b_values);
     return ret_val;
 }
 
@@ -13808,7 +13756,6 @@ long long get_c_test_main_source(long long program) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(3);
-    free_list(test_cases);
     return ret_val;
 }
 
@@ -14577,20 +14524,6 @@ long long check_safety_stmts(long long func, long long stmts, long long var_keys
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(14);
-    free_list(then_state_keys);
-    free_list(then_state_values);
-    free_list(then_borrow_keys);
-    free_list(then_borrow_values);
-    free_list(then_count_keys);
-    free_list(then_count_values);
-    free_list(else_state_keys);
-    free_list(else_state_values);
-    free_list(else_borrow_keys);
-    free_list(else_borrow_values);
-    free_list(else_count_keys);
-    free_list(else_count_values);
-    free_list(start_state_keys);
-    free_list(start_state_values);
     return ret_val;
 }
 
@@ -15310,14 +15243,6 @@ long long generate_c(long long program, long long is_test_mode) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(22);
-    free_list(state);
-    free_list(field_slots);
-    free_list(tag_slots);
-    free_list(vp_codes);
-    free_list(gk);
-    free_list(gv);
-    free_list(spawn_list);
-    free_list(emitted_methods);
     return ret_val;
 }
 

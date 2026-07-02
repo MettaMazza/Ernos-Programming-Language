@@ -1178,22 +1178,16 @@ define gen_function with state and func:
                 set is_param to 1
             set p_i to p_i + 1
             
-        if is_param == 0:
-            set is_global to is_global_var(var_name)
-            set is_borrowed to map_get(borrowed_keys and borrowed_values and var_name)
-            if is_global == 0 && is_borrowed == 0:
-                set t to map_get(var_types_keys and var_types_values and var_name)
-                if t == 4: # TYPE_LIST
-                    # Skip lists that escape via a return (freeing them would
-                    # free data referenced by the returned value). The GC
-                    # reclaims them.
-                    if var_returned_in_stmts(var_name and body) == 0:
-                        set cleanup_line to "    free_list("
-                        set cleanup_line to string_concat(cleanup_line and var_name)
-                        set cleanup_line to string_concat(cleanup_line and ");\n")
-                        set ok to emit(state and cleanup_line)
         set idx to idx + 1
-        
+
+    # NOTE: local lists are intentionally NOT free_list'd at cleanup. A list can
+    # escape not only via a direct `return` but transitively — appended into
+    # another list / stored into a struct that is returned (e.g. each `row`
+    # pushed into the returned `rows`). Freeing such a list corrupts the
+    # returned value (use-after-free). The generational GC reclaims unreachable
+    # lists after the roots are popped, so relying on it is both correct and
+    # simpler than a full transitive escape analysis.
+
     set ok to emit(state and "    return ret_val;\n}\n\n")
     return 0
 
