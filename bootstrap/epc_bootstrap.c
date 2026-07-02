@@ -14176,9 +14176,6 @@ long long check_safety_stmts(long long func, long long stmts, long long var_keys
     ret_val = 0LL;
     goto L_cleanup;
     }
-    if ((src_t != 5LL && src_t != 6LL)) {
-    ok = map_put(state_keys, state_values, src, 2LL);
-    }
     }
     }
     ok = map_put(state_keys, state_values, name, 1LL);

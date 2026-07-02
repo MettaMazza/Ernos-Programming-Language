@@ -2430,9 +2430,13 @@ define check_safety_stmts with func and stmts and var_keys and var_values and st
                                 display "Safety Error: Cannot move variable because it is currently borrowed:"
                                 set ok to display_string(src)
                                 return 0
-                                
-                            if src_t != 5 && src_t != 6:
-                                set ok to map_put(state_keys and state_values and src and 2)
+
+                            # `set x to y` is aliasing, not a move: both names
+                            # safely reference the same GC-managed object (the
+                            # reference compiler permits the later use of y). Do
+                            # NOT mark src as moved. (Ownership transfer that
+                            # matters — send/spawn across threads — is handled
+                            # separately.)
                     set ok to map_put(state_keys and state_values and name and 1)
                 
         if type == 16: # NODE_SEND
