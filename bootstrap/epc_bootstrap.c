@@ -9028,6 +9028,7 @@ long long parse_match_statement(long long state) {
     long long tok_t = 0;
     long long variant_tok = 0;
     long long variant_name = 0;
+    long long pat_kind = 0;
     long long bindings = 0;
     long long next = 0;
     long long bind_tok = 0;
@@ -9060,6 +9061,7 @@ long long parse_match_statement(long long state) {
     dummy = advance_token(state);
     variant_tok = advance_token(state);
     variant_name = get_token_value(variant_tok);
+    pat_kind = get_token_type(variant_tok);
     bindings = (create_list() + 0LL);
     next = peek_token(state);
     if (get_token_type(next) == 10LL) {
@@ -9085,6 +9087,7 @@ long long parse_match_statement(long long state) {
     ok = append_list(arm_node, variant_name);
     ok = append_list(arm_node, bindings);
     ok = append_list(arm_node, arm_body);
+    ok = append_list(arm_node, pat_kind);
     ok = append_list(arms, arm_node);
     } else {
     dummy = advance_token(state);
@@ -12130,6 +12133,7 @@ long long gen_statement(long long state, long long stmt, long long var_keys, lon
     long long vname = 0;
     long long bindings = 0;
     long long arm_body = 0;
+    long long pat_kind = 0;
     long long kw = 0;
     long long bname = 0;
     long long ab_len = 0;
@@ -12379,7 +12383,6 @@ long long gen_statement(long long state, long long stmt, long long var_keys, lon
     line = string_concat(line, expr_str);
     line = string_concat(line, (long long)";\n");
     ok = emit(state, line);
-    ok = emit(state, (long long)"        long long _match_tag = ((long long*)_match_val)[0];\n");
     arm_len = length_list(arms);
     arm_idx = 0LL;
     while (arm_idx < arm_len) {
@@ -12387,15 +12390,31 @@ long long gen_statement(long long state, long long stmt, long long var_keys, lon
     vname = get_list(arm, 0LL);
     bindings = get_list(arm, 1LL);
     arm_body = get_list(arm, 2LL);
+    pat_kind = 0LL;
+    if (length_list(arm) > 3LL) {
+    pat_kind = get_list(arm, 3LL);
+    }
     kw = (long long)"if";
     if (arm_idx > 0LL) {
     kw = (long long)"} else if";
     }
     line = (long long)"        ";
     line = string_concat(line, kw);
-    line = string_concat(line, (long long)" (_match_tag == EP_TAG_");
+    if (pat_kind == 26LL) {
+    line = string_concat(line, (long long)" (strcmp((char*)_match_val, \"");
+    line = string_concat(line, escape_string(vname));
+    line = string_concat(line, (long long)"\") == 0) {\n");
+    } else {
+    if (pat_kind == 25LL) {
+    line = string_concat(line, (long long)" (_match_val == ");
+    line = string_concat(line, vname);
+    line = string_concat(line, (long long)"LL) {\n");
+    } else {
+    line = string_concat(line, (long long)" (((long long*)_match_val)[0] == EP_TAG_");
     line = string_concat(line, vname);
     line = string_concat(line, (long long)") {\n");
+    }
+    }
     ok = emit(state, line);
     b_len = length_list(bindings);
     b_idx = 0LL;

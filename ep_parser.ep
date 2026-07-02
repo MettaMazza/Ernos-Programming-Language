@@ -1040,6 +1040,8 @@ define parse_match_statement with state:
                     set dummy to advance_token(state)
                     set variant_tok to advance_token(state)
                     set variant_name to get_token_value(variant_tok)
+                    # Pattern kind: 26=string literal, 25=int literal, else variant.
+                    set pat_kind to get_token_type(variant_tok)
                     set bindings to create_list() + 0
                     set next to peek_token(state)
                     if get_token_type(next) == 10: # with
@@ -1062,6 +1064,7 @@ define parse_match_statement with state:
                     set ok to append_list(arm_node and variant_name)
                     set ok to append_list(arm_node and bindings)
                     set ok to append_list(arm_node and arm_body)
+                    set ok to append_list(arm_node and pat_kind)
                     set ok to append_list(arms and arm_node)
                 else:
                     set dummy to advance_token(state)

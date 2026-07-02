@@ -1365,7 +1365,6 @@ define gen_statement with state and stmt and var_keys and var_values:
         set line to string_concat(line and expr_str)
         set line to string_concat(line and ";\n")
         set ok to emit(state and line)
-        set ok to emit(state and "        long long _match_tag = ((long long*)_match_val)[0];\n")
         set arm_len to length_list(arms)
         set arm_idx to 0
         repeat while arm_idx < arm_len:
@@ -1373,14 +1372,27 @@ define gen_statement with state and stmt and var_keys and var_values:
             set vname to get_list(arm and 0)
             set bindings to get_list(arm and 1)
             set arm_body to get_list(arm and 2)
+            set pat_kind to 0
+            if length_list(arm) > 3:
+                set pat_kind to get_list(arm and 3)
             set kw to "if"
             if arm_idx > 0:
                 set kw to "} else if"
             set line to "        "
             set line to string_concat(line and kw)
-            set line to string_concat(line and " (_match_tag == EP_TAG_")
-            set line to string_concat(line and vname)
-            set line to string_concat(line and ") {\n")
+            if pat_kind == 26: # string literal pattern -> strcmp
+                set line to string_concat(line and " (strcmp((char*)_match_val, \"")
+                set line to string_concat(line and escape_string(vname))
+                set line to string_concat(line and "\") == 0) {\n")
+            else:
+                if pat_kind == 25: # integer literal pattern -> equality
+                    set line to string_concat(line and " (_match_val == ")
+                    set line to string_concat(line and vname)
+                    set line to string_concat(line and "LL) {\n")
+                else: # enum variant pattern -> tag comparison
+                    set line to string_concat(line and " (((long long*)_match_val)[0] == EP_TAG_")
+                    set line to string_concat(line and vname)
+                    set line to string_concat(line and ") {\n")
             set ok to emit(state and line)
             # Extract bindings
             set b_len to length_list(bindings)
