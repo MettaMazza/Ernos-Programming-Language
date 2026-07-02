@@ -362,7 +362,104 @@ define create_codegen_state:
     set ok to append_list(state and (create_list() + 0)) # vpat_keys (16): variant name
     set ok to append_list(state and (create_list() + 0)) # vpat_vals (17): list of field type-codes for that variant
     set ok to append_list(state and (create_list() + 0)) # iter_structs (18): struct names implementing the Iterator trait
+    set ok to append_list(state and 0)                 # is_async (19): 1 while emitting an async function's step body
+    set ok to append_list(state and 0)                 # await_counter (20): running await index within the current async fn
+    set ok to append_list(state and (create_list() + 0)) # async_locals (21): names rewritten to args-> in the step body
     return state
+
+# Count await expressions in a statement list / expression (each becomes a
+# state in the coroutine step machine, with a persisted awaited_fut_N slot).
+define count_awaits_expr with expr:
+    if expr == 0:
+        return 0
+    set t to get_list(expr and 0)
+    if t == 21: # NODE_AWAIT
+        return 1 + count_awaits_expr(get_list(expr and 1))
+    if t == 4 || t == 5 || t == 14: # BINARY/COMP/LOGICAL
+        return count_awaits_expr(get_list(expr and 1)) + count_awaits_expr(get_list(expr and 3))
+    if t == 20 || t == 32 || t == 33 || t == 18: # BORROW/NOT/TRY/RECEIVE
+        return count_awaits_expr(get_list(expr and 1))
+    if t == 6: # CALL
+        set args to get_list(expr and 2)
+        set c to 0
+        set i to 0
+        repeat while i < length_list(args):
+            set c to c + count_awaits_expr(get_list(args and i))
+            set i to i + 1
+        return c
+    return 0
+
+define count_awaits_stmts with stmts:
+    set c to 0
+    set i to 0
+    repeat while i < length_list(stmts):
+        set stmt to get_list(stmts and i)
+        set t to get_list(stmt and 0)
+        if t == 7: # SET
+            set c to c + count_awaits_expr(get_list(stmt and 2))
+        if t == 8 || t == 9 || t == 36: # RETURN/DISPLAY/EXPR_STMT
+            set c to c + count_awaits_expr(get_list(stmt and 1))
+        if t == 10: # IF
+            set c to c + count_awaits_expr(get_list(stmt and 1))
+            set c to c + count_awaits_stmts(get_list(stmt and 2))
+            set eb to get_list(stmt and 3)
+            if eb != 0:
+                set c to c + count_awaits_stmts(eb)
+        if t == 11: # WHILE
+            set c to c + count_awaits_expr(get_list(stmt and 1))
+            set c to c + count_awaits_stmts(get_list(stmt and 2))
+        if t == 28: # FOR_EACH
+            set c to c + count_awaits_stmts(get_list(stmt and 3))
+        set i to i + 1
+    return c
+
+# Emit the coroutine yield boilerplate for each await in an expression, in
+# evaluation order, advancing the await counter (state slot 20). Mirrors the
+# Rust emit_yields_for_expr. `case N:` resumes here once the awaited future
+# completes.
+define emit_async_yields_expr with state and expr and var_keys and var_values:
+    if expr == 0:
+        return 0
+    set t to get_list(expr and 0)
+    if t == 21: # NODE_AWAIT
+        set ok to emit_async_yields_expr(state and get_list(expr and 1) and var_keys and var_values)
+        set n to get_list(state and 20) + 1
+        set ok to set_list(state and 20 and n)
+        set ns to cg_int_to_str(n)
+        set inner_str to gen_expr(state and get_list(expr and 1) and var_keys and var_values)
+        set line to "            { EpFuture* _f = (EpFuture*)("
+        set line to string_concat(line and inner_str)
+        set line to string_concat(line and "); args->awaited_fut_")
+        set line to string_concat(line and ns)
+        set line to string_concat(line and " = _f; if (_f && !_f->completed) { args->state = ")
+        set line to string_concat(line and ns)
+        set line to string_concat(line and "; _f->waiting_task = ep_current_task; return -999999; } }\n            case ")
+        set line to string_concat(line and ns)
+        set line to string_concat(line and ":\n")
+        set ok to emit(state and line)
+        return 0
+    if t == 4 || t == 5 || t == 14:
+        set ok to emit_async_yields_expr(state and get_list(expr and 1) and var_keys and var_values)
+        set ok to emit_async_yields_expr(state and get_list(expr and 3) and var_keys and var_values)
+        return 0
+    if t == 20 || t == 32 || t == 33 || t == 18:
+        return emit_async_yields_expr(state and get_list(expr and 1) and var_keys and var_values)
+    if t == 6: # CALL
+        set args to get_list(expr and 2)
+        set i to 0
+        repeat while i < length_list(args):
+            set ok to emit_async_yields_expr(state and get_list(args and i) and var_keys and var_values)
+            set i to i + 1
+        return 0
+    return 0
+
+define emit_async_yields_stmt with state and stmt and var_keys and var_values:
+    set t to get_list(stmt and 0)
+    if t == 7: # SET
+        return emit_async_yields_expr(state and get_list(stmt and 2) and var_keys and var_values)
+    if t == 8 || t == 9 || t == 36: # RETURN/DISPLAY/EXPR_STMT
+        return emit_async_yields_expr(state and get_list(stmt and 1) and var_keys and var_values)
+    return 0
 
 # Map an ErnosPlain type-annotation name to the codegen's coarse type code.
 define type_name_to_code with tname:
@@ -977,101 +1074,110 @@ define gen_function with state and func:
     set ok to collect_var_types(state and body and var_types_keys and var_types_values)
     
     if is_async == 1:
-        # 1. Thread argument struct
-        set struct_decl to "typedef struct {\n    EpFuture* fut;\n"
-        set j to 0
-        repeat while j < p_len:
-            set struct_decl to string_concat(struct_decl and "    long long arg")
-            set struct_decl to string_concat(struct_decl and cg_int_to_str(j))
-            set struct_decl to string_concat(struct_decl and ";\n")
-            set j to j + 1
-        if p_len == 0:
-            set struct_decl to string_concat(struct_decl and "    int dummy;\n")
-        set struct_decl to string_concat(struct_decl and "} ")
-        set struct_decl to string_concat(struct_decl and get_fn_c_name(func))
-        set struct_decl to string_concat(struct_decl and "_async_args;\n\n")
-        set ok to emit(state and struct_decl)
-        
-        # 2. Thread wrapper function
-        set wrap_fn to "void* "
-        set wrap_fn to string_concat(wrap_fn and get_fn_c_name(func))
-        set wrap_fn to string_concat(wrap_fn and "_async_wrapper(void* r) {\n")
-        set wrap_fn to string_concat(wrap_fn and "    int stack_dummy;\n")
-        set wrap_fn to string_concat(wrap_fn and "    ep_gc_register_thread(&stack_dummy);\n")
-        set wrap_fn to string_concat(wrap_fn and "    ")
-        set wrap_fn to string_concat(wrap_fn and get_fn_c_name(func))
-        set wrap_fn to string_concat(wrap_fn and "_async_args* args = (")
-        set wrap_fn to string_concat(wrap_fn and get_fn_c_name(func))
-        set wrap_fn to string_concat(wrap_fn and "_async_args*)r;\n")
-        set wrap_fn to string_concat(wrap_fn and "    long long res = ")
-        set wrap_fn to string_concat(wrap_fn and get_fn_c_name(func))
-        set wrap_fn to string_concat(wrap_fn and "_impl(")
-        set j to 0
-        repeat while j < p_len:
-            set wrap_fn to string_concat(wrap_fn and "args->arg")
-            set wrap_fn to string_concat(wrap_fn and cg_int_to_str(j))
-            if j < p_len - 1:
-                set wrap_fn to string_concat(wrap_fn and ", ")
-            set j to j + 1
-        set wrap_fn to string_concat(wrap_fn and ");\n")
-        set wrap_fn to string_concat(wrap_fn and "    args->fut->value = res;\n")
-        set wrap_fn to string_concat(wrap_fn and "    args->fut->completed = 1;\n")
-        set wrap_fn to string_concat(wrap_fn and "    send_channel(args->fut->chan, res);\n")
-        set wrap_fn to string_concat(wrap_fn and "    free(args);\n")
-        set wrap_fn to string_concat(wrap_fn and "    ep_gc_unregister_thread();\n")
-        set wrap_fn to string_concat(wrap_fn and "    return NULL;\n")
-        set wrap_fn to string_concat(wrap_fn and "}\n\n")
-        set ok to emit(state and wrap_fn)
-        
-        # 3. Public wrapper function
-        set pub_fn to "long long "
-        set pub_fn to string_concat(pub_fn and get_fn_c_name(func))
-        set pub_fn to string_concat(pub_fn and "(")
-        set j to 0
-        repeat while j < p_len:
-            set p_node to get_list(params and j)
-            set p_name to get_list(p_node and 0)
-            set pub_fn to string_concat(pub_fn and "long long ")
-            set pub_fn to string_concat(pub_fn and p_name)
-            if j < p_len - 1:
-                set pub_fn to string_concat(pub_fn and ", ")
-            set j to j + 1
-        set pub_fn to string_concat(pub_fn and ") {\n")
-        set pub_fn to string_concat(pub_fn and "    EpFuture* fut = (EpFuture*)malloc(sizeof(EpFuture));\n")
-        set pub_fn to string_concat(pub_fn and "    fut->chan = create_channel();\n")
-        set pub_fn to string_concat(pub_fn and "    fut->completed = 0;\n")
-        set pub_fn to string_concat(pub_fn and "    fut->value = 0;\n")
-        set pub_fn to string_concat(pub_fn and "    ep_gc_register(fut, EP_OBJ_STRUCT);\n")
-        set pub_fn to string_concat(pub_fn and "    ")
-        set pub_fn to string_concat(pub_fn and get_fn_c_name(func))
-        set pub_fn to string_concat(pub_fn and "_async_args* args = (")
-        set pub_fn to string_concat(pub_fn and get_fn_c_name(func))
-        set pub_fn to string_concat(pub_fn and "_async_args*)malloc(sizeof(")
-        set pub_fn to string_concat(pub_fn and get_fn_c_name(func))
-        set pub_fn to string_concat(pub_fn and "_async_args));\n")
-        set pub_fn to string_concat(pub_fn and "    args->fut = fut;\n")
-        set j to 0
-        repeat while j < p_len:
-            set p_node to get_list(params and j)
-            set p_name to get_list(p_node and 0)
-            set pub_fn to string_concat(pub_fn and "    args->arg")
-            set pub_fn to string_concat(pub_fn and cg_int_to_str(j))
-            set pub_fn to string_concat(pub_fn and " = ")
-            set pub_fn to string_concat(pub_fn and p_name)
-            set pub_fn to string_concat(pub_fn and ";\n")
-            set j to j + 1
-        set pub_fn to string_concat(pub_fn and "    pthread_t thread;\n")
-        set pub_fn to string_concat(pub_fn and "    pthread_create(&thread, NULL, ")
-        set pub_fn to string_concat(pub_fn and get_fn_c_name(func))
-        set pub_fn to string_concat(pub_fn and "_async_wrapper, args);\n")
-        set pub_fn to string_concat(pub_fn and "    pthread_detach(thread);\n")
-        set pub_fn to string_concat(pub_fn and "    return (long long)fut;\n")
-        set pub_fn to string_concat(pub_fn and "}\n\n")
-        set ok to emit(state and pub_fn)
-        
+        set cname to get_fn_c_name(func)
+        set aw_count to count_awaits_stmts(body)
+        # async_locals: params + body locals (all live in the args struct)
+        set async_locals to create_list()
+        set al_i to 0
+        repeat while al_i < length_list(var_types_keys):
+            set okal to append_list(async_locals and get_list(var_types_keys and al_i))
+            set al_i to al_i + 1
+
+        # 1. Coroutine args struct (state + future + persisted params/locals + awaited futures)
+        set sd to "typedef struct {\n    int state;\n    EpFuture* fut;\n"
+        set vi to 0
+        repeat while vi < length_list(var_types_keys):
+            set sd to string_concat(sd and "    long long ")
+            set sd to string_concat(sd and get_list(var_types_keys and vi))
+            set sd to string_concat(sd and ";\n")
+            set vi to vi + 1
+        set awi to 1
+        repeat while awi <= aw_count:
+            set sd to string_concat(sd and "    EpFuture* awaited_fut_")
+            set sd to string_concat(sd and cg_int_to_str(awi))
+            set sd to string_concat(sd and ";\n")
+            set awi to awi + 1
+        if length_list(var_types_keys) == 0:
+            if aw_count == 0:
+                set sd to string_concat(sd and "    int dummy;\n")
+        set sd to string_concat(sd and "} ")
+        set sd to string_concat(sd and cname)
+        set sd to string_concat(sd and "_async_args;\n\n")
+        set ok to emit(state and sd)
+
+        # 2. Step function
+        set sf to "long long "
+        set sf to string_concat(sf and cname)
+        set sf to string_concat(sf and "_step(void* r) {\n    ")
+        set sf to string_concat(sf and cname)
+        set sf to string_concat(sf and "_async_args* args = (")
+        set sf to string_concat(sf and cname)
+        set sf to string_concat(sf and "_async_args*)r;\n    switch (args->state) {\n        case 0:\n")
+        set ok to emit(state and sf)
+
+        # Body in async mode: mark context, empty borrow maps, per-statement
+        # yield emission then generation (counter re-walked in lockstep).
+        set ok to set_list(state and 19 and 1)
+        set ok to set_list(state and 21 and async_locals)
+        set ok to set_list(state and 20 and 0)
+        set ok to set_codegen_borrowed_keys(state and (create_list() + 0))
+        set ok to set_codegen_borrowed_values(state and (create_list() + 0))
+        set bs_i to 0
+        repeat while bs_i < length_list(body):
+            set bstmt to get_list(body and bs_i)
+            set saved_ctr to get_list(state and 20)
+            set ok to emit_async_yields_stmt(state and bstmt and var_types_keys and var_types_values)
+            set post_ctr to get_list(state and 20)
+            set ok to set_list(state and 20 and saved_ctr)
+            set ok to gen_statement(state and bstmt and var_types_keys and var_types_values)
+            set ok to set_list(state and 20 and post_ctr)
+            set bs_i to bs_i + 1
+        set ok to emit(state and "            args->state = -1;\n            return 0;\n    }\n    return 0;\n}\n\n")
+        set ok to set_list(state and 19 and 0)
+
+        # 3. Public wrapper: build the future + task and enqueue it.
+        set pf to "long long "
+        set pf to string_concat(pf and cname)
+        set pf to string_concat(pf and "(")
+        set pj to 0
+        repeat while pj < p_len:
+            set pf to string_concat(pf and "long long ")
+            set pf to string_concat(pf and get_list(get_list(params and pj) and 0))
+            if pj < p_len - 1:
+                set pf to string_concat(pf and ", ")
+            set pj to pj + 1
+        set pf to string_concat(pf and ") {\n")
+        set pf to string_concat(pf and "    EpFuture* fut = (EpFuture*)malloc(sizeof(EpFuture));\n")
+        set pf to string_concat(pf and "    fut->completed = 0; fut->value = 0; fut->waiting_task = NULL; fut->chan = 0;\n")
+        set pf to string_concat(pf and "    ep_gc_register(fut, EP_OBJ_STRUCT);\n")
+        set pf to string_concat(pf and "    ")
+        set pf to string_concat(pf and cname)
+        set pf to string_concat(pf and "_async_args* args = (")
+        set pf to string_concat(pf and cname)
+        set pf to string_concat(pf and "_async_args*)malloc(sizeof(")
+        set pf to string_concat(pf and cname)
+        set pf to string_concat(pf and "_async_args));\n    memset(args, 0, sizeof(")
+        set pf to string_concat(pf and cname)
+        set pf to string_concat(pf and "_async_args));\n    args->state = 0;\n    args->fut = fut;\n")
+        set pj to 0
+        repeat while pj < p_len:
+            set pnm to get_list(get_list(params and pj) and 0)
+            set pf to string_concat(pf and "    args->")
+            set pf to string_concat(pf and pnm)
+            set pf to string_concat(pf and " = ")
+            set pf to string_concat(pf and pnm)
+            set pf to string_concat(pf and ";\n")
+            set pj to pj + 1
+        set pf to string_concat(pf and "    EpTask* task = (EpTask*)malloc(sizeof(EpTask));\n")
+        set pf to string_concat(pf and "    task->step = ")
+        set pf to string_concat(pf and cname)
+        set pf to string_concat(pf and "_step;\n    task->args = args;\n    task->args_size_bytes = sizeof(")
+        set pf to string_concat(pf and cname)
+        set pf to string_concat(pf and "_async_args);\n    task->fut = fut;\n    task->state = 0;\n    task->is_cancelled = 0;\n    task->parent = ep_current_task;\n    ep_task_enqueue(task);\n    return (long long)fut;\n}\n\n")
+        set ok to emit(state and pf)
+        return 0
+
     set impl_name to get_fn_c_name(func)
-    if is_async == 1:
-        set impl_name to string_concat(get_fn_c_name(func) and "_impl")
         
     # Build function header: long long impl_name(long long p1, long long p2, ...)
     set header to "long long "
@@ -1197,9 +1303,21 @@ define gen_statement with state and stmt and var_keys and var_values:
         set name to get_list(stmt and 1)
         set expr to get_list(stmt and 2)
         set t to map_get(var_keys and var_values and name)
-        
+
         set expr_str to gen_expr(state and expr and var_keys and var_values)
-        
+
+        # In an async step body, locals live in the args struct (persist across
+        # yields); emit a plain assignment to args->name (no decl / no free).
+        if get_list(state and 19) == 1:
+            if contains_string_val(get_list(state and 21) and name) == 1:
+                set al to "    args->"
+                set al to string_concat(al and name)
+                set al to string_concat(al and " = ")
+                set al to string_concat(al and expr_str)
+                set al to string_concat(al and ";\n")
+                set ok to emit(state and al)
+                return 0
+
         set is_global to is_global_var(name)
         set borrowed_keys to get_codegen_borrowed_keys(state)
         set borrowed_values to get_codegen_borrowed_values(state)
@@ -1236,7 +1354,15 @@ define gen_statement with state and stmt and var_keys and var_values:
     if type == 8: # NODE_RETURN
         set expr to get_list(stmt and 1)
         set expr_str to gen_expr(state and expr and var_keys and var_values)
-        
+        # In an async step body, return the value directly (the wrapper completes
+        # the future via the scheduler); no L_cleanup / ret_val machinery.
+        if get_list(state and 19) == 1:
+            set arl to "    return "
+            set arl to string_concat(arl and expr_str)
+            set arl to string_concat(arl and ";\n")
+            set ok to emit(state and arl)
+            return 0
+
         set line to "    ret_val = "
         set line to string_concat(line and expr_str)
         set line to string_concat(line and ";\n")
@@ -1610,6 +1736,10 @@ define gen_expr with state and expr and var_keys and var_values:
         
     if type == 3: # NODE_IDENT
         set name to get_list(expr and 1)
+        # Inside an async step body, params and locals live in the args struct.
+        if get_list(state and 19) == 1:
+            if contains_string_val(get_list(state and 21) and name) == 1:
+                return string_concat("args->" and name)
         # A bare enum variant (e.g. `North`) constructs the zero-payload
         # variant. Local variables shadow variant names.
         if map_contains_key(var_keys and name) == 0:
@@ -1885,10 +2015,24 @@ define gen_expr with state and expr and var_keys and var_values:
         
     if type == 21: # NODE_AWAIT
         set inner to get_list(expr and 1)
+        # Inside an async step, the await already yielded (see emit_async_yields);
+        # the value is read from the persisted awaited_fut slot at the resumed
+        # state. Counter is re-walked here in lockstep with emit_async_yields.
+        if get_list(state and 19) == 1:
+            set awn to get_list(state and 20) + 1
+            set ok to set_list(state and 20 and awn)
+            set awns to cg_int_to_str(awn)
+            set res to "(args->awaited_fut_"
+            set res to string_concat(res and awns)
+            set res to string_concat(res and " ? args->awaited_fut_")
+            set res to string_concat(res and awns)
+            set res to string_concat(res and "->value : 0)")
+            return res
+        # Non-async caller: drive the event loop until the future completes.
         set inner_str to gen_expr(state and inner and var_keys and var_values)
-        set res to "({ EpFuture* _fut = (EpFuture*)"
+        set res to "ep_await_future((EpFuture*)"
         set res to string_concat(res and inner_str)
-        set res to string_concat(res and "; long long _res = 0; if (_fut) { if (!_fut->completed) { _res = receive_channel(_fut->chan); } else { _res = _fut->value; } } _res; })")
+        set res to string_concat(res and ")")
         return res
 
     if type == 22: # NODE_FIELD_ACCESS
@@ -3048,23 +3192,13 @@ define generate_c with program and is_test_mode:
         set ok to emit(state and proto)
         
         if is_async == 1:
+            # Coroutine step-function prototype (the public wrapper is declared
+            # above like any function).
             set proto2 to "long long "
             set proto2 to string_concat(proto2 and get_fn_c_name(func))
-            set proto2 to string_concat(proto2 and "_impl(")
-            set p_i to 0
-            repeat while p_i < p_len:
-                set proto2 to string_concat(proto2 and "long long")
-                if p_i < p_len - 1:
-                    set proto2 to string_concat(proto2 and ", ")
-                set p_i to p_i + 1
-            set proto2 to string_concat(proto2 and ");\n")
+            set proto2 to string_concat(proto2 and "_step(void* r);\n")
             set ok to emit(state and proto2)
-            
-            set proto3 to "void* "
-            set proto3 to string_concat(proto3 and get_fn_c_name(func))
-            set proto3 to string_concat(proto3 and "_async_wrapper(void* r);\n")
-            set ok to emit(state and proto3)
-            
+
         set idx to idx + 1
     set ok to emit(state and "\n")
 

@@ -5016,6 +5016,10 @@ long long cg_int_to_str(long long);
 long long escape_string(long long);
 long long join_strings(long long);
 long long create_codegen_state();
+long long count_awaits_expr(long long);
+long long count_awaits_stmts(long long);
+long long emit_async_yields_expr(long long, long long, long long, long long);
+long long emit_async_yields_stmt(long long, long long, long long, long long);
 long long type_name_to_code(long long);
 long long is_builtin_c_func(long long, long long);
 long long get_codegen_borrowed_keys(long long);
@@ -10962,11 +10966,188 @@ long long create_codegen_state() {
     ok = append_list(state, (create_list() + 0LL));
     ok = append_list(state, (create_list() + 0LL));
     ok = append_list(state, (create_list() + 0LL));
+    ok = append_list(state, 0LL);
+    ok = append_list(state, 0LL);
+    ok = append_list(state, (create_list() + 0LL));
     ret_val = state;
     state = 0;
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long count_awaits_expr(long long expr) {
+    long long t = 0;
+    long long args = 0;
+    long long c = 0;
+    long long i = 0;
+    long long ret_val = 0;
+
+    ep_gc_maybe_collect();
+
+    if (expr == 0LL) {
+    ret_val = 0LL;
+    goto L_cleanup;
+    }
+    t = get_list(expr, 0LL);
+    if (t == 21LL) {
+    ret_val = (1LL + count_awaits_expr(get_list(expr, 1LL)));
+    goto L_cleanup;
+    }
+    if (((t == 4LL || t == 5LL) || t == 14LL)) {
+    ret_val = (count_awaits_expr(get_list(expr, 1LL)) + count_awaits_expr(get_list(expr, 3LL)));
+    goto L_cleanup;
+    }
+    if ((((t == 20LL || t == 32LL) || t == 33LL) || t == 18LL)) {
+    ret_val = count_awaits_expr(get_list(expr, 1LL));
+    goto L_cleanup;
+    }
+    if (t == 6LL) {
+    args = get_list(expr, 2LL);
+    c = 0LL;
+    i = 0LL;
+    while (i < length_list(args)) {
+    c = (c + count_awaits_expr(get_list(args, i)));
+    i = (i + 1LL);
+    }
+    ret_val = c;
+    goto L_cleanup;
+    }
+    ret_val = 0LL;
+    goto L_cleanup;
+L_cleanup:
+    return ret_val;
+}
+
+long long count_awaits_stmts(long long stmts) {
+    long long c = 0;
+    long long i = 0;
+    long long stmt = 0;
+    long long t = 0;
+    long long eb = 0;
+    long long ret_val = 0;
+
+    ep_gc_maybe_collect();
+
+    c = 0LL;
+    i = 0LL;
+    while (i < length_list(stmts)) {
+    stmt = get_list(stmts, i);
+    t = get_list(stmt, 0LL);
+    if (t == 7LL) {
+    c = (c + count_awaits_expr(get_list(stmt, 2LL)));
+    }
+    if (((t == 8LL || t == 9LL) || t == 36LL)) {
+    c = (c + count_awaits_expr(get_list(stmt, 1LL)));
+    }
+    if (t == 10LL) {
+    c = (c + count_awaits_expr(get_list(stmt, 1LL)));
+    c = (c + count_awaits_stmts(get_list(stmt, 2LL)));
+    eb = get_list(stmt, 3LL);
+    if (eb != 0LL) {
+    c = (c + count_awaits_stmts(eb));
+    }
+    }
+    if (t == 11LL) {
+    c = (c + count_awaits_expr(get_list(stmt, 1LL)));
+    c = (c + count_awaits_stmts(get_list(stmt, 2LL)));
+    }
+    if (t == 28LL) {
+    c = (c + count_awaits_stmts(get_list(stmt, 3LL)));
+    }
+    i = (i + 1LL);
+    }
+    ret_val = c;
+    goto L_cleanup;
+L_cleanup:
+    return ret_val;
+}
+
+long long emit_async_yields_expr(long long state, long long expr, long long var_keys, long long var_values) {
+    long long t = 0;
+    long long ok = 0;
+    long long n = 0;
+    long long ns = 0;
+    long long inner_str = 0;
+    long long line = 0;
+    long long args = 0;
+    long long i = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&inner_str);
+    ep_gc_push_root(&line);
+    ep_gc_maybe_collect();
+
+    if (expr == 0LL) {
+    ret_val = 0LL;
+    goto L_cleanup;
+    }
+    t = get_list(expr, 0LL);
+    if (t == 21LL) {
+    ok = emit_async_yields_expr(state, get_list(expr, 1LL), var_keys, var_values);
+    n = (get_list(state, 20LL) + 1LL);
+    ok = set_list(state, 20LL, n);
+    ns = cg_int_to_str(n);
+    inner_str = gen_expr(state, get_list(expr, 1LL), var_keys, var_values);
+    line = (long long)"            { EpFuture* _f = (EpFuture*)(";
+    line = string_concat(line, inner_str);
+    line = string_concat(line, (long long)"); args->awaited_fut_");
+    line = string_concat(line, ns);
+    line = string_concat(line, (long long)" = _f; if (_f && !_f->completed) { args->state = ");
+    line = string_concat(line, ns);
+    line = string_concat(line, (long long)"; _f->waiting_task = ep_current_task; return -999999; } }\n            case ");
+    line = string_concat(line, ns);
+    line = string_concat(line, (long long)":\n");
+    ok = emit(state, line);
+    ret_val = 0LL;
+    goto L_cleanup;
+    }
+    if (((t == 4LL || t == 5LL) || t == 14LL)) {
+    ok = emit_async_yields_expr(state, get_list(expr, 1LL), var_keys, var_values);
+    ok = emit_async_yields_expr(state, get_list(expr, 3LL), var_keys, var_values);
+    ret_val = 0LL;
+    goto L_cleanup;
+    }
+    if ((((t == 20LL || t == 32LL) || t == 33LL) || t == 18LL)) {
+    ret_val = emit_async_yields_expr(state, get_list(expr, 1LL), var_keys, var_values);
+    goto L_cleanup;
+    }
+    if (t == 6LL) {
+    args = get_list(expr, 2LL);
+    i = 0LL;
+    while (i < length_list(args)) {
+    ok = emit_async_yields_expr(state, get_list(args, i), var_keys, var_values);
+    i = (i + 1LL);
+    }
+    ret_val = 0LL;
+    goto L_cleanup;
+    }
+    ret_val = 0LL;
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(2);
+    return ret_val;
+}
+
+long long emit_async_yields_stmt(long long state, long long stmt, long long var_keys, long long var_values) {
+    long long t = 0;
+    long long ret_val = 0;
+
+    ep_gc_maybe_collect();
+
+    t = get_list(stmt, 0LL);
+    if (t == 7LL) {
+    ret_val = emit_async_yields_expr(state, get_list(stmt, 2LL), var_keys, var_values);
+    goto L_cleanup;
+    }
+    if (((t == 8LL || t == 9LL) || t == 36LL)) {
+    ret_val = emit_async_yields_expr(state, get_list(stmt, 1LL), var_keys, var_values);
+    goto L_cleanup;
+    }
+    ret_val = 0LL;
+    goto L_cleanup;
+L_cleanup:
     return ret_val;
 }
 
@@ -12005,10 +12186,22 @@ long long gen_function(long long state, long long func) {
     long long p_name = 0;
     long long is_borrow = 0;
     long long param_type = 0;
-    long long struct_decl = 0;
-    long long j = 0;
-    long long wrap_fn = 0;
-    long long pub_fn = 0;
+    long long cname = 0;
+    long long aw_count = 0;
+    long long async_locals = 0;
+    long long al_i = 0;
+    long long okal = 0;
+    long long sd = 0;
+    long long vi = 0;
+    long long awi = 0;
+    long long sf = 0;
+    long long bs_i = 0;
+    long long bstmt = 0;
+    long long saved_ctr = 0;
+    long long post_ctr = 0;
+    long long pf = 0;
+    long long pj = 0;
+    long long pnm = 0;
     long long impl_name = 0;
     long long header = 0;
     long long borrowed_keys = 0;
@@ -12030,10 +12223,10 @@ long long gen_function(long long state, long long func) {
     long long root_pop = 0;
     long long ret_val = 0;
 
-    ep_gc_push_root(&struct_decl);
-    ep_gc_push_root(&wrap_fn);
-    ep_gc_push_root(&pub_fn);
-    ep_gc_push_root(&impl_name);
+    ep_gc_push_root(&async_locals);
+    ep_gc_push_root(&sd);
+    ep_gc_push_root(&sf);
+    ep_gc_push_root(&pf);
     ep_gc_push_root(&header);
     ep_gc_push_root(&decl);
     ep_gc_push_root(&root_line);
@@ -12068,104 +12261,114 @@ long long gen_function(long long state, long long func) {
     }
     ok = collect_var_types(state, body, var_types_keys, var_types_values);
     if (is_async == 1LL) {
-    struct_decl = (long long)"typedef struct {\n    EpFuture* fut;\n";
-    j = 0LL;
-    while (j < p_len) {
-    struct_decl = string_concat(struct_decl, (long long)"    long long arg");
-    struct_decl = string_concat(struct_decl, cg_int_to_str(j));
-    struct_decl = string_concat(struct_decl, (long long)";\n");
-    j = (j + 1LL);
+    cname = get_fn_c_name(func);
+    aw_count = count_awaits_stmts(body);
+    {
+        long long tmp_val = create_list();
+        free_list(async_locals);
+        async_locals = tmp_val;
     }
-    if (p_len == 0LL) {
-    struct_decl = string_concat(struct_decl, (long long)"    int dummy;\n");
+    al_i = 0LL;
+    while (al_i < length_list(var_types_keys)) {
+    okal = append_list(async_locals, get_list(var_types_keys, al_i));
+    al_i = (al_i + 1LL);
     }
-    struct_decl = string_concat(struct_decl, (long long)"} ");
-    struct_decl = string_concat(struct_decl, get_fn_c_name(func));
-    struct_decl = string_concat(struct_decl, (long long)"_async_args;\n\n");
-    ok = emit(state, struct_decl);
-    wrap_fn = (long long)"void* ";
-    wrap_fn = string_concat(wrap_fn, get_fn_c_name(func));
-    wrap_fn = string_concat(wrap_fn, (long long)"_async_wrapper(void* r) {\n");
-    wrap_fn = string_concat(wrap_fn, (long long)"    int stack_dummy;\n");
-    wrap_fn = string_concat(wrap_fn, (long long)"    ep_gc_register_thread(&stack_dummy);\n");
-    wrap_fn = string_concat(wrap_fn, (long long)"    ");
-    wrap_fn = string_concat(wrap_fn, get_fn_c_name(func));
-    wrap_fn = string_concat(wrap_fn, (long long)"_async_args* args = (");
-    wrap_fn = string_concat(wrap_fn, get_fn_c_name(func));
-    wrap_fn = string_concat(wrap_fn, (long long)"_async_args*)r;\n");
-    wrap_fn = string_concat(wrap_fn, (long long)"    long long res = ");
-    wrap_fn = string_concat(wrap_fn, get_fn_c_name(func));
-    wrap_fn = string_concat(wrap_fn, (long long)"_impl(");
-    j = 0LL;
-    while (j < p_len) {
-    wrap_fn = string_concat(wrap_fn, (long long)"args->arg");
-    wrap_fn = string_concat(wrap_fn, cg_int_to_str(j));
-    if (j < (p_len - 1LL)) {
-    wrap_fn = string_concat(wrap_fn, (long long)", ");
+    sd = (long long)"typedef struct {\n    int state;\n    EpFuture* fut;\n";
+    vi = 0LL;
+    while (vi < length_list(var_types_keys)) {
+    sd = string_concat(sd, (long long)"    long long ");
+    sd = string_concat(sd, get_list(var_types_keys, vi));
+    sd = string_concat(sd, (long long)";\n");
+    vi = (vi + 1LL);
     }
-    j = (j + 1LL);
+    awi = 1LL;
+    while (awi <= aw_count) {
+    sd = string_concat(sd, (long long)"    EpFuture* awaited_fut_");
+    sd = string_concat(sd, cg_int_to_str(awi));
+    sd = string_concat(sd, (long long)";\n");
+    awi = (awi + 1LL);
     }
-    wrap_fn = string_concat(wrap_fn, (long long)");\n");
-    wrap_fn = string_concat(wrap_fn, (long long)"    args->fut->value = res;\n");
-    wrap_fn = string_concat(wrap_fn, (long long)"    args->fut->completed = 1;\n");
-    wrap_fn = string_concat(wrap_fn, (long long)"    send_channel(args->fut->chan, res);\n");
-    wrap_fn = string_concat(wrap_fn, (long long)"    free(args);\n");
-    wrap_fn = string_concat(wrap_fn, (long long)"    ep_gc_unregister_thread();\n");
-    wrap_fn = string_concat(wrap_fn, (long long)"    return NULL;\n");
-    wrap_fn = string_concat(wrap_fn, (long long)"}\n\n");
-    ok = emit(state, wrap_fn);
-    pub_fn = (long long)"long long ";
-    pub_fn = string_concat(pub_fn, get_fn_c_name(func));
-    pub_fn = string_concat(pub_fn, (long long)"(");
-    j = 0LL;
-    while (j < p_len) {
-    p_node = get_list(params, j);
-    p_name = get_list(p_node, 0LL);
-    pub_fn = string_concat(pub_fn, (long long)"long long ");
-    pub_fn = string_concat(pub_fn, p_name);
-    if (j < (p_len - 1LL)) {
-    pub_fn = string_concat(pub_fn, (long long)", ");
+    if (length_list(var_types_keys) == 0LL) {
+    if (aw_count == 0LL) {
+    sd = string_concat(sd, (long long)"    int dummy;\n");
     }
-    j = (j + 1LL);
     }
-    pub_fn = string_concat(pub_fn, (long long)") {\n");
-    pub_fn = string_concat(pub_fn, (long long)"    EpFuture* fut = (EpFuture*)malloc(sizeof(EpFuture));\n");
-    pub_fn = string_concat(pub_fn, (long long)"    fut->chan = create_channel();\n");
-    pub_fn = string_concat(pub_fn, (long long)"    fut->completed = 0;\n");
-    pub_fn = string_concat(pub_fn, (long long)"    fut->value = 0;\n");
-    pub_fn = string_concat(pub_fn, (long long)"    ep_gc_register(fut, EP_OBJ_STRUCT);\n");
-    pub_fn = string_concat(pub_fn, (long long)"    ");
-    pub_fn = string_concat(pub_fn, get_fn_c_name(func));
-    pub_fn = string_concat(pub_fn, (long long)"_async_args* args = (");
-    pub_fn = string_concat(pub_fn, get_fn_c_name(func));
-    pub_fn = string_concat(pub_fn, (long long)"_async_args*)malloc(sizeof(");
-    pub_fn = string_concat(pub_fn, get_fn_c_name(func));
-    pub_fn = string_concat(pub_fn, (long long)"_async_args));\n");
-    pub_fn = string_concat(pub_fn, (long long)"    args->fut = fut;\n");
-    j = 0LL;
-    while (j < p_len) {
-    p_node = get_list(params, j);
-    p_name = get_list(p_node, 0LL);
-    pub_fn = string_concat(pub_fn, (long long)"    args->arg");
-    pub_fn = string_concat(pub_fn, cg_int_to_str(j));
-    pub_fn = string_concat(pub_fn, (long long)" = ");
-    pub_fn = string_concat(pub_fn, p_name);
-    pub_fn = string_concat(pub_fn, (long long)";\n");
-    j = (j + 1LL);
+    sd = string_concat(sd, (long long)"} ");
+    sd = string_concat(sd, cname);
+    sd = string_concat(sd, (long long)"_async_args;\n\n");
+    ok = emit(state, sd);
+    sf = (long long)"long long ";
+    sf = string_concat(sf, cname);
+    sf = string_concat(sf, (long long)"_step(void* r) {\n    ");
+    sf = string_concat(sf, cname);
+    sf = string_concat(sf, (long long)"_async_args* args = (");
+    sf = string_concat(sf, cname);
+    sf = string_concat(sf, (long long)"_async_args*)r;\n    switch (args->state) {\n        case 0:\n");
+    ok = emit(state, sf);
+    ok = set_list(state, 19LL, 1LL);
+    ok = set_list(state, 21LL, async_locals);
+    ok = set_list(state, 20LL, 0LL);
+    ok = set_codegen_borrowed_keys(state, (create_list() + 0LL));
+    ok = set_codegen_borrowed_values(state, (create_list() + 0LL));
+    bs_i = 0LL;
+    while (bs_i < length_list(body)) {
+    bstmt = get_list(body, bs_i);
+    saved_ctr = get_list(state, 20LL);
+    ok = emit_async_yields_stmt(state, bstmt, var_types_keys, var_types_values);
+    post_ctr = get_list(state, 20LL);
+    ok = set_list(state, 20LL, saved_ctr);
+    ok = gen_statement(state, bstmt, var_types_keys, var_types_values);
+    ok = set_list(state, 20LL, post_ctr);
+    bs_i = (bs_i + 1LL);
     }
-    pub_fn = string_concat(pub_fn, (long long)"    pthread_t thread;\n");
-    pub_fn = string_concat(pub_fn, (long long)"    pthread_create(&thread, NULL, ");
-    pub_fn = string_concat(pub_fn, get_fn_c_name(func));
-    pub_fn = string_concat(pub_fn, (long long)"_async_wrapper, args);\n");
-    pub_fn = string_concat(pub_fn, (long long)"    pthread_detach(thread);\n");
-    pub_fn = string_concat(pub_fn, (long long)"    return (long long)fut;\n");
-    pub_fn = string_concat(pub_fn, (long long)"}\n\n");
-    ok = emit(state, pub_fn);
+    ok = emit(state, (long long)"            args->state = -1;\n            return 0;\n    }\n    return 0;\n}\n\n");
+    ok = set_list(state, 19LL, 0LL);
+    pf = (long long)"long long ";
+    pf = string_concat(pf, cname);
+    pf = string_concat(pf, (long long)"(");
+    pj = 0LL;
+    while (pj < p_len) {
+    pf = string_concat(pf, (long long)"long long ");
+    pf = string_concat(pf, get_list(get_list(params, pj), 0LL));
+    if (pj < (p_len - 1LL)) {
+    pf = string_concat(pf, (long long)", ");
+    }
+    pj = (pj + 1LL);
+    }
+    pf = string_concat(pf, (long long)") {\n");
+    pf = string_concat(pf, (long long)"    EpFuture* fut = (EpFuture*)malloc(sizeof(EpFuture));\n");
+    pf = string_concat(pf, (long long)"    fut->completed = 0; fut->value = 0; fut->waiting_task = NULL; fut->chan = 0;\n");
+    pf = string_concat(pf, (long long)"    ep_gc_register(fut, EP_OBJ_STRUCT);\n");
+    pf = string_concat(pf, (long long)"    ");
+    pf = string_concat(pf, cname);
+    pf = string_concat(pf, (long long)"_async_args* args = (");
+    pf = string_concat(pf, cname);
+    pf = string_concat(pf, (long long)"_async_args*)malloc(sizeof(");
+    pf = string_concat(pf, cname);
+    pf = string_concat(pf, (long long)"_async_args));\n    memset(args, 0, sizeof(");
+    pf = string_concat(pf, cname);
+    pf = string_concat(pf, (long long)"_async_args));\n    args->state = 0;\n    args->fut = fut;\n");
+    pj = 0LL;
+    while (pj < p_len) {
+    pnm = get_list(get_list(params, pj), 0LL);
+    pf = string_concat(pf, (long long)"    args->");
+    pf = string_concat(pf, pnm);
+    pf = string_concat(pf, (long long)" = ");
+    pf = string_concat(pf, pnm);
+    pf = string_concat(pf, (long long)";\n");
+    pj = (pj + 1LL);
+    }
+    pf = string_concat(pf, (long long)"    EpTask* task = (EpTask*)malloc(sizeof(EpTask));\n");
+    pf = string_concat(pf, (long long)"    task->step = ");
+    pf = string_concat(pf, cname);
+    pf = string_concat(pf, (long long)"_step;\n    task->args = args;\n    task->args_size_bytes = sizeof(");
+    pf = string_concat(pf, cname);
+    pf = string_concat(pf, (long long)"_async_args);\n    task->fut = fut;\n    task->state = 0;\n    task->is_cancelled = 0;\n    task->parent = ep_current_task;\n    ep_task_enqueue(task);\n    return (long long)fut;\n}\n\n");
+    ok = emit(state, pf);
+    ret_val = 0LL;
+    goto L_cleanup;
     }
     impl_name = get_fn_c_name(func);
-    if (is_async == 1LL) {
-    impl_name = string_concat(get_fn_c_name(func), (long long)"_impl");
-    }
     header = (long long)"long long ";
     header = string_concat(header, impl_name);
     header = string_concat(header, (long long)"(");
@@ -12287,12 +12490,14 @@ long long gen_statement(long long state, long long stmt, long long var_keys, lon
     long long expr = 0;
     long long t = 0;
     long long expr_str = 0;
+    long long al = 0;
+    long long ok = 0;
     long long is_global = 0;
     long long borrowed_keys = 0;
     long long borrowed_values = 0;
     long long is_borrowed = 0;
-    long long ok = 0;
     long long line = 0;
+    long long arl = 0;
     long long expr_type = 0;
     long long null_line = 0;
     long long is_any_call = 0;
@@ -12354,7 +12559,9 @@ long long gen_statement(long long state, long long stmt, long long var_keys, lon
     long long ret_val = 0;
 
     ep_gc_push_root(&expr_str);
+    ep_gc_push_root(&al);
     ep_gc_push_root(&line);
+    ep_gc_push_root(&arl);
     ep_gc_push_root(&null_line);
     ep_gc_push_root(&callee);
     ep_gc_push_root(&cond_str);
@@ -12374,6 +12581,18 @@ long long gen_statement(long long state, long long stmt, long long var_keys, lon
     expr = get_list(stmt, 2LL);
     t = map_get(var_keys, var_values, name);
     expr_str = gen_expr(state, expr, var_keys, var_values);
+    if (get_list(state, 19LL) == 1LL) {
+    if (contains_string_val(get_list(state, 21LL), name) == 1LL) {
+    al = (long long)"    args->";
+    al = string_concat(al, name);
+    al = string_concat(al, (long long)" = ");
+    al = string_concat(al, expr_str);
+    al = string_concat(al, (long long)";\n");
+    ok = emit(state, al);
+    ret_val = 0LL;
+    goto L_cleanup;
+    }
+    }
     is_global = is_global_var(name);
     borrowed_keys = get_codegen_borrowed_keys(state);
     borrowed_values = get_codegen_borrowed_values(state);
@@ -12407,6 +12626,14 @@ long long gen_statement(long long state, long long stmt, long long var_keys, lon
     if (type == 8LL) {
     expr = get_list(stmt, 1LL);
     expr_str = gen_expr(state, expr, var_keys, var_values);
+    if (get_list(state, 19LL) == 1LL) {
+    arl = (long long)"    return ";
+    arl = string_concat(arl, expr_str);
+    arl = string_concat(arl, (long long)";\n");
+    ok = emit(state, arl);
+    ret_val = 0LL;
+    goto L_cleanup;
+    }
     line = (long long)"    ret_val = ";
     line = string_concat(line, expr_str);
     line = string_concat(line, (long long)";\n");
@@ -12776,7 +13003,7 @@ long long gen_statement(long long state, long long stmt, long long var_keys, lon
     ret_val = 0LL;
     goto L_cleanup;
 L_cleanup:
-    ep_gc_pop_roots(13);
+    ep_gc_pop_roots(15);
     return ret_val;
 }
 
@@ -12825,6 +13052,8 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     long long chan = 0;
     long long chan_str = 0;
     long long inner = 0;
+    long long awn = 0;
+    long long awns = 0;
     long long inner_str = 0;
     long long obj = 0;
     long long field_name = 0;
@@ -12976,6 +13205,12 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     }
     if (type == 3LL) {
     name = get_list(expr, 1LL);
+    if (get_list(state, 19LL) == 1LL) {
+    if (contains_string_val(get_list(state, 21LL), name) == 1LL) {
+    ret_val = string_concat((long long)"args->", name);
+    goto L_cleanup;
+    }
+    }
     if (map_contains_key(var_keys, name) == 0LL) {
     if (map_contains_key(get_list(state, 12LL), name) == 1LL) {
     eres = (long long)"({ long long* _v = (long long*)malloc(sizeof(long long) * 1); _v[0] = EP_TAG_";
@@ -13294,10 +13529,22 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     }
     if (type == 21LL) {
     inner = get_list(expr, 1LL);
+    if (get_list(state, 19LL) == 1LL) {
+    awn = (get_list(state, 20LL) + 1LL);
+    ok = set_list(state, 20LL, awn);
+    awns = cg_int_to_str(awn);
+    res = (long long)"(args->awaited_fut_";
+    res = string_concat(res, awns);
+    res = string_concat(res, (long long)" ? args->awaited_fut_");
+    res = string_concat(res, awns);
+    res = string_concat(res, (long long)"->value : 0)");
+    ret_val = res;
+    goto L_cleanup;
+    }
     inner_str = gen_expr(state, inner, var_keys, var_values);
-    res = (long long)"({ EpFuture* _fut = (EpFuture*)";
+    res = (long long)"ep_await_future((EpFuture*)";
     res = string_concat(res, inner_str);
-    res = string_concat(res, (long long)"; long long _res = 0; if (_fut) { if (!_fut->completed) { _res = receive_channel(_fut->chan); } else { _res = _fut->value; } } _res; })");
+    res = string_concat(res, (long long)")");
     ret_val = res;
     goto L_cleanup;
     }
@@ -14739,7 +14986,6 @@ long long generate_c(long long program, long long is_test_mode) {
     long long func = 0;
     long long is_async = 0;
     long long proto2 = 0;
-    long long proto3 = 0;
     long long spawn_list = 0;
     long long dummy = 0;
     long long spawn_len = 0;
@@ -14807,7 +15053,6 @@ long long generate_c(long long program, long long is_test_mode) {
     ep_gc_push_root(&il);
     ep_gc_push_root(&proto);
     ep_gc_push_root(&proto2);
-    ep_gc_push_root(&proto3);
     ep_gc_push_root(&spawn_list);
     ep_gc_push_root(&struct_decl);
     ep_gc_push_root(&wrap_fn);
@@ -15109,21 +15354,8 @@ long long generate_c(long long program, long long is_test_mode) {
     if (is_async == 1LL) {
     proto2 = (long long)"long long ";
     proto2 = string_concat(proto2, get_fn_c_name(func));
-    proto2 = string_concat(proto2, (long long)"_impl(");
-    p_i = 0LL;
-    while (p_i < p_len) {
-    proto2 = string_concat(proto2, (long long)"long long");
-    if (p_i < (p_len - 1LL)) {
-    proto2 = string_concat(proto2, (long long)", ");
-    }
-    p_i = (p_i + 1LL);
-    }
-    proto2 = string_concat(proto2, (long long)");\n");
+    proto2 = string_concat(proto2, (long long)"_step(void* r);\n");
     ok = emit(state, proto2);
-    proto3 = (long long)"void* ";
-    proto3 = string_concat(proto3, get_fn_c_name(func));
-    proto3 = string_concat(proto3, (long long)"_async_wrapper(void* r);\n");
-    ok = emit(state, proto3);
     }
     idx = (idx + 1LL);
     }
@@ -15284,7 +15516,7 @@ long long generate_c(long long program, long long is_test_mode) {
     ret_val = c_code;
     goto L_cleanup;
 L_cleanup:
-    ep_gc_pop_roots(22);
+    ep_gc_pop_roots(21);
     return ret_val;
 }
 
