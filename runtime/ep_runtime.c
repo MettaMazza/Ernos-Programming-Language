@@ -3353,8 +3353,12 @@ long long ep_sqlite3_column_count(long long stmt) {
 
 long long ep_sqlite3_column_text(long long stmt, long long col) {
     const unsigned char* t = sqlite3_column_text((sqlite3_stmt*)stmt, (int)col);
-    if (!t) return (long long)strdup("");
-    return (long long)strdup((const char*)t);
+    char* copy = (!t) ? strdup("") : strdup((const char*)t);
+    /* Register the copy with the GC so it is reclaimed (not leaked) and so
+       ep_auto_to_string recognizes it as a string deterministically via
+       ep_gc_find, rather than relying on the memory-probe heuristic. */
+    if (copy) ep_gc_register(copy, EP_OBJ_STRING);
+    return (long long)copy;
 }
 
 long long ep_sqlite3_column_int(long long stmt, long long col) {

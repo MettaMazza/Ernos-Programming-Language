@@ -3353,8 +3353,12 @@ long long ep_sqlite3_column_count(long long stmt) {
 
 long long ep_sqlite3_column_text(long long stmt, long long col) {
     const unsigned char* t = sqlite3_column_text((sqlite3_stmt*)stmt, (int)col);
-    if (!t) return (long long)strdup("");
-    return (long long)strdup((const char*)t);
+    char* copy = (!t) ? strdup("") : strdup((const char*)t);
+    /* Register the copy with the GC so it is reclaimed (not leaked) and so
+       ep_auto_to_string recognizes it as a string deterministically via
+       ep_gc_find, rather than relying on the memory-probe heuristic. */
+    if (copy) ep_gc_register(copy, EP_OBJ_STRING);
+    return (long long)copy;
 }
 
 long long ep_sqlite3_column_int(long long stmt, long long col) {
@@ -19081,8 +19085,12 @@ long long ep_rt_core_22() {
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"long long ep_sqlite3_column_text(long long stmt, long long col) {\n");
     ok = append_list(lines, (long long)"    const unsigned char* t = sqlite3_column_text((sqlite3_stmt*)stmt, (int)col);\n");
-    ok = append_list(lines, (long long)"    if (!t) return (long long)strdup(\"\");\n");
-    ok = append_list(lines, (long long)"    return (long long)strdup((const char*)t);\n");
+    ok = append_list(lines, (long long)"    char* copy = (!t) ? strdup(\"\") : strdup((const char*)t);\n");
+    ok = append_list(lines, (long long)"    /* Register the copy with the GC so it is reclaimed (not leaked) and so\n");
+    ok = append_list(lines, (long long)"       ep_auto_to_string recognizes it as a string deterministically via\n");
+    ok = append_list(lines, (long long)"       ep_gc_find, rather than relying on the memory-probe heuristic. */\n");
+    ok = append_list(lines, (long long)"    if (copy) ep_gc_register(copy, EP_OBJ_STRING);\n");
+    ok = append_list(lines, (long long)"    return (long long)copy;\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"long long ep_sqlite3_column_int(long long stmt, long long col) {\n");
@@ -19172,10 +19180,6 @@ long long ep_rt_core_22() {
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"char* string_from_list(long long list_ptr) {\n");
     ok = append_list(lines, (long long)"    EpList* list = (EpList*)list_ptr;\n");
-    ok = append_list(lines, (long long)"    if (!list) {\n");
-    ok = append_list(lines, (long long)"        char* empty = malloc(1);\n");
-    ok = append_list(lines, (long long)"        if (empty) empty[0] = '\\0';\n");
-    ok = append_list(lines, (long long)"        ep_gc_register(empty, EP_OBJ_STRING);\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -19196,6 +19200,10 @@ long long ep_rt_core_23() {
         free_list(lines);
         lines = tmp_val;
     }
+    ok = append_list(lines, (long long)"    if (!list) {\n");
+    ok = append_list(lines, (long long)"        char* empty = malloc(1);\n");
+    ok = append_list(lines, (long long)"        if (empty) empty[0] = '\\0';\n");
+    ok = append_list(lines, (long long)"        ep_gc_register(empty, EP_OBJ_STRING);\n");
     ok = append_list(lines, (long long)"        return empty;\n");
     ok = append_list(lines, (long long)"    }\n");
     ok = append_list(lines, (long long)"    char* s = malloc(list->length + 1);\n");
@@ -19342,10 +19350,6 @@ long long ep_rt_core_23() {
     ok = append_list(lines, (long long)"    return stat(path, &st) == 0 ? 1 : 0;\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"long long ep_is_directory(long long path_ptr) {\n");
-    ok = append_list(lines, (long long)"    const char* path = (const char*)path_ptr;\n");
-    ok = append_list(lines, (long long)"    struct stat st;\n");
-    ok = append_list(lines, (long long)"    if (stat(path, &st) != 0) return 0;\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -19366,6 +19370,10 @@ long long ep_rt_core_24() {
         free_list(lines);
         lines = tmp_val;
     }
+    ok = append_list(lines, (long long)"long long ep_is_directory(long long path_ptr) {\n");
+    ok = append_list(lines, (long long)"    const char* path = (const char*)path_ptr;\n");
+    ok = append_list(lines, (long long)"    struct stat st;\n");
+    ok = append_list(lines, (long long)"    if (stat(path, &st) != 0) return 0;\n");
     ok = append_list(lines, (long long)"    return S_ISDIR(st.st_mode) ? 1 : 0;\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
@@ -19512,10 +19520,6 @@ long long ep_rt_core_24() {
     ok = append_list(lines, (long long)"    return (long long)\"\";\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"long long ep_os_name(void) {\n");
-    ok = append_list(lines, (long long)"    #if defined(__APPLE__)\n");
-    ok = append_list(lines, (long long)"    return (long long)\"macos\";\n");
-    ok = append_list(lines, (long long)"    #elif defined(__linux__)\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -19536,6 +19540,10 @@ long long ep_rt_core_25() {
         free_list(lines);
         lines = tmp_val;
     }
+    ok = append_list(lines, (long long)"long long ep_os_name(void) {\n");
+    ok = append_list(lines, (long long)"    #if defined(__APPLE__)\n");
+    ok = append_list(lines, (long long)"    return (long long)\"macos\";\n");
+    ok = append_list(lines, (long long)"    #elif defined(__linux__)\n");
     ok = append_list(lines, (long long)"    return (long long)\"linux\";\n");
     ok = append_list(lines, (long long)"    #elif defined(_WIN32)\n");
     ok = append_list(lines, (long long)"    return (long long)\"windows\";\n");
@@ -19682,10 +19690,6 @@ long long ep_rt_core_25() {
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"long long ep_rwlock_unlock(long long rwl) {\n");
     ok = append_list(lines, (long long)"    /* SRWLOCK does not have a single \"unlock\" — we try exclusive first.\n");
-    ok = append_list(lines, (long long)"       In practice the caller should know which lock was taken.\n");
-    ok = append_list(lines, (long long)"       ReleaseSRWLockExclusive on a shared lock is undefined, but\n");
-    ok = append_list(lines, (long long)"       the runtime guarantees matched lock/unlock pairs. We default\n");
-    ok = append_list(lines, (long long)"       to releasing the exclusive lock; shared unlock is handled\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -19706,6 +19710,10 @@ long long ep_rt_core_26() {
         free_list(lines);
         lines = tmp_val;
     }
+    ok = append_list(lines, (long long)"       In practice the caller should know which lock was taken.\n");
+    ok = append_list(lines, (long long)"       ReleaseSRWLockExclusive on a shared lock is undefined, but\n");
+    ok = append_list(lines, (long long)"       the runtime guarantees matched lock/unlock pairs. We default\n");
+    ok = append_list(lines, (long long)"       to releasing the exclusive lock; shared unlock is handled\n");
     ok = append_list(lines, (long long)"       by pairing read_lock -> read_unlock if needed later. */\n");
     ok = append_list(lines, (long long)"    ReleaseSRWLockExclusive((SRWLOCK*)rwl);\n");
     ok = append_list(lines, (long long)"    return 1;\n");
@@ -19852,10 +19860,6 @@ long long ep_rt_core_26() {
     ok = append_list(lines, (long long)"    pthread_mutex_init(&s->mutex, NULL);\n");
     ok = append_list(lines, (long long)"    pthread_cond_init(&s->cond, NULL);\n");
     ok = append_list(lines, (long long)"    s->value = initial;\n");
-    ok = append_list(lines, (long long)"    return (long long)s;\n");
-    ok = append_list(lines, (long long)"}\n");
-    ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"long long ep_semaphore_wait(long long sp) {\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -19876,6 +19880,10 @@ long long ep_rt_core_27() {
         free_list(lines);
         lines = tmp_val;
     }
+    ok = append_list(lines, (long long)"    return (long long)s;\n");
+    ok = append_list(lines, (long long)"}\n");
+    ok = append_list(lines, (long long)"\n");
+    ok = append_list(lines, (long long)"long long ep_semaphore_wait(long long sp) {\n");
     ok = append_list(lines, (long long)"    EpSemaphore* s = (EpSemaphore*)sp;\n");
     ok = append_list(lines, (long long)"    pthread_mutex_lock(&s->mutex);\n");
     ok = append_list(lines, (long long)"    while (s->value <= 0) {\n");
@@ -20022,10 +20030,6 @@ long long ep_rt_core_27() {
     ok = append_list(lines, (long long)"    regmatch_t match;\n");
     ok = append_list(lines, (long long)"    const char* pattern = (const char*)pattern_ptr;\n");
     ok = append_list(lines, (long long)"    const char* text = (const char*)text_ptr;\n");
-    ok = append_list(lines, (long long)"    int ret = regcomp(&regex, pattern, REG_EXTENDED);\n");
-    ok = append_list(lines, (long long)"    if (ret) {\n");
-    ok = append_list(lines, (long long)"        append_list(list, text_ptr);\n");
-    ok = append_list(lines, (long long)"        return list;\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -20046,6 +20050,10 @@ long long ep_rt_core_28() {
         free_list(lines);
         lines = tmp_val;
     }
+    ok = append_list(lines, (long long)"    int ret = regcomp(&regex, pattern, REG_EXTENDED);\n");
+    ok = append_list(lines, (long long)"    if (ret) {\n");
+    ok = append_list(lines, (long long)"        append_list(list, text_ptr);\n");
+    ok = append_list(lines, (long long)"        return list;\n");
     ok = append_list(lines, (long long)"    }\n");
     ok = append_list(lines, (long long)"    const char* cursor = text;\n");
     ok = append_list(lines, (long long)"    while (regexec(&regex, cursor, 1, &match, 0) == 0) {\n");
@@ -20192,10 +20200,6 @@ long long ep_rt_core_28() {
     ok = append_list(lines, (long long)"    *dst = '\\0';\n");
     ok = append_list(lines, (long long)"    ep_gc_register(result, EP_OBJ_STRING);\n");
     ok = append_list(lines, (long long)"    return (long long)result;\n");
-    ok = append_list(lines, (long long)"}\n");
-    ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"/* ========== Additional String Functions ========== */\n");
-    ok = append_list(lines, (long long)"#include <ctype.h>\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -20216,6 +20220,10 @@ long long ep_rt_core_29() {
         free_list(lines);
         lines = tmp_val;
     }
+    ok = append_list(lines, (long long)"}\n");
+    ok = append_list(lines, (long long)"\n");
+    ok = append_list(lines, (long long)"/* ========== Additional String Functions ========== */\n");
+    ok = append_list(lines, (long long)"#include <ctype.h>\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"long long string_upper(long long s_val) {\n");
     ok = append_list(lines, (long long)"    const char* s = (const char*)s_val;\n");
@@ -20362,10 +20370,6 @@ long long ep_rt_core_29() {
     ok = append_list(lines, (long long)"    return min + (long long)(r % range);\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"// JSON built-in functions\n");
-    ok = append_list(lines, (long long)"static const char* json_skip_ws(const char* p) {\n");
-    ok = append_list(lines, (long long)"    while (*p == ' ' || *p == '\\t' || *p == '\\n' || *p == '\\r') p++;\n");
-    ok = append_list(lines, (long long)"    return p;\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -20386,6 +20390,10 @@ long long ep_rt_core_30() {
         free_list(lines);
         lines = tmp_val;
     }
+    ok = append_list(lines, (long long)"// JSON built-in functions\n");
+    ok = append_list(lines, (long long)"static const char* json_skip_ws(const char* p) {\n");
+    ok = append_list(lines, (long long)"    while (*p == ' ' || *p == '\\t' || *p == '\\n' || *p == '\\r') p++;\n");
+    ok = append_list(lines, (long long)"    return p;\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"static const char* json_skip_value(const char* p) {\n");
@@ -20532,10 +20540,6 @@ long long ep_rt_core_30() {
     ok = append_list(lines, (long long)"            unsigned int temp = sha1_left_rotate(a, 5) + f + e + k + w[i];\n");
     ok = append_list(lines, (long long)"            e = d; d = c; c = sha1_left_rotate(b, 30); b = a; a = temp;\n");
     ok = append_list(lines, (long long)"        }\n");
-    ok = append_list(lines, (long long)"        h0 += a; h1 += b; h2 += c; h3 += d; h4 += e;\n");
-    ok = append_list(lines, (long long)"    }\n");
-    ok = append_list(lines, (long long)"    free(msg);\n");
-    ok = append_list(lines, (long long)"\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -20556,6 +20560,10 @@ long long ep_rt_core_31() {
         free_list(lines);
         lines = tmp_val;
     }
+    ok = append_list(lines, (long long)"        h0 += a; h1 += b; h2 += c; h3 += d; h4 += e;\n");
+    ok = append_list(lines, (long long)"    }\n");
+    ok = append_list(lines, (long long)"    free(msg);\n");
+    ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"    // Return Base64-encoded hash directly (for WebSocket handshake)\n");
     ok = append_list(lines, (long long)"    unsigned char hash[20];\n");
     ok = append_list(lines, (long long)"    hash[0] = (h0>>24)&0xFF; hash[1] = (h0>>16)&0xFF; hash[2] = (h0>>8)&0xFF; hash[3] = h0&0xFF;\n");
