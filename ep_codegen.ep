@@ -198,6 +198,12 @@ define get_fn_c_name with func:
 define cg_int_to_str with n:
     if n == 0:
         return "0"
+    # Negative values: emit a leading '-' and format the magnitude. (Without
+    # this the digit loop `while temp > 0` never ran and returned "".)
+    set neg to 0
+    if n < 0:
+        set neg to 1
+        set n to 0 - n
     set lst to create_list()
     set temp to n
     set digits to create_list()
@@ -211,8 +217,10 @@ define cg_int_to_str with n:
         set d to pop_list(digits)
         set ok to append_list(lst and d)
         set len to len - 1
-        
+
     set res to string_from_list(lst)
+    if neg == 1:
+        return string_concat("-" and res)
     return res
 
 define escape_string with s:

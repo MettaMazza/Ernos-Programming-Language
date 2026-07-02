@@ -4975,6 +4975,9 @@ long long check_expr(long long, long long, long long);
 long long check_stmts(long long, long long);
 long long check_function(long long, long long);
 long long check_program(long long);
+long long opt_fold_expr(long long);
+long long opt_fold_stmts(long long);
+long long optimize_program(long long);
 long long map_get(long long, long long, long long);
 long long map_contains_key(long long, long long);
 long long collect_idents_expr(long long, long long);
@@ -5083,7 +5086,7 @@ long long get_file_stem(long long path) {
     ep_gc_maybe_collect();
 
     len = string_length((char*)path);
-    last_slash = (0LL - 1LL);
+    last_slash = -1LL;
     idx = 0LL;
     while (idx < len) {
     ch = get_character((char*)path, idx);
@@ -5121,7 +5124,7 @@ long long get_file_dir(long long path) {
     ep_gc_maybe_collect();
 
     len = string_length((char*)path);
-    last_slash = (0LL - 1LL);
+    last_slash = -1LL;
     idx = 0LL;
     while (idx < len) {
     ch = get_character((char*)path, idx);
@@ -5475,6 +5478,7 @@ long long _main() {
     long long empty_imports = 0;
     long long program_ast = 0;
     long long check_ok = 0;
+    long long opt_ok = 0;
     long long c_code = 0;
     long long c_path = 0;
     long long compile_cmd = 0;
@@ -5639,6 +5643,7 @@ long long _main() {
     ret_val = 0LL;
     goto L_cleanup;
     }
+    opt_ok = optimize_program(program_ast);
     printf("%s\n", (char*)(long long)"[2/3] Generating C Source...");
     c_code = generate_c(program_ast, is_test_mode);
     if (string_length((char*)c_code) == 0LL) {
@@ -9903,6 +9908,227 @@ L_cleanup:
     return ret_val;
 }
 
+long long opt_fold_expr(long long expr) {
+    long long t = 0;
+    long long left = 0;
+    long long right = 0;
+    long long ok1 = 0;
+    long long ok3 = 0;
+    long long op = 0;
+    long long lv = 0;
+    long long rv = 0;
+    long long folded = 0;
+    long long res = 0;
+    long long ok5l = 0;
+    long long ok5r = 0;
+    long long args = 0;
+    long long an = 0;
+    long long ai = 0;
+    long long okca = 0;
+    long long ok1c = 0;
+    long long elems = 0;
+    long long en = 0;
+    long long ei = 0;
+    long long okle = 0;
+    long long ret_val = 0;
+
+    ep_gc_maybe_collect();
+
+    if (expr == 0LL) {
+    ret_val = 0LL;
+    goto L_cleanup;
+    }
+    t = get_list(expr, 0LL);
+    if (t == 4LL) {
+    left = opt_fold_expr(get_list(expr, 1LL));
+    right = opt_fold_expr(get_list(expr, 3LL));
+    ok1 = set_list(expr, 1LL, left);
+    ok3 = set_list(expr, 3LL, right);
+    op = get_list(expr, 2LL);
+    if (get_list(left, 0LL) == 1LL) {
+    if (get_list(right, 0LL) == 1LL) {
+    lv = get_list(left, 1LL);
+    rv = get_list(right, 1LL);
+    folded = 0LL;
+    res = 0LL;
+    if (op == 1LL) {
+    res = (lv + rv);
+    folded = 1LL;
+    }
+    if (op == 2LL) {
+    res = (lv - rv);
+    folded = 1LL;
+    }
+    if (op == 3LL) {
+    res = (lv * rv);
+    folded = 1LL;
+    }
+    if (op == 4LL) {
+    if (rv != 0LL) {
+    res = (lv / rv);
+    folded = 1LL;
+    }
+    }
+    if (op == 5LL) {
+    if (rv != 0LL) {
+    res = (lv - ((lv / rv) * rv));
+    folded = 1LL;
+    }
+    }
+    if (folded == 1LL) {
+    ret_val = (make_node_int(res) + 0LL);
+    goto L_cleanup;
+    }
+    }
+    }
+    ret_val = expr;
+    goto L_cleanup;
+    }
+    if ((t == 5LL || t == 14LL)) {
+    ok5l = set_list(expr, 1LL, opt_fold_expr(get_list(expr, 1LL)));
+    ok5r = set_list(expr, 3LL, opt_fold_expr(get_list(expr, 3LL)));
+    ret_val = expr;
+    goto L_cleanup;
+    }
+    if (t == 6LL) {
+    args = get_list(expr, 2LL);
+    an = length_list(args);
+    ai = 0LL;
+    while (ai < an) {
+    okca = set_list(args, ai, opt_fold_expr(get_list(args, ai)));
+    ai = (ai + 1LL);
+    }
+    ret_val = expr;
+    goto L_cleanup;
+    }
+    if ((((t == 18LL || t == 21LL) || t == 32LL) || t == 33LL)) {
+    ok1c = set_list(expr, 1LL, opt_fold_expr(get_list(expr, 1LL)));
+    ret_val = expr;
+    goto L_cleanup;
+    }
+    if (t == 35LL) {
+    elems = get_list(expr, 1LL);
+    en = length_list(elems);
+    ei = 0LL;
+    while (ei < en) {
+    okle = set_list(elems, ei, opt_fold_expr(get_list(elems, ei)));
+    ei = (ei + 1LL);
+    }
+    ret_val = expr;
+    goto L_cleanup;
+    }
+    ret_val = expr;
+    goto L_cleanup;
+L_cleanup:
+    return ret_val;
+}
+
+long long opt_fold_stmts(long long stmts) {
+    long long n = 0;
+    long long idx = 0;
+    long long stmt = 0;
+    long long t = 0;
+    long long oks = 0;
+    long long okr = 0;
+    long long okc = 0;
+    long long okt = 0;
+    long long eb = 0;
+    long long oke = 0;
+    long long okw = 0;
+    long long okwb = 0;
+    long long okse = 0;
+    long long okfe = 0;
+    long long okfeb = 0;
+    long long arms = 0;
+    long long arn = 0;
+    long long ari = 0;
+    long long okam = 0;
+    long long ret_val = 0;
+
+    ep_gc_maybe_collect();
+
+    n = length_list(stmts);
+    idx = 0LL;
+    while (idx < n) {
+    stmt = get_list(stmts, idx);
+    t = get_list(stmt, 0LL);
+    if (t == 7LL) {
+    oks = set_list(stmt, 2LL, opt_fold_expr(get_list(stmt, 2LL)));
+    }
+    if (((t == 8LL || t == 9LL) || t == 36LL)) {
+    okr = set_list(stmt, 1LL, opt_fold_expr(get_list(stmt, 1LL)));
+    }
+    if (t == 10LL) {
+    okc = set_list(stmt, 1LL, opt_fold_expr(get_list(stmt, 1LL)));
+    okt = opt_fold_stmts(get_list(stmt, 2LL));
+    eb = get_list(stmt, 3LL);
+    if (eb != 0LL) {
+    oke = opt_fold_stmts(eb);
+    }
+    }
+    if (t == 11LL) {
+    okw = set_list(stmt, 1LL, opt_fold_expr(get_list(stmt, 1LL)));
+    okwb = opt_fold_stmts(get_list(stmt, 2LL));
+    }
+    if (t == 16LL) {
+    okse = set_list(stmt, 2LL, opt_fold_expr(get_list(stmt, 2LL)));
+    }
+    if (t == 28LL) {
+    okfe = set_list(stmt, 2LL, opt_fold_expr(get_list(stmt, 2LL)));
+    okfeb = opt_fold_stmts(get_list(stmt, 3LL));
+    }
+    if (t == 27LL) {
+    arms = get_list(stmt, 2LL);
+    arn = length_list(arms);
+    ari = 0LL;
+    while (ari < arn) {
+    okam = opt_fold_stmts(get_list(get_list(arms, ari), 2LL));
+    ari = (ari + 1LL);
+    }
+    }
+    idx = (idx + 1LL);
+    }
+    ret_val = 0LL;
+    goto L_cleanup;
+L_cleanup:
+    return ret_val;
+}
+
+long long optimize_program(long long program) {
+    long long funcs = 0;
+    long long n = 0;
+    long long idx = 0;
+    long long okf = 0;
+    long long methods = 0;
+    long long mn = 0;
+    long long mi = 0;
+    long long okm = 0;
+    long long ret_val = 0;
+
+    ep_gc_maybe_collect();
+
+    funcs = get_list(program, 3LL);
+    n = length_list(funcs);
+    idx = 0LL;
+    while (idx < n) {
+    okf = opt_fold_stmts(get_list(get_list(funcs, idx), 3LL));
+    idx = (idx + 1LL);
+    }
+    if (length_list(program) > 6LL) {
+    methods = get_list(program, 6LL);
+    mn = length_list(methods);
+    mi = 0LL;
+    while (mi < mn) {
+    okm = opt_fold_stmts(get_list(get_list(methods, mi), 4LL));
+    mi = (mi + 1LL);
+    }
+    }
+    ret_val = 0LL;
+    goto L_cleanup;
+L_cleanup:
+    return ret_val;
+}
+
 long long map_get(long long keys, long long values, long long key) {
     long long key_str = 0;
     long long len = 0;
@@ -10304,6 +10530,7 @@ L_cleanup:
 }
 
 long long cg_int_to_str(long long n) {
+    long long neg = 0;
     long long lst = 0;
     long long temp = 0;
     long long digits = 0;
@@ -10322,6 +10549,11 @@ long long cg_int_to_str(long long n) {
     if (n == 0LL) {
     ret_val = (long long)"0";
     goto L_cleanup;
+    }
+    neg = 0LL;
+    if (n < 0LL) {
+    neg = 1LL;
+    n = (0LL - n);
     }
     {
         long long tmp_val = create_list();
@@ -10346,6 +10578,10 @@ long long cg_int_to_str(long long n) {
     len = (len - 1LL);
     }
     res = (long long)string_from_list(lst);
+    if (neg == 1LL) {
+    ret_val = string_concat((long long)"-", res);
+    goto L_cleanup;
+    }
     ret_val = res;
     goto L_cleanup;
 L_cleanup:

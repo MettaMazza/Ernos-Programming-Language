@@ -2,6 +2,7 @@
 import "ep_lexer"
 import "ep_parser"
 import "ep_check"
+import "ep_optimizer"
 import "ep_codegen"
 import "ep_runtime_gen"
 
@@ -286,6 +287,9 @@ define main:
     if check_only == 1:
         display "Check passed: no errors."
         return 0
+
+    # Optimization pass (constant folding) before codegen.
+    set opt_ok to optimize_program(program_ast)
 
     display "[2/3] Generating C Source..."
     set c_code to generate_c(program_ast and is_test_mode)
