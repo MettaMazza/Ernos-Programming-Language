@@ -214,13 +214,22 @@ define main:
         
     set first_arg to get_argument(1)
     set is_test_mode to 0
+    set check_only to 0
     set input_path to get_argument(1)
-    
+
     if "test" equals first_arg:
         if arg_count < 3:
             display "Usage: epc test <filename.ep>"
             return 1
         set is_test_mode to 1
+        set input_path to get_argument(2)
+
+    # `epc check <file>`: run lexing/parsing/semantic checks only, no codegen.
+    if "check" equals first_arg:
+        if arg_count < 3:
+            display "Usage: epc check <filename.ep>"
+            return 1
+        set check_only to 1
         set input_path to get_argument(2)
         
     set stem to get_file_stem(input_path)
@@ -273,6 +282,10 @@ define main:
     if check_ok == 0:
         display "Compilation failed: semantic errors."
         return 1
+
+    if check_only == 1:
+        display "Check passed: no errors."
+        return 0
 
     display "[2/3] Generating C Source..."
     set c_code to generate_c(program_ast and is_test_mode)

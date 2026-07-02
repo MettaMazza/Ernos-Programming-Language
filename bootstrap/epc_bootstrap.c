@@ -5453,6 +5453,7 @@ long long _main() {
     long long arg_count = 0;
     long long first_arg = 0;
     long long is_test_mode = 0;
+    long long check_only = 0;
     long long input_path = 0;
     long long stem = 0;
     long long all_functions = 0;
@@ -5517,6 +5518,7 @@ long long _main() {
     }
     first_arg = (long long)get_argument(1LL);
     is_test_mode = 0LL;
+    check_only = 0LL;
     input_path = (long long)get_argument(1LL);
     if ((strcmp((char*)(long long)"test", (char*)first_arg) == 0)) {
     if (arg_count < 3LL) {
@@ -5525,6 +5527,15 @@ long long _main() {
     goto L_cleanup;
     }
     is_test_mode = 1LL;
+    input_path = (long long)get_argument(2LL);
+    }
+    if ((strcmp((char*)(long long)"check", (char*)first_arg) == 0)) {
+    if (arg_count < 3LL) {
+    printf("%s\n", (char*)(long long)"Usage: epc check <filename.ep>");
+    ret_val = 1LL;
+    goto L_cleanup;
+    }
+    check_only = 1LL;
     input_path = (long long)get_argument(2LL);
     }
     stem = get_file_stem(input_path);
@@ -5621,6 +5632,11 @@ long long _main() {
     if (check_ok == 0LL) {
     printf("%s\n", (char*)(long long)"Compilation failed: semantic errors.");
     ret_val = 1LL;
+    goto L_cleanup;
+    }
+    if (check_only == 1LL) {
+    printf("%s\n", (char*)(long long)"Check passed: no errors.");
+    ret_val = 0LL;
     goto L_cleanup;
     }
     printf("%s\n", (char*)(long long)"[2/3] Generating C Source...");
