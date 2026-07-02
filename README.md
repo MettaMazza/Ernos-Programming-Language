@@ -345,7 +345,9 @@ the same generational GC, pointer-safe accessors, and OOM-guarded allocators.
 
 `epc` compiling itself reaches a **byte-identical fixpoint** (gen2 == gen3),
 verified by `tests/run_fixpoint.sh`. Self-hosted coverage of the test suite is
-tracked by `tests/run_epc_parity.sh`.
+tracked by `tests/run_epc_parity.sh` (currently 36/54 runnable programs; 8/9
+compile-error tests correctly rejected by the `ep_check.ep` semantic pass).
+`epc check <file>` runs the checks without codegen.
 
 ### Fully self-contained bootstrap (no Rust required)
 
