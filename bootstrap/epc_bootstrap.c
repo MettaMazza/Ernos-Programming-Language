@@ -5026,6 +5026,7 @@ long long is_accessor_name(long long);
 long long is_borrow_expr(long long, long long, long long);
 long long scan_stmts_for_borrows(long long, long long, long long);
 long long collect_borrowed_vars(long long, long long, long long, long long);
+long long var_returned_in_stmts(long long, long long);
 long long gen_function(long long, long long);
 long long gen_statement(long long, long long, long long, long long);
 long long gen_expr(long long, long long, long long, long long);
@@ -5783,7 +5784,6 @@ long long create_token(long long type, long long value, long long line, long lon
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(tok);
     return ret_val;
 }
 
@@ -6181,7 +6181,6 @@ L_cleanup:
     ep_gc_pop_roots(6);
     free_list(str_chars);
     free_list(expr_chars);
-    free_list(res);
     return ret_val;
 }
 
@@ -6960,7 +6959,6 @@ long long tokenize_source(long long source) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(3);
-    free_list(tokens);
     free_list(indent_stack);
     return ret_val;
 }
@@ -7010,7 +7008,6 @@ long long make_node_int(long long val) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7034,7 +7031,6 @@ long long make_node_str(long long val) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7058,7 +7054,6 @@ long long make_node_ident(long long name) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7084,7 +7079,6 @@ long long make_node_binary(long long left, long long op, long long right) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7110,7 +7104,6 @@ long long make_node_comp(long long left, long long op, long long right) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7135,7 +7128,6 @@ long long make_node_call(long long name, long long args) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7160,7 +7152,6 @@ long long make_node_set(long long var, long long expr) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7184,7 +7175,6 @@ long long make_node_return(long long expr) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7208,7 +7198,6 @@ long long make_node_display(long long expr) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7234,7 +7223,6 @@ long long make_node_if(long long cond, long long then_b, long long else_b) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7259,7 +7247,6 @@ long long make_node_repeat_while(long long cond, long long body) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7286,7 +7273,6 @@ long long make_node_func(long long name, long long params, long long body, long 
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7318,7 +7304,6 @@ long long make_node_program(long long imports, long long externals, long long fu
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7343,7 +7328,6 @@ long long make_node_spawn(long long func_name, long long args) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7368,7 +7352,6 @@ long long make_node_send(long long chan, long long val) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7391,7 +7374,6 @@ long long make_node_channel() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7415,7 +7397,6 @@ long long make_node_receive(long long chan) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7441,7 +7422,6 @@ long long make_node_external(long long name, long long params, long long ret_typ
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7465,7 +7445,6 @@ long long make_node_borrow(long long target) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7489,7 +7468,6 @@ long long make_node_await(long long target) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7515,7 +7493,6 @@ long long make_node_logical(long long left, long long op, long long right) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7540,7 +7517,6 @@ long long make_node_field_access(long long obj, long long field_name) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7566,7 +7542,6 @@ long long make_node_field_set(long long obj, long long field_name, long long val
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7591,7 +7566,6 @@ long long make_node_struct_create(long long struct_name, long long fields) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7617,7 +7591,6 @@ long long make_node_method_call(long long obj, long long method_name, long long 
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7642,7 +7615,6 @@ long long make_node_enum_create(long long variant_name, long long args) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7667,7 +7639,6 @@ long long make_node_match(long long expr, long long arms) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7693,7 +7664,6 @@ long long make_node_for_each(long long var_name, long long iter_expr, long long 
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7716,7 +7686,6 @@ long long make_node_break() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7739,7 +7708,6 @@ long long make_node_continue() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7763,7 +7731,6 @@ long long make_node_bool(long long val) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7787,7 +7754,6 @@ long long make_node_unary_not(long long expr) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7811,7 +7777,6 @@ long long make_node_try(long long expr) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7836,7 +7801,6 @@ long long make_node_closure(long long params, long long body) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7860,7 +7824,6 @@ long long make_node_list_lit(long long elements) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7884,7 +7847,6 @@ long long make_node_expr_stmt(long long expr) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7909,7 +7871,6 @@ long long make_node_struct_def(long long name, long long fields) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7934,7 +7895,6 @@ long long make_node_enum_def(long long name, long long variants) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7961,7 +7921,6 @@ long long make_node_method_def(long long method_name, long long struct_name, lon
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -7986,7 +7945,6 @@ long long make_node_trait_def(long long name, long long method_sigs) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -8012,7 +7970,6 @@ long long make_node_trait_impl(long long trait_name, long long type_name, long l
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(node);
     return ret_val;
 }
 
@@ -8037,7 +7994,6 @@ long long create_parser_state(long long tokens) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(state);
     return ret_val;
 }
 
@@ -11020,7 +10976,6 @@ long long create_codegen_state() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(state);
     return ret_val;
 }
 
@@ -11958,6 +11913,86 @@ L_cleanup:
     return ret_val;
 }
 
+long long var_returned_in_stmts(long long name, long long stmts) {
+    long long n = 0;
+    long long idx = 0;
+    long long stmt = 0;
+    long long t = 0;
+    long long ids = 0;
+    long long ok = 0;
+    long long eb = 0;
+    long long arms = 0;
+    long long an = 0;
+    long long ai = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&ids);
+    ep_gc_maybe_collect();
+
+    n = length_list(stmts);
+    idx = 0LL;
+    while (idx < n) {
+    stmt = get_list(stmts, idx);
+    t = get_list(stmt, 0LL);
+    if (t == 8LL) {
+    {
+        long long tmp_val = create_list();
+        free_list(ids);
+        ids = tmp_val;
+    }
+    ok = collect_idents_expr(get_list(stmt, 1LL), ids);
+    if (contains_string_val(ids, name) == 1LL) {
+    ret_val = 1LL;
+    goto L_cleanup;
+    }
+    }
+    if (t == 10LL) {
+    if (var_returned_in_stmts(name, get_list(stmt, 2LL)) == 1LL) {
+    ret_val = 1LL;
+    goto L_cleanup;
+    }
+    eb = get_list(stmt, 3LL);
+    if (eb != 0LL) {
+    if (var_returned_in_stmts(name, eb) == 1LL) {
+    ret_val = 1LL;
+    goto L_cleanup;
+    }
+    }
+    }
+    if (t == 11LL) {
+    if (var_returned_in_stmts(name, get_list(stmt, 2LL)) == 1LL) {
+    ret_val = 1LL;
+    goto L_cleanup;
+    }
+    }
+    if (t == 28LL) {
+    if (var_returned_in_stmts(name, get_list(stmt, 3LL)) == 1LL) {
+    ret_val = 1LL;
+    goto L_cleanup;
+    }
+    }
+    if (t == 27LL) {
+    arms = get_list(stmt, 2LL);
+    an = length_list(arms);
+    ai = 0LL;
+    while (ai < an) {
+    if (var_returned_in_stmts(name, get_list(get_list(arms, ai), 2LL)) == 1LL) {
+    ret_val = 1LL;
+    goto L_cleanup;
+    }
+    ai = (ai + 1LL);
+    }
+    }
+    idx = (idx + 1LL);
+    }
+    ret_val = 0LL;
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    free_list(ids);
+    return ret_val;
+}
+
 long long gen_function(long long state, long long func) {
     long long name = 0;
     long long params = 0;
@@ -12250,10 +12285,12 @@ long long gen_function(long long state, long long func) {
     if ((is_global == 0LL && is_borrowed == 0LL)) {
     t = map_get(var_types_keys, var_types_values, var_name);
     if (t == 4LL) {
+    if (var_returned_in_stmts(var_name, body) == 0LL) {
     cleanup_line = (long long)"    free_list(";
     cleanup_line = string_concat(cleanup_line, var_name);
     cleanup_line = string_concat(cleanup_line, (long long)");\n");
     ok = emit(state, cleanup_line);
+    }
     }
     }
     }
@@ -13617,7 +13654,6 @@ long long get_c_main_source() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -13734,7 +13770,6 @@ long long get_c_test_main_source(long long program) {
 L_cleanup:
     ep_gc_pop_roots(3);
     free_list(test_cases);
-    free_list(lines);
     return ret_val;
 }
 
@@ -13813,7 +13848,6 @@ long long collect_all_spawns(long long program) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(spawn_list);
     return ret_val;
 }
 
@@ -13845,7 +13879,6 @@ long long clone_list(long long lst) {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(new_lst);
     return ret_val;
 }
 
@@ -15403,7 +15436,6 @@ long long ep_rt_core_0() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -15574,7 +15606,6 @@ long long ep_rt_core_1() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -15745,7 +15776,6 @@ long long ep_rt_core_2() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -15916,7 +15946,6 @@ long long ep_rt_core_3() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -16087,7 +16116,6 @@ long long ep_rt_core_4() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -16258,7 +16286,6 @@ long long ep_rt_core_5() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -16429,7 +16456,6 @@ long long ep_rt_core_6() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -16600,7 +16626,6 @@ long long ep_rt_core_7() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -16771,7 +16796,6 @@ long long ep_rt_core_8() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -16942,7 +16966,6 @@ long long ep_rt_core_9() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -17113,7 +17136,6 @@ long long ep_rt_core_10() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -17284,7 +17306,6 @@ long long ep_rt_core_11() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -17455,7 +17476,6 @@ long long ep_rt_core_12() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -17626,7 +17646,6 @@ long long ep_rt_core_13() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -17797,7 +17816,6 @@ long long ep_rt_core_14() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -17968,7 +17986,6 @@ long long ep_rt_core_15() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -18139,7 +18156,6 @@ long long ep_rt_core_16() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -18310,7 +18326,6 @@ long long ep_rt_core_17() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -18481,7 +18496,6 @@ long long ep_rt_core_18() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -18652,7 +18666,6 @@ long long ep_rt_core_19() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -18823,7 +18836,6 @@ long long ep_rt_core_20() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -18994,7 +19006,6 @@ long long ep_rt_core_21() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -19165,7 +19176,6 @@ long long ep_rt_core_22() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -19336,7 +19346,6 @@ long long ep_rt_core_23() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -19507,7 +19516,6 @@ long long ep_rt_core_24() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -19678,7 +19686,6 @@ long long ep_rt_core_25() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -19849,7 +19856,6 @@ long long ep_rt_core_26() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -20020,7 +20026,6 @@ long long ep_rt_core_27() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -20191,7 +20196,6 @@ long long ep_rt_core_28() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -20362,7 +20366,6 @@ long long ep_rt_core_29() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -20533,7 +20536,6 @@ long long ep_rt_core_30() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -20621,7 +20623,6 @@ long long ep_rt_core_31() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -20792,7 +20793,6 @@ long long ep_rt_builtins_0() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -20824,7 +20824,6 @@ long long ep_rt_builtins_1() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(lines);
     return ret_val;
 }
 
@@ -20879,7 +20878,6 @@ long long get_shared_runtime_source() {
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(1);
-    free_list(parts);
     return ret_val;
 }
 

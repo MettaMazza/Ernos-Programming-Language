@@ -898,6 +898,45 @@ define collect_borrowed_vars with stmts and params and borrowed_keys and borrowe
     return 0
 
 # Generator Functions
+# Does `name` appear in any `return` expression within these statements
+# (directly or as a call/constructor argument)? Such a value escapes the function, so
+# it must NOT be freed at cleanup (that was freeing lists returned inside a
+# constructed object — a use-after-free). Recurses into nested control flow.
+define var_returned_in_stmts with name and stmts:
+    set n to length_list(stmts)
+    set idx to 0
+    repeat while idx < n:
+        set stmt to get_list(stmts and idx)
+        set t to get_list(stmt and 0)
+        if t == 8: # RETURN
+            set ids to create_list()
+            set ok to collect_idents_expr(get_list(stmt and 1) and ids)
+            if contains_string_val(ids and name) == 1:
+                return 1
+        if t == 10: # IF
+            if var_returned_in_stmts(name and get_list(stmt and 2)) == 1:
+                return 1
+            set eb to get_list(stmt and 3)
+            if eb != 0:
+                if var_returned_in_stmts(name and eb) == 1:
+                    return 1
+        if t == 11: # REPEAT_WHILE
+            if var_returned_in_stmts(name and get_list(stmt and 2)) == 1:
+                return 1
+        if t == 28: # FOR_EACH
+            if var_returned_in_stmts(name and get_list(stmt and 3)) == 1:
+                return 1
+        if t == 27: # MATCH
+            set arms to get_list(stmt and 2)
+            set an to length_list(arms)
+            set ai to 0
+            repeat while ai < an:
+                if var_returned_in_stmts(name and get_list(get_list(arms and ai) and 2)) == 1:
+                    return 1
+                set ai to ai + 1
+        set idx to idx + 1
+    return 0
+
 define gen_function with state and func:
     set name to get_list(func and 1)
     set params to get_list(func and 2)
@@ -1139,10 +1178,14 @@ define gen_function with state and func:
             if is_global == 0 && is_borrowed == 0:
                 set t to map_get(var_types_keys and var_types_values and var_name)
                 if t == 4: # TYPE_LIST
-                    set cleanup_line to "    free_list("
-                    set cleanup_line to string_concat(cleanup_line and var_name)
-                    set cleanup_line to string_concat(cleanup_line and ");\n")
-                    set ok to emit(state and cleanup_line)
+                    # Skip lists that escape via a return (freeing them would
+                    # free data referenced by the returned value). The GC
+                    # reclaims them.
+                    if var_returned_in_stmts(var_name and body) == 0:
+                        set cleanup_line to "    free_list("
+                        set cleanup_line to string_concat(cleanup_line and var_name)
+                        set cleanup_line to string_concat(cleanup_line and ");\n")
+                        set ok to emit(state and cleanup_line)
         set idx to idx + 1
         
     set ok to emit(state and "    return ret_val;\n}\n\n")
