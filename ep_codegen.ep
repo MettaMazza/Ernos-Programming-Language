@@ -1180,13 +1180,12 @@ define gen_function with state and func:
             
         set idx to idx + 1
 
-    # NOTE: local lists are intentionally NOT free_list'd at cleanup. A list can
-    # escape not only via a direct `return` but transitively — appended into
-    # another list / stored into a struct that is returned (e.g. each `row`
-    # pushed into the returned `rows`). Freeing such a list corrupts the
-    # returned value (use-after-free). The generational GC reclaims unreachable
-    # lists after the roots are popped, so relying on it is both correct and
-    # simpler than a full transitive escape analysis.
+    # Local lists are NOT free_list'd at cleanup. Auto-freeing here was unsound in
+    # two directions: it double-freed lists an explicit free_list already released
+    # (and reassigned), and it freed lists that escape — directly via `return` or
+    # transitively (a `row` appended into the returned `rows`) — corrupting the
+    # returned value. The generational GC reclaims unreachable lists after the
+    # roots are popped, which is both correct and simpler than escape analysis.
 
     set ok to emit(state and "    return ret_val;\n}\n\n")
     return 0
@@ -1261,6 +1260,26 @@ define gen_statement with state and stmt and var_keys and var_values:
         set expr to get_list(stmt and 1)
         set t to infer_type(state and expr and var_keys and var_values)
         set expr_str to gen_expr(state and expr and var_keys and var_values)
+        # A direct heterogeneous-accessor call (get_list/pop_list/map_get*)
+        # yields an Any value that may be a string or an int; auto-detect at
+        # runtime. Narrow/syntactic so ordinary int displays are unaffected.
+        set is_any_call to 0
+        if get_list(expr and 0) == 6: # NODE_CALL
+            set callee to string_concat(get_list(expr and 1) and "")
+            if callee equals "get_list":
+                set is_any_call to 1
+            if callee equals "pop_list":
+                set is_any_call to 1
+            if callee equals "map_get_val":
+                set is_any_call to 1
+            if callee equals "map_get_str":
+                set is_any_call to 1
+        if is_any_call == 1:
+            set line to "    printf(\"%s\\n\", (char*)ep_auto_to_string("
+            set line to string_concat(line and expr_str)
+            set line to string_concat(line and "));\n")
+            set ok to emit(state and line)
+            return 0
         if t == 2 || t == 3: # TYPE_STR or TYPE_DYNSTR
             set line to "    printf(\"%s\\n\", (char*)"
             set line to string_concat(line and expr_str)

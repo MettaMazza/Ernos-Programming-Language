@@ -12280,6 +12280,8 @@ long long gen_statement(long long state, long long stmt, long long var_keys, lon
     long long line = 0;
     long long expr_type = 0;
     long long null_line = 0;
+    long long is_any_call = 0;
+    long long callee = 0;
     long long cond = 0;
     long long then_b = 0;
     long long else_b = 0;
@@ -12339,6 +12341,7 @@ long long gen_statement(long long state, long long stmt, long long var_keys, lon
     ep_gc_push_root(&expr_str);
     ep_gc_push_root(&line);
     ep_gc_push_root(&null_line);
+    ep_gc_push_root(&callee);
     ep_gc_push_root(&cond_str);
     ep_gc_push_root(&arg_str);
     ep_gc_push_root(&chan_str);
@@ -12412,6 +12415,30 @@ long long gen_statement(long long state, long long stmt, long long var_keys, lon
     expr = get_list(stmt, 1LL);
     t = infer_type(state, expr, var_keys, var_values);
     expr_str = gen_expr(state, expr, var_keys, var_values);
+    is_any_call = 0LL;
+    if (get_list(expr, 0LL) == 6LL) {
+    callee = string_concat(get_list(expr, 1LL), (long long)"");
+    if ((strcmp((char*)callee, (char*)(long long)"get_list") == 0)) {
+    is_any_call = 1LL;
+    }
+    if ((strcmp((char*)callee, (char*)(long long)"pop_list") == 0)) {
+    is_any_call = 1LL;
+    }
+    if ((strcmp((char*)callee, (char*)(long long)"map_get_val") == 0)) {
+    is_any_call = 1LL;
+    }
+    if ((strcmp((char*)callee, (char*)(long long)"map_get_str") == 0)) {
+    is_any_call = 1LL;
+    }
+    }
+    if (is_any_call == 1LL) {
+    line = (long long)"    printf(\"%s\\n\", (char*)ep_auto_to_string(";
+    line = string_concat(line, expr_str);
+    line = string_concat(line, (long long)"));\n");
+    ok = emit(state, line);
+    ret_val = 0LL;
+    goto L_cleanup;
+    }
     if ((t == 2LL || t == 3LL)) {
     line = (long long)"    printf(\"%s\\n\", (char*)";
     line = string_concat(line, expr_str);
@@ -12734,7 +12761,7 @@ long long gen_statement(long long state, long long stmt, long long var_keys, lon
     ret_val = 0LL;
     goto L_cleanup;
 L_cleanup:
-    ep_gc_pop_roots(12);
+    ep_gc_pop_roots(13);
     return ret_val;
 }
 
