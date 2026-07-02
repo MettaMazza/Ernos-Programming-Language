@@ -1961,8 +1961,10 @@ define get_c_runtime_source:
 define get_c_main_source:
     set lines to create_list()
     set ok to append_list(lines and "\n/* Bootstrapper C main */\n")
+    set ok to append_list(lines and "void __ep_init_constants(void);\n")
     set ok to append_list(lines and "int main(int argc, char** argv) {\n")
     set ok to append_list(lines and "    init_ep_args(argc, argv);\n")
+    set ok to append_list(lines and "    __ep_init_constants();\n")
     set ok to append_list(lines and "    int result = (int)_main();\n")
     set ok to append_list(lines and "    ep_gc_shutdown();\n")
     set ok to append_list(lines and "    return result;\n")
@@ -2623,6 +2625,63 @@ define generate_c with program and is_test_mode:
                 set ok to emit(state and line)
                 set ts_idx to ts_idx + 1
     
+    # Emit top-level constant globals (file scope), their GC mark functions, and
+    # an __ep_init_constants() that runs their initializers. Always emit the init
+    # function (empty if no globals) so main can unconditionally call it.
+    set constants to create_list()
+    if length_list(program) > 9:
+        set constants to get_list(program and 9)
+    set const_n to length_list(constants)
+    set ci to 0
+    repeat while ci < const_n:
+        set cstmt to get_list(constants and ci)
+        set gline to "long long "
+        set gline to string_concat(gline and get_list(cstmt and 1))
+        set gline to string_concat(gline and " = 0;\n")
+        set ok to emit(state and gline)
+        set ci to ci + 1
+    set ok to emit(state and "static void __ep_mark_globals_major(void) {\n")
+    set ci to 0
+    repeat while ci < const_n:
+        set gn to get_list(get_list(constants and ci) and 1)
+        set ml to "    if ("
+        set ml to string_concat(ml and gn)
+        set ml to string_concat(ml and " != 0) ep_gc_mark_object((void*)")
+        set ml to string_concat(ml and gn)
+        set ml to string_concat(ml and ");\n")
+        set ok to emit(state and ml)
+        set ci to ci + 1
+    set ok to emit(state and "}\n")
+    set ok to emit(state and "static void __ep_mark_globals_minor(void) {\n")
+    set ci to 0
+    repeat while ci < const_n:
+        set gn to get_list(get_list(constants and ci) and 1)
+        set ml to "    if ("
+        set ml to string_concat(ml and gn)
+        set ml to string_concat(ml and " != 0) ep_gc_mark_object_minor((void*)")
+        set ml to string_concat(ml and gn)
+        set ml to string_concat(ml and ");\n")
+        set ok to emit(state and ml)
+        set ci to ci + 1
+    set ok to emit(state and "}\n")
+    set ok to emit(state and "void __ep_init_constants(void) {\n")
+    set ok to emit(state and "    ep_gc_mark_globals_major = __ep_mark_globals_major;\n")
+    set ok to emit(state and "    ep_gc_mark_globals_minor = __ep_mark_globals_minor;\n")
+    set gk to create_list()
+    set gv to create_list()
+    set ci to 0
+    repeat while ci < const_n:
+        set cstmt to get_list(constants and ci)
+        set ival to gen_expr(state and get_list(cstmt and 2) and gk and gv)
+        set il to "    "
+        set il to string_concat(il and get_list(cstmt and 1))
+        set il to string_concat(il and " = ")
+        set il to string_concat(il and ival)
+        set il to string_concat(il and ";\n")
+        set ok to emit(state and il)
+        set ci to ci + 1
+    set ok to emit(state and "}\n")
+
     # Emit FFI external prototypes
     set externals to get_list(program and 2)
     set ext_len to length_list(externals)

@@ -151,6 +151,7 @@ define make_node_program with imports and externals and funcs and struct_defs an
     set ok to append_list(node and method_defs)
     set ok to append_list(node and trait_defs)
     set ok to append_list(node and trait_impls)
+    set ok to append_list(node and (create_list() + 0)) # index 9: top-level constants
     return node
 
 define make_node_spawn with func_name and args:
@@ -506,6 +507,7 @@ define parse_program with state:
     set method_defs to create_list() + 0
     set trait_defs to create_list() + 0
     set trait_impls to create_list() + 0
+    set top_constants to create_list() + 0
     set loop to 1
     repeat while loop == 1:
         set tok to peek_token(state)
@@ -597,12 +599,17 @@ define parse_program with state:
                                     set impl_node to parse_trait_impl(state) + 0
                                     set ok to append_list(trait_impls and impl_node)
                                 else:
-                                    display "Parser Error: Unexpected token at top level:"
-                                    display t
-                                    set ok to set_parser_error(state)
-                                    set loop to 0
-                    
+                                    if t == 2: # top-level `set` -> global constant
+                                        set const_stmt to parse_statement(state) + 0
+                                        set ok to append_list(top_constants and const_stmt)
+                                    else:
+                                        display "Parser Error: Unexpected token at top level:"
+                                        display t
+                                        set ok to set_parser_error(state)
+                                        set loop to 0
+
     set prog to make_node_program(imports and externals and funcs and struct_defs and enum_defs and method_defs and trait_defs and trait_impls) + 0
+    set ok to set_list(prog and 9 and top_constants)
     return prog
 
 # define structure Name:

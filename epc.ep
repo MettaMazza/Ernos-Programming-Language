@@ -68,7 +68,7 @@ define resolve_import_path with current_file and import_path:
             return resolved
     return string_concat(resolved and ".ep")
 
-define parse_all_modules with current_file and parsed_files and all_functions and all_externals and all_struct_defs and all_enum_defs and all_method_defs and all_trait_defs and all_trait_impls:
+define parse_all_modules with current_file and parsed_files and all_functions and all_externals and all_struct_defs and all_enum_defs and all_method_defs and all_trait_defs and all_trait_impls and all_constants:
     set has_parsed to contains_string(parsed_files and current_file)
     if has_parsed == 1:
         return 0
@@ -147,7 +147,14 @@ define parse_all_modules with current_file and parsed_files and all_functions an
         repeat while ti_idx < ti_len:
             set ok to append_list(all_trait_impls and get_list(ti and ti_idx))
             set ti_idx to ti_idx + 1
-        
+    if prog_len > 9:
+        set tc to get_list(program_ast and 9)
+        set tc_len to length_list(tc)
+        set tc_idx to 0
+        repeat while tc_idx < tc_len:
+            set ok to append_list(all_constants and get_list(tc and tc_idx))
+            set tc_idx to tc_idx + 1
+
     set imp_len to length_list(imports)
     set i_idx to 0
     repeat while i_idx < imp_len:
@@ -157,7 +164,7 @@ define parse_all_modules with current_file and parsed_files and all_functions an
         set imp_alias to string_concat(get_list(imp_pair and 1) and "")
         set resolved_path to resolve_import_path(current_file and imp)
         if string_length(imp_alias) == 0:
-            set status to parse_all_modules(resolved_path and parsed_files and all_functions and all_externals and all_struct_defs and all_enum_defs and all_method_defs and all_trait_defs and all_trait_impls)
+            set status to parse_all_modules(resolved_path and parsed_files and all_functions and all_externals and all_struct_defs and all_enum_defs and all_method_defs and all_trait_defs and all_trait_impls and all_constants)
             if status != 0:
                 return status
         else:
@@ -167,7 +174,7 @@ define parse_all_modules with current_file and parsed_files and all_functions an
             # the Rust driver.
             set mod_funcs to create_list()
             set mod_externals to create_list()
-            set status to parse_all_modules(resolved_path and parsed_files and mod_funcs and mod_externals and all_struct_defs and all_enum_defs and all_method_defs and all_trait_defs and all_trait_impls)
+            set status to parse_all_modules(resolved_path and parsed_files and mod_funcs and mod_externals and all_struct_defs and all_enum_defs and all_method_defs and all_trait_defs and all_trait_impls and all_constants)
             if status != 0:
                 return status
             set mf_len to length_list(mod_funcs)
@@ -243,8 +250,9 @@ define main:
     set all_method_defs to create_list()
     set all_trait_defs to create_list()
     set all_trait_impls to create_list()
+    set all_constants to create_list()
     set parsed_files to create_list()
-    set status to parse_all_modules(input_path and parsed_files and all_functions and all_externals and all_struct_defs and all_enum_defs and all_method_defs and all_trait_defs and all_trait_impls)
+    set status to parse_all_modules(input_path and parsed_files and all_functions and all_externals and all_struct_defs and all_enum_defs and all_method_defs and all_trait_defs and all_trait_impls and all_constants)
     if status != 0:
         return 1
         
@@ -277,6 +285,7 @@ define main:
     set ok to append_list(program_ast and all_method_defs)
     set ok to append_list(program_ast and all_trait_defs)
     set ok to append_list(program_ast and all_trait_impls)
+    set ok to append_list(program_ast and all_constants)
     
     # Semantic checking (hard errors) before codegen.
     set check_ok to check_program(program_ast)

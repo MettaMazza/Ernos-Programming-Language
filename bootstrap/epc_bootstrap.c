@@ -4877,6 +4877,14 @@ long long float_to_int(long long val) {
 }
 
 #define EP_STRUCT_MAX_SLOTS 8
+static void __ep_mark_globals_major(void) {
+}
+static void __ep_mark_globals_minor(void) {
+}
+void __ep_init_constants(void) {
+    ep_gc_mark_globals_major = __ep_mark_globals_major;
+    ep_gc_mark_globals_minor = __ep_mark_globals_minor;
+}
 
 /* External Function Prototypes (FFI) */
 
@@ -4886,7 +4894,7 @@ long long get_file_stem(long long);
 long long get_file_dir(long long);
 long long contains_string(long long, long long);
 long long resolve_import_path(long long, long long);
-long long parse_all_modules(long long, long long, long long, long long, long long, long long, long long, long long, long long);
+long long parse_all_modules(long long, long long, long long, long long, long long, long long, long long, long long, long long, long long);
 long long _main();
 long long create_token(long long, long long, long long, long long);
 long long get_token_type(long long);
@@ -5205,7 +5213,7 @@ L_cleanup:
     return ret_val;
 }
 
-long long parse_all_modules(long long current_file, long long parsed_files, long long all_functions, long long all_externals, long long all_struct_defs, long long all_enum_defs, long long all_method_defs, long long all_trait_defs, long long all_trait_impls) {
+long long parse_all_modules(long long current_file, long long parsed_files, long long all_functions, long long all_externals, long long all_struct_defs, long long all_enum_defs, long long all_method_defs, long long all_trait_defs, long long all_trait_impls, long long all_constants) {
     long long has_parsed = 0;
     long long ok = 0;
     long long source = 0;
@@ -5237,6 +5245,9 @@ long long parse_all_modules(long long current_file, long long parsed_files, long
     long long ti = 0;
     long long ti_len = 0;
     long long ti_idx = 0;
+    long long tc = 0;
+    long long tc_len = 0;
+    long long tc_idx = 0;
     long long imp_len = 0;
     long long i_idx = 0;
     long long imp_pair = 0;
@@ -5374,6 +5385,15 @@ long long parse_all_modules(long long current_file, long long parsed_files, long
     ti_idx = (ti_idx + 1LL);
     }
     }
+    if (prog_len > 9LL) {
+    tc = get_list(program_ast, 9LL);
+    tc_len = length_list(tc);
+    tc_idx = 0LL;
+    while (tc_idx < tc_len) {
+    ok = append_list(all_constants, get_list(tc, tc_idx));
+    tc_idx = (tc_idx + 1LL);
+    }
+    }
     imp_len = length_list(imports);
     i_idx = 0LL;
     while (i_idx < imp_len) {
@@ -5382,7 +5402,7 @@ long long parse_all_modules(long long current_file, long long parsed_files, long
     imp_alias = string_concat(get_list(imp_pair, 1LL), (long long)"");
     resolved_path = resolve_import_path(current_file, imp);
     if (string_length((char*)imp_alias) == 0LL) {
-    status = parse_all_modules(resolved_path, parsed_files, all_functions, all_externals, all_struct_defs, all_enum_defs, all_method_defs, all_trait_defs, all_trait_impls);
+    status = parse_all_modules(resolved_path, parsed_files, all_functions, all_externals, all_struct_defs, all_enum_defs, all_method_defs, all_trait_defs, all_trait_impls, all_constants);
     if (status != 0LL) {
     ret_val = status;
     goto L_cleanup;
@@ -5398,7 +5418,7 @@ long long parse_all_modules(long long current_file, long long parsed_files, long
         free_list(mod_externals);
         mod_externals = tmp_val;
     }
-    status = parse_all_modules(resolved_path, parsed_files, mod_funcs, mod_externals, all_struct_defs, all_enum_defs, all_method_defs, all_trait_defs, all_trait_impls);
+    status = parse_all_modules(resolved_path, parsed_files, mod_funcs, mod_externals, all_struct_defs, all_enum_defs, all_method_defs, all_trait_defs, all_trait_impls, all_constants);
     if (status != 0LL) {
     ret_val = status;
     goto L_cleanup;
@@ -5466,6 +5486,7 @@ long long _main() {
     long long all_method_defs = 0;
     long long all_trait_defs = 0;
     long long all_trait_impls = 0;
+    long long all_constants = 0;
     long long parsed_files = 0;
     long long status = 0;
     long long f_names = 0;
@@ -5501,6 +5522,7 @@ long long _main() {
     ep_gc_push_root(&all_method_defs);
     ep_gc_push_root(&all_trait_defs);
     ep_gc_push_root(&all_trait_impls);
+    ep_gc_push_root(&all_constants);
     ep_gc_push_root(&parsed_files);
     ep_gc_push_root(&f_names);
     ep_gc_push_root(&empty_imports);
@@ -5581,10 +5603,15 @@ long long _main() {
     }
     {
         long long tmp_val = create_list();
+        free_list(all_constants);
+        all_constants = tmp_val;
+    }
+    {
+        long long tmp_val = create_list();
         free_list(parsed_files);
         parsed_files = tmp_val;
     }
-    status = parse_all_modules(input_path, parsed_files, all_functions, all_externals, all_struct_defs, all_enum_defs, all_method_defs, all_trait_defs, all_trait_impls);
+    status = parse_all_modules(input_path, parsed_files, all_functions, all_externals, all_struct_defs, all_enum_defs, all_method_defs, all_trait_defs, all_trait_impls, all_constants);
     if (status != 0LL) {
     ret_val = 1LL;
     goto L_cleanup;
@@ -5632,6 +5659,7 @@ long long _main() {
     ok = append_list(program_ast, all_method_defs);
     ok = append_list(program_ast, all_trait_defs);
     ok = append_list(program_ast, all_trait_impls);
+    ok = append_list(program_ast, all_constants);
     check_ok = check_program(program_ast);
     if (check_ok == 0LL) {
     printf("%s\n", (char*)(long long)"Compilation failed: semantic errors.");
@@ -5702,7 +5730,7 @@ long long _main() {
     goto L_cleanup;
     }
 L_cleanup:
-    ep_gc_pop_roots(19);
+    ep_gc_pop_roots(20);
     free_list(all_functions);
     free_list(all_externals);
     free_list(all_struct_defs);
@@ -5710,6 +5738,7 @@ L_cleanup:
     free_list(all_method_defs);
     free_list(all_trait_defs);
     free_list(all_trait_impls);
+    free_list(all_constants);
     free_list(parsed_files);
     free_list(f_names);
     free_list(empty_imports);
@@ -7138,6 +7167,7 @@ long long make_node_program(long long imports, long long externals, long long fu
     ok = append_list(node, method_defs);
     ok = append_list(node, trait_defs);
     ok = append_list(node, trait_impls);
+    ok = append_list(node, (create_list() + 0LL));
     ret_val = node;
     node = 0;
     goto L_cleanup;
@@ -8193,6 +8223,7 @@ long long parse_program(long long state) {
     long long method_defs = 0;
     long long trait_defs = 0;
     long long trait_impls = 0;
+    long long top_constants = 0;
     long long loop = 0;
     long long tok = 0;
     long long t = 0;
@@ -8223,6 +8254,7 @@ long long parse_program(long long state) {
     long long t3 = 0;
     long long method_def = 0;
     long long impl_node = 0;
+    long long const_stmt = 0;
     long long prog = 0;
     long long ret_val = 0;
 
@@ -8236,6 +8268,7 @@ long long parse_program(long long state) {
     method_defs = (create_list() + 0LL);
     trait_defs = (create_list() + 0LL);
     trait_impls = (create_list() + 0LL);
+    top_constants = (create_list() + 0LL);
     loop = 1LL;
     while (loop == 1LL) {
     tok = peek_token(state);
@@ -8330,6 +8363,10 @@ long long parse_program(long long state) {
     impl_node = (parse_trait_impl(state) + 0LL);
     ok = append_list(trait_impls, impl_node);
     } else {
+    if (t == 2LL) {
+    const_stmt = (parse_statement(state) + 0LL);
+    ok = append_list(top_constants, const_stmt);
+    } else {
     printf("%s\n", (char*)(long long)"Parser Error: Unexpected token at top level:");
     printf("%lld\n", t);
     ok = set_parser_error(state);
@@ -8342,7 +8379,9 @@ long long parse_program(long long state) {
     }
     }
     }
+    }
     prog = (make_node_program(imports, externals, funcs, struct_defs, enum_defs, method_defs, trait_defs, trait_impls) + 0LL);
+    ok = set_list(prog, 9LL, top_constants);
     ret_val = prog;
     goto L_cleanup;
 L_cleanup:
@@ -13195,8 +13234,10 @@ long long get_c_main_source() {
         lines = tmp_val;
     }
     ok = append_list(lines, (long long)"\n/* Bootstrapper C main */\n");
+    ok = append_list(lines, (long long)"void __ep_init_constants(void);\n");
     ok = append_list(lines, (long long)"int main(int argc, char** argv) {\n");
     ok = append_list(lines, (long long)"    init_ep_args(argc, argv);\n");
+    ok = append_list(lines, (long long)"    __ep_init_constants();\n");
     ok = append_list(lines, (long long)"    int result = (int)_main();\n");
     ok = append_list(lines, (long long)"    ep_gc_shutdown();\n");
     ok = append_list(lines, (long long)"    return result;\n");
@@ -14230,6 +14271,17 @@ long long generate_c(long long program, long long is_test_mode) {
     long long ts_len = 0;
     long long ts_idx = 0;
     long long tname = 0;
+    long long constants = 0;
+    long long const_n = 0;
+    long long ci = 0;
+    long long cstmt = 0;
+    long long gline = 0;
+    long long gn = 0;
+    long long ml = 0;
+    long long gk = 0;
+    long long gv = 0;
+    long long ival = 0;
+    long long il = 0;
     long long externals = 0;
     long long ext_len = 0;
     long long idx = 0;
@@ -14285,6 +14337,12 @@ long long generate_c(long long program, long long is_test_mode) {
     ep_gc_push_root(&line);
     ep_gc_push_root(&slot_line);
     ep_gc_push_root(&tag_slots);
+    ep_gc_push_root(&gline);
+    ep_gc_push_root(&ml);
+    ep_gc_push_root(&gk);
+    ep_gc_push_root(&gv);
+    ep_gc_push_root(&ival);
+    ep_gc_push_root(&il);
     ep_gc_push_root(&proto);
     ep_gc_push_root(&proto2);
     ep_gc_push_root(&proto3);
@@ -14389,6 +14447,72 @@ long long generate_c(long long program, long long is_test_mode) {
     }
     }
     }
+    constants = create_list();
+    if (length_list(program) > 9LL) {
+    constants = get_list(program, 9LL);
+    }
+    const_n = length_list(constants);
+    ci = 0LL;
+    while (ci < const_n) {
+    cstmt = get_list(constants, ci);
+    gline = (long long)"long long ";
+    gline = string_concat(gline, get_list(cstmt, 1LL));
+    gline = string_concat(gline, (long long)" = 0;\n");
+    ok = emit(state, gline);
+    ci = (ci + 1LL);
+    }
+    ok = emit(state, (long long)"static void __ep_mark_globals_major(void) {\n");
+    ci = 0LL;
+    while (ci < const_n) {
+    gn = get_list(get_list(constants, ci), 1LL);
+    ml = (long long)"    if (";
+    ml = string_concat(ml, gn);
+    ml = string_concat(ml, (long long)" != 0) ep_gc_mark_object((void*)");
+    ml = string_concat(ml, gn);
+    ml = string_concat(ml, (long long)");\n");
+    ok = emit(state, ml);
+    ci = (ci + 1LL);
+    }
+    ok = emit(state, (long long)"}\n");
+    ok = emit(state, (long long)"static void __ep_mark_globals_minor(void) {\n");
+    ci = 0LL;
+    while (ci < const_n) {
+    gn = get_list(get_list(constants, ci), 1LL);
+    ml = (long long)"    if (";
+    ml = string_concat(ml, gn);
+    ml = string_concat(ml, (long long)" != 0) ep_gc_mark_object_minor((void*)");
+    ml = string_concat(ml, gn);
+    ml = string_concat(ml, (long long)");\n");
+    ok = emit(state, ml);
+    ci = (ci + 1LL);
+    }
+    ok = emit(state, (long long)"}\n");
+    ok = emit(state, (long long)"void __ep_init_constants(void) {\n");
+    ok = emit(state, (long long)"    ep_gc_mark_globals_major = __ep_mark_globals_major;\n");
+    ok = emit(state, (long long)"    ep_gc_mark_globals_minor = __ep_mark_globals_minor;\n");
+    {
+        long long tmp_val = create_list();
+        free_list(gk);
+        gk = tmp_val;
+    }
+    {
+        long long tmp_val = create_list();
+        free_list(gv);
+        gv = tmp_val;
+    }
+    ci = 0LL;
+    while (ci < const_n) {
+    cstmt = get_list(constants, ci);
+    ival = gen_expr(state, get_list(cstmt, 2LL), gk, gv);
+    il = (long long)"    ";
+    il = string_concat(il, get_list(cstmt, 1LL));
+    il = string_concat(il, (long long)" = ");
+    il = string_concat(il, ival);
+    il = string_concat(il, (long long)";\n");
+    ok = emit(state, il);
+    ci = (ci + 1LL);
+    }
+    ok = emit(state, (long long)"}\n");
     externals = get_list(program, 2LL);
     ext_len = length_list(externals);
     ok = emit(state, (long long)"\n/* External Function Prototypes (FFI) */\n");
@@ -14584,10 +14708,12 @@ long long generate_c(long long program, long long is_test_mode) {
     ret_val = c_code;
     goto L_cleanup;
 L_cleanup:
-    ep_gc_pop_roots(13);
+    ep_gc_pop_roots(19);
     free_list(state);
     free_list(field_slots);
     free_list(tag_slots);
+    free_list(gk);
+    free_list(gv);
     free_list(spawn_list);
     return ret_val;
 }
@@ -20241,8 +20367,10 @@ L_cleanup:
 
 
 /* Bootstrapper C main */
+void __ep_init_constants(void);
 int main(int argc, char** argv) {
     init_ep_args(argc, argv);
+    __ep_init_constants();
     int result = (int)_main();
     ep_gc_shutdown();
     return result;
