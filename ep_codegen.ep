@@ -361,6 +361,7 @@ define create_codegen_state:
     set ok to append_list(state and (create_list() + 0)) # try_ok_vals (15): that enum's first (Ok) variant name
     set ok to append_list(state and (create_list() + 0)) # vpat_keys (16): variant name
     set ok to append_list(state and (create_list() + 0)) # vpat_vals (17): list of field type-codes for that variant
+    set ok to append_list(state and (create_list() + 0)) # iter_structs (18): struct names implementing the Iterator trait
     return state
 
 # Map an ErnosPlain type-annotation name to the codegen's coarse type code.
@@ -645,6 +646,11 @@ define collect_var_types with state and stmts and var_keys and var_values:
             set var_name to get_list(stmt and 1)
             set expr to get_list(stmt and 2)
             set t to infer_type(state and expr and var_keys and var_values)
+            # A `create <S>` where S implements Iterator gives the var the
+            # iterator type (9), so `for each` dispatches to the iterator protocol.
+            if get_list(expr and 0) == 24: # NODE_STRUCT_CREATE
+                if contains_string_val(get_list(state and 18) and get_list(expr and 1)) == 1:
+                    set t to 9
             set ok to map_put(var_keys and var_values and var_name and t)
         else:
             if type == 10: # NODE_IF
@@ -1499,6 +1505,32 @@ define gen_statement with state and stmt and var_keys and var_values:
         set body to get_list(stmt and 3)
         set iter_str to gen_expr(state and iter_expr and var_keys and var_values)
         set label to get_new_label(state and "foreach")
+        # Iterator protocol: if the iterable has the iterator type (9), loop by
+        # calling next() until it yields the enum's Done variant; otherwise it
+        # yields Next(value) whose payload is at slot [1].
+        set iter_t to infer_type(state and iter_expr and var_keys and var_values)
+        if iter_t == 9:
+            set ok to emit(state and "    {\n")
+            set il to "        long long _it = "
+            set il to string_concat(il and iter_str)
+            set il to string_concat(il and ";\n")
+            set ok to emit(state and il)
+            set ok to emit(state and "        while (1) {\n")
+            set ok to emit(state and "            long long _res = next(_it);\n")
+            set ok to emit(state and "            if (_res == 0) break;\n")
+            set ok to emit(state and "            if (((long long*)_res)[0] == EP_TAG_Done) break;\n")
+            set bl to "            long long "
+            set bl to string_concat(bl and var_name)
+            set bl to string_concat(bl and " = ((long long*)_res)[1];\n")
+            set ok to emit(state and bl)
+            set ib_len to length_list(body)
+            set ib_i to 0
+            repeat while ib_i < ib_len:
+                set ok to gen_statement(state and get_list(body and ib_i) and var_keys and var_values)
+                set ib_i to ib_i + 1
+            set ok to emit(state and "        }\n")
+            set ok to emit(state and "    }\n")
+            return 0
         set ok to emit(state and "    {\n")
         set line to "        long long _iter = "
         set line to string_concat(line and iter_str)
@@ -2734,6 +2766,18 @@ define analyze_safety with state and program:
 define generate_c with program and is_test_mode:
     set state to create_codegen_state()
     set ok to analyze_return_types(state and program)
+    # Record which struct types implement the Iterator trait, so `for each` over
+    # such a value uses the iterator protocol (call next() until Done) instead
+    # of the list protocol.
+    if length_list(program) > 8:
+        set it_impls to get_list(program and 8)
+        set it_i to 0
+        set it_len to length_list(it_impls)
+        repeat while it_i < it_len:
+            set it_impl to get_list(it_impls and it_i)
+            if string_concat(get_list(it_impl and 1) and "") equals "Iterator":
+                set ok to append_list(get_list(state and 18) and get_list(it_impl and 2))
+            set it_i to it_i + 1
     set safety_ok to analyze_safety(state and program)
     if safety_ok == 0:
         return ""

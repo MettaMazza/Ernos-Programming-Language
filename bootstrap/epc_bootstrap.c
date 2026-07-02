@@ -10971,6 +10971,7 @@ long long create_codegen_state() {
     ok = append_list(state, (create_list() + 0LL));
     ok = append_list(state, (create_list() + 0LL));
     ok = append_list(state, (create_list() + 0LL));
+    ok = append_list(state, (create_list() + 0LL));
     ret_val = state;
     state = 0;
     goto L_cleanup;
@@ -11437,6 +11438,11 @@ long long collect_var_types(long long state, long long stmts, long long var_keys
     var_name = get_list(stmt, 1LL);
     expr = get_list(stmt, 2LL);
     t = infer_type(state, expr, var_keys, var_values);
+    if (get_list(expr, 0LL) == 24LL) {
+    if (contains_string_val(get_list(state, 18LL), get_list(expr, 1LL)) == 1LL) {
+    t = 9LL;
+    }
+    }
     ok = map_put(var_keys, var_values, var_name, t);
     } else {
     if (type == 10LL) {
@@ -12367,6 +12373,11 @@ long long gen_statement(long long state, long long stmt, long long var_keys, lon
     long long iter_expr = 0;
     long long iter_str = 0;
     long long label = 0;
+    long long iter_t = 0;
+    long long il = 0;
+    long long bl = 0;
+    long long ib_len = 0;
+    long long ib_i = 0;
     long long ret_val = 0;
 
     ep_gc_push_root(&expr_str);
@@ -12379,6 +12390,8 @@ long long gen_statement(long long state, long long stmt, long long var_keys, lon
     ep_gc_push_root(&obj_str);
     ep_gc_push_root(&iter_str);
     ep_gc_push_root(&label);
+    ep_gc_push_root(&il);
+    ep_gc_push_root(&bl);
     ep_gc_maybe_collect();
 
     type = get_list(stmt, 0LL);
@@ -12691,6 +12704,32 @@ long long gen_statement(long long state, long long stmt, long long var_keys, lon
     body = get_list(stmt, 3LL);
     iter_str = gen_expr(state, iter_expr, var_keys, var_values);
     label = get_new_label(state, (long long)"foreach");
+    iter_t = infer_type(state, iter_expr, var_keys, var_values);
+    if (iter_t == 9LL) {
+    ok = emit(state, (long long)"    {\n");
+    il = (long long)"        long long _it = ";
+    il = string_concat(il, iter_str);
+    il = string_concat(il, (long long)";\n");
+    ok = emit(state, il);
+    ok = emit(state, (long long)"        while (1) {\n");
+    ok = emit(state, (long long)"            long long _res = next(_it);\n");
+    ok = emit(state, (long long)"            if (_res == 0) break;\n");
+    ok = emit(state, (long long)"            if (((long long*)_res)[0] == EP_TAG_Done) break;\n");
+    bl = (long long)"            long long ";
+    bl = string_concat(bl, var_name);
+    bl = string_concat(bl, (long long)" = ((long long*)_res)[1];\n");
+    ok = emit(state, bl);
+    ib_len = length_list(body);
+    ib_i = 0LL;
+    while (ib_i < ib_len) {
+    ok = gen_statement(state, get_list(body, ib_i), var_keys, var_values);
+    ib_i = (ib_i + 1LL);
+    }
+    ok = emit(state, (long long)"        }\n");
+    ok = emit(state, (long long)"    }\n");
+    ret_val = 0LL;
+    goto L_cleanup;
+    }
     ok = emit(state, (long long)"    {\n");
     line = (long long)"        long long _iter = ";
     line = string_concat(line, iter_str);
@@ -12739,7 +12778,7 @@ long long gen_statement(long long state, long long stmt, long long var_keys, lon
     ret_val = 0LL;
     goto L_cleanup;
 L_cleanup:
-    ep_gc_pop_roots(10);
+    ep_gc_pop_roots(12);
     return ret_val;
 }
 
@@ -14639,6 +14678,10 @@ L_cleanup:
 long long generate_c(long long program, long long is_test_mode) {
     long long state = 0;
     long long ok = 0;
+    long long it_impls = 0;
+    long long it_i = 0;
+    long long it_len = 0;
+    long long it_impl = 0;
     long long safety_ok = 0;
     long long prog_len = 0;
     long long field_slots = 0;
@@ -14804,6 +14847,18 @@ long long generate_c(long long program, long long is_test_mode) {
         state = tmp_val;
     }
     ok = analyze_return_types(state, program);
+    if (length_list(program) > 8LL) {
+    it_impls = get_list(program, 8LL);
+    it_i = 0LL;
+    it_len = length_list(it_impls);
+    while (it_i < it_len) {
+    it_impl = get_list(it_impls, it_i);
+    if ((strcmp((char*)string_concat(get_list(it_impl, 1LL), (long long)""), (char*)(long long)"Iterator") == 0)) {
+    ok = append_list(get_list(state, 18LL), get_list(it_impl, 2LL));
+    }
+    it_i = (it_i + 1LL);
+    }
+    }
     safety_ok = analyze_safety(state, program);
     if (safety_ok == 0LL) {
     ret_val = (long long)"";
