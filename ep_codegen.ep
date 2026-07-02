@@ -189,11 +189,80 @@ define string_concat with s1 and s2:
     set res to string_from_list(lst)
     return res
 
-define get_fn_c_name with func:
-    set name to get_list(func and 1)
-    if "main" equals name:
+# Map an ErnosPlain name to a legal, non-colliding C identifier. C keywords and
+# common libc clashes are prefixed with ep_ (mirrors the Rust sanitize_c_name);
+# `main` maps to `_main`. Must be applied consistently at definitions AND calls.
+define cg_sanitize_name with name:
+    set n to string_concat(name and "")
+    if "main" equals n:
         return "_main"
-    return name
+    set kws to create_list()
+    set ok to append_list(kws and "auto")
+    set ok to append_list(kws and "break")
+    set ok to append_list(kws and "case")
+    set ok to append_list(kws and "char")
+    set ok to append_list(kws and "const")
+    set ok to append_list(kws and "continue")
+    set ok to append_list(kws and "default")
+    set ok to append_list(kws and "do")
+    set ok to append_list(kws and "double")
+    set ok to append_list(kws and "else")
+    set ok to append_list(kws and "enum")
+    set ok to append_list(kws and "extern")
+    set ok to append_list(kws and "float")
+    set ok to append_list(kws and "for")
+    set ok to append_list(kws and "goto")
+    set ok to append_list(kws and "if")
+    set ok to append_list(kws and "int")
+    set ok to append_list(kws and "long")
+    set ok to append_list(kws and "register")
+    set ok to append_list(kws and "return")
+    set ok to append_list(kws and "short")
+    set ok to append_list(kws and "signed")
+    set ok to append_list(kws and "sizeof")
+    set ok to append_list(kws and "static")
+    set ok to append_list(kws and "struct")
+    set ok to append_list(kws and "switch")
+    set ok to append_list(kws and "typedef")
+    set ok to append_list(kws and "union")
+    set ok to append_list(kws and "unsigned")
+    set ok to append_list(kws and "void")
+    set ok to append_list(kws and "volatile")
+    set ok to append_list(kws and "while")
+    set ok to append_list(kws and "inline")
+    set ok to append_list(kws and "restrict")
+    set ok to append_list(kws and "printf")
+    set ok to append_list(kws and "scanf")
+    set ok to append_list(kws and "malloc")
+    set ok to append_list(kws and "free")
+    set ok to append_list(kws and "exit")
+    set ok to append_list(kws and "read")
+    set ok to append_list(kws and "write")
+    set ok to append_list(kws and "open")
+    set ok to append_list(kws and "close")
+    set ok to append_list(kws and "time")
+    set ok to append_list(kws and "sleep")
+    set ok to append_list(kws and "select")
+    set ok to append_list(kws and "remove")
+    if contains_string_val(kws and n) == 1:
+        return string_concat("ep_" and n)
+    return n
+
+# String membership test. The left operand is coerced with string_concat so the
+# codegen emits strcmp, not a pointer comparison (it only string-compares when
+# the LEFT operand's type is known to be a string).
+define contains_string_val with list and s:
+    set key to string_concat(s and "")
+    set n to length_list(list)
+    set idx to 0
+    repeat while idx < n:
+        if key equals get_list(list and idx):
+            return 1
+        set idx to idx + 1
+    return 0
+
+define get_fn_c_name with func:
+    return cg_sanitize_name(get_list(func and 1))
 
 define cg_int_to_str with n:
     if n == 0:
@@ -1423,7 +1492,7 @@ define gen_expr with state and expr and var_keys and var_values:
             set fk to get_list(state and 3)
             if map_contains_key(fk and name) == 1:
                 set fres to "(long long)"
-                set fres to string_concat(fres and name)
+                set fres to string_concat(fres and cg_sanitize_name(name))
                 return fres
         return name
         
@@ -1655,7 +1724,7 @@ define gen_expr with state and expr and var_keys and var_values:
                 set res to string_concat(res and "); })")
                 return res
 
-        set call_str to name
+        set call_str to cg_sanitize_name(name)
         set call_str to string_concat(call_str and "(")
         set call_str to string_concat(call_str and args_joined)
         set call_str to string_concat(call_str and ")")

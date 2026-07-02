@@ -4993,6 +4993,8 @@ long long collect_idents_stmts(long long, long long);
 long long map_put(long long, long long, long long, long long);
 long long field_slot_index(long long, long long);
 long long string_concat(long long, long long);
+long long cg_sanitize_name(long long);
+long long contains_string_val(long long, long long);
 long long get_fn_c_name(long long);
 long long cg_int_to_str(long long);
 long long escape_string(long long);
@@ -10551,18 +10553,117 @@ L_cleanup:
     return ret_val;
 }
 
+long long cg_sanitize_name(long long name) {
+    long long n = 0;
+    long long kws = 0;
+    long long ok = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&n);
+    ep_gc_push_root(&kws);
+    ep_gc_maybe_collect();
+
+    n = string_concat(name, (long long)"");
+    if ((strcmp((char*)(long long)"main", (char*)n) == 0)) {
+    ret_val = (long long)"_main";
+    goto L_cleanup;
+    }
+    {
+        long long tmp_val = create_list();
+        free_list(kws);
+        kws = tmp_val;
+    }
+    ok = append_list(kws, (long long)"auto");
+    ok = append_list(kws, (long long)"break");
+    ok = append_list(kws, (long long)"case");
+    ok = append_list(kws, (long long)"char");
+    ok = append_list(kws, (long long)"const");
+    ok = append_list(kws, (long long)"continue");
+    ok = append_list(kws, (long long)"default");
+    ok = append_list(kws, (long long)"do");
+    ok = append_list(kws, (long long)"double");
+    ok = append_list(kws, (long long)"else");
+    ok = append_list(kws, (long long)"enum");
+    ok = append_list(kws, (long long)"extern");
+    ok = append_list(kws, (long long)"float");
+    ok = append_list(kws, (long long)"for");
+    ok = append_list(kws, (long long)"goto");
+    ok = append_list(kws, (long long)"if");
+    ok = append_list(kws, (long long)"int");
+    ok = append_list(kws, (long long)"long");
+    ok = append_list(kws, (long long)"register");
+    ok = append_list(kws, (long long)"return");
+    ok = append_list(kws, (long long)"short");
+    ok = append_list(kws, (long long)"signed");
+    ok = append_list(kws, (long long)"sizeof");
+    ok = append_list(kws, (long long)"static");
+    ok = append_list(kws, (long long)"struct");
+    ok = append_list(kws, (long long)"switch");
+    ok = append_list(kws, (long long)"typedef");
+    ok = append_list(kws, (long long)"union");
+    ok = append_list(kws, (long long)"unsigned");
+    ok = append_list(kws, (long long)"void");
+    ok = append_list(kws, (long long)"volatile");
+    ok = append_list(kws, (long long)"while");
+    ok = append_list(kws, (long long)"inline");
+    ok = append_list(kws, (long long)"restrict");
+    ok = append_list(kws, (long long)"printf");
+    ok = append_list(kws, (long long)"scanf");
+    ok = append_list(kws, (long long)"malloc");
+    ok = append_list(kws, (long long)"free");
+    ok = append_list(kws, (long long)"exit");
+    ok = append_list(kws, (long long)"read");
+    ok = append_list(kws, (long long)"write");
+    ok = append_list(kws, (long long)"open");
+    ok = append_list(kws, (long long)"close");
+    ok = append_list(kws, (long long)"time");
+    ok = append_list(kws, (long long)"sleep");
+    ok = append_list(kws, (long long)"select");
+    ok = append_list(kws, (long long)"remove");
+    if (contains_string_val(kws, n) == 1LL) {
+    ret_val = string_concat((long long)"ep_", n);
+    goto L_cleanup;
+    }
+    ret_val = n;
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(2);
+    free_list(kws);
+    return ret_val;
+}
+
+long long contains_string_val(long long list, long long s) {
+    long long key = 0;
+    long long n = 0;
+    long long idx = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&key);
+    ep_gc_maybe_collect();
+
+    key = string_concat(s, (long long)"");
+    n = length_list(list);
+    idx = 0LL;
+    while (idx < n) {
+    if ((strcmp((char*)key, (char*)get_list(list, idx)) == 0)) {
+    ret_val = 1LL;
+    goto L_cleanup;
+    }
+    idx = (idx + 1LL);
+    }
+    ret_val = 0LL;
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
 long long get_fn_c_name(long long func) {
-    long long name = 0;
     long long ret_val = 0;
 
     ep_gc_maybe_collect();
 
-    name = get_list(func, 1LL);
-    if ((strcmp((char*)(long long)"main", (char*)name) == 0)) {
-    ret_val = (long long)"_main";
-    goto L_cleanup;
-    }
-    ret_val = name;
+    ret_val = cg_sanitize_name(get_list(func, 1LL));
     goto L_cleanup;
 L_cleanup:
     return ret_val;
@@ -12578,7 +12679,7 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     fk = get_list(state, 3LL);
     if (map_contains_key(fk, name) == 1LL) {
     fres = (long long)"(long long)";
-    fres = string_concat(fres, name);
+    fres = string_concat(fres, cg_sanitize_name(name));
     ret_val = fres;
     goto L_cleanup;
     }
@@ -12849,7 +12950,7 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     goto L_cleanup;
     }
     }
-    call_str = name;
+    call_str = cg_sanitize_name(name);
     call_str = string_concat(call_str, (long long)"(");
     call_str = string_concat(call_str, args_joined);
     call_str = string_concat(call_str, (long long)")");
