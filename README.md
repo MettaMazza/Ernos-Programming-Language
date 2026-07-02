@@ -345,9 +345,15 @@ the same generational GC, pointer-safe accessors, and OOM-guarded allocators.
 
 `epc` compiling itself reaches a **byte-identical fixpoint** (gen2 == gen3),
 verified by `tests/run_fixpoint.sh`. Self-hosted coverage of the test suite is
-tracked by `tests/run_epc_parity.sh` (currently 36/54 runnable programs; 8/9
+tracked by `tests/run_epc_parity.sh` (currently 40/54 runnable programs; 8/9
 compile-error tests correctly rejected by the `ep_check.ep` semantic pass).
 `epc check <file>` runs the checks without codegen.
+
+The self-hosted pipeline is `lex → parse → check → optimize → codegen`
+(`ep_lexer` · `ep_parser` · `ep_check` · `ep_optimizer` · `ep_codegen`). The
+remaining coverage gap is trait vtables, struct float fields, and full enum
+return-type inference; the Rust compiler covers those plus the LSP and
+cross-language transpilers.
 
 ### Fully self-contained bootstrap (no Rust required)
 
