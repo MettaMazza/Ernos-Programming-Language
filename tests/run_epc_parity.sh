@@ -70,11 +70,16 @@ for TEST_FILE in tests/test_*.ep; do
         [[ $VERBOSE -eq 1 ]] && echo "FAIL  $NAME (exit $RC)"
         continue
     fi
+    # Compare like run_tests.sh: $(...) capture strips trailing newlines on both
+    # sides, so a missing final newline in a .expected file is not a failure.
     EXPECTED_FILE="tests/$NAME.expected"
-    if [[ -f "$EXPECTED_FILE" ]] && ! diff -q <(printf '%s\n' "$RUN_OUT") "$EXPECTED_FILE" >/dev/null 2>&1; then
-        FAIL=$((FAIL+1)); FAILED="$FAILED $NAME(output)"
-        [[ $VERBOSE -eq 1 ]] && { echo "FAIL  $NAME (output mismatch)"; diff <(printf '%s\n' "$RUN_OUT") "$EXPECTED_FILE" | head -6; }
-        continue
+    if [[ -f "$EXPECTED_FILE" ]]; then
+        EXPECTED_FROM_FILE=$(cat "$EXPECTED_FILE")
+        if [[ "$RUN_OUT" != "$EXPECTED_FROM_FILE" ]]; then
+            FAIL=$((FAIL+1)); FAILED="$FAILED $NAME(output)"
+            [[ $VERBOSE -eq 1 ]] && { echo "FAIL  $NAME (output mismatch)"; diff <(echo "$EXPECTED_FROM_FILE") <(echo "$RUN_OUT") | head -6; }
+            continue
+        fi
     fi
     PASS=$((PASS+1))
     [[ $VERBOSE -eq 1 ]] && echo "PASS  $NAME"
