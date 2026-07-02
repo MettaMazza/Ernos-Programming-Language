@@ -1209,7 +1209,13 @@ define parse_prefix with state:
     if t == 25: # TOK_INTEGER
         set val to parse_int(get_token_value(tok))
         return make_node_int(val) + 0
-    
+
+    if t == 70: # TOK_FLOAT — keep the literal text; codegen embeds it verbatim
+        set fnode to create_list() + 0
+        set ok to append_list(fnode and 42) # NODE_FLOAT = 42
+        set ok to append_list(fnode and get_token_value(tok))
+        return fnode + 0
+
     if t == 26: # TOK_STRING_LITERAL
         return make_node_str(get_token_value(tok)) + 0
     

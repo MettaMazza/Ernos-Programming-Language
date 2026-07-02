@@ -6134,6 +6134,8 @@ long long tokenize_source(long long source) {
     long long should_emit_nl = 0;
     long long last_tok = 0;
     long long num_start = 0;
+    long long num_type = 0;
+    long long frac_ch = 0;
     long long num_len = 0;
     long long num_str = 0;
     long long is_id_start = 0;
@@ -6266,9 +6268,24 @@ long long tokenize_source(long long source) {
     pos = (pos + 1LL);
     current_col = (current_col + 1LL);
     }
+    num_type = 25LL;
+    if ((pos + 1LL) < source_len) {
+    if (get_character((char*)source, pos) == 46LL) {
+    frac_ch = get_character((char*)source, (pos + 1LL));
+    if ((frac_ch > 47LL && frac_ch < 58LL)) {
+    num_type = 70LL;
+    pos = (pos + 1LL);
+    current_col = (current_col + 1LL);
+    while (((pos < source_len && get_character((char*)source, pos) > 47LL) && get_character((char*)source, pos) < 58LL)) {
+    pos = (pos + 1LL);
+    current_col = (current_col + 1LL);
+    }
+    }
+    }
+    }
     num_len = (pos - num_start);
     num_str = (long long)substring((char*)source, num_start, num_len);
-    tok = (create_token(25LL, num_str, current_line, (current_col - num_len)) + 0LL);
+    tok = (create_token(num_type, num_str, current_line, (current_col - num_len)) + 0LL);
     ok = append_list(tokens, tok);
     } else {
     is_id_start = (((c > 96LL && c < 123LL) || (c > 64LL && c < 91LL)) || c == 95LL);
@@ -9218,6 +9235,7 @@ long long parse_prefix(long long state) {
     long long tok = 0;
     long long t = 0;
     long long val = 0;
+    long long fnode = 0;
     long long ok = 0;
     long long chan = 0;
     long long target = 0;
@@ -9251,6 +9269,13 @@ long long parse_prefix(long long state) {
     if (t == 25LL) {
     val = parse_int(get_token_value(tok));
     ret_val = (make_node_int(val) + 0LL);
+    goto L_cleanup;
+    }
+    if (t == 70LL) {
+    fnode = (create_list() + 0LL);
+    ok = append_list(fnode, 42LL);
+    ok = append_list(fnode, get_token_value(tok));
+    ret_val = (fnode + 0LL);
     goto L_cleanup;
     }
     if (t == 26LL) {
@@ -10445,7 +10470,14 @@ long long analyze_return_types(long long state, long long program) {
     ok = map_put(keys, values, (long long)"ep_time_year", 1LL);
     ok = map_put(keys, values, (long long)"sleep_ms", 1LL);
     ok = map_put(keys, values, (long long)"ep_system", 1LL);
-    ok = map_put(keys, values, (long long)"int_to_float", 1LL);
+    ok = map_put(keys, values, (long long)"int_to_float", 8LL);
+    ok = map_put(keys, values, (long long)"ep_dlcall_f0", 8LL);
+    ok = map_put(keys, values, (long long)"ep_dlcall_f1", 8LL);
+    ok = map_put(keys, values, (long long)"ep_dlcall_f2", 8LL);
+    ok = map_put(keys, values, (long long)"ep_dlcall_f3", 8LL);
+    ok = map_put(keys, values, (long long)"ep_dlcall_f4", 8LL);
+    ok = map_put(keys, values, (long long)"ep_dlcall_f5", 8LL);
+    ok = map_put(keys, values, (long long)"ep_dlcall_f6", 8LL);
     ok = map_put(keys, values, (long long)"float_to_int", 1LL);
     ok = map_put(keys, values, (long long)"ep_hmac_sha256", 3LL);
     ok = map_put(keys, values, (long long)"ep_base64_encode", 3LL);
@@ -10670,6 +10702,8 @@ long long infer_type(long long state, long long expr, long long var_keys, long l
     long long type = 0;
     long long name = 0;
     long long t = 0;
+    long long fl = 0;
+    long long fr = 0;
     long long func_keys = 0;
     long long func_values = 0;
     long long inner = 0;
@@ -10696,7 +10730,21 @@ long long infer_type(long long state, long long expr, long long var_keys, long l
     ret_val = 1LL;
     goto L_cleanup;
     }
-    if (((type == 4LL || type == 5LL) || type == 14LL)) {
+    if (type == 42LL) {
+    ret_val = 8LL;
+    goto L_cleanup;
+    }
+    if (type == 4LL) {
+    fl = infer_type(state, get_list(expr, 1LL), var_keys, var_values);
+    fr = infer_type(state, get_list(expr, 3LL), var_keys, var_values);
+    if ((fl == 8LL || fr == 8LL)) {
+    ret_val = 8LL;
+    goto L_cleanup;
+    }
+    ret_val = 1LL;
+    goto L_cleanup;
+    }
+    if ((type == 5LL || type == 14LL)) {
     ret_val = 1LL;
     goto L_cleanup;
     }
@@ -11473,6 +11521,12 @@ long long gen_statement(long long state, long long stmt, long long var_keys, lon
     line = string_concat(line, (long long)");\n");
     ok = emit(state, line);
     } else {
+    if (t == 8LL) {
+    line = (long long)"    { long long _ftmp = ";
+    line = string_concat(line, expr_str);
+    line = string_concat(line, (long long)"; double _dv; memcpy(&_dv, &_ftmp, sizeof(double)); printf(\"%.15g\\n\", _dv); }\n");
+    ok = emit(state, line);
+    } else {
     if (t == 7LL) {
     line = (long long)"    printf(\"%s\\n\", (";
     line = string_concat(line, expr_str);
@@ -11483,6 +11537,7 @@ long long gen_statement(long long state, long long stmt, long long var_keys, lon
     line = string_concat(line, expr_str);
     line = string_concat(line, (long long)");\n");
     ok = emit(state, line);
+    }
     }
     }
     ret_val = 0LL;
@@ -11731,17 +11786,23 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     long long type = 0;
     long long val = 0;
     long long num_str = 0;
+    long long fres = 0;
     long long escaped = 0;
     long long res = 0;
     long long name = 0;
     long long eres = 0;
     long long fk = 0;
-    long long fres = 0;
     long long left = 0;
     long long op = 0;
     long long right = 0;
     long long left_str = 0;
     long long right_str = 0;
+    long long flt = 0;
+    long long frt = 0;
+    long long fop = 0;
+    long long lu = 0;
+    long long ru = 0;
+    long long fr2 = 0;
     long long op_str = 0;
     long long lt = 0;
     long long is_string = 0;
@@ -11843,12 +11904,15 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     long long elem_str = 0;
     long long ret_val = 0;
 
+    ep_gc_push_root(&fres);
     ep_gc_push_root(&escaped);
     ep_gc_push_root(&res);
     ep_gc_push_root(&eres);
-    ep_gc_push_root(&fres);
     ep_gc_push_root(&left_str);
     ep_gc_push_root(&right_str);
+    ep_gc_push_root(&lu);
+    ep_gc_push_root(&ru);
+    ep_gc_push_root(&fr2);
     ep_gc_push_root(&formatted_args);
     ep_gc_push_root(&arg_val);
     ep_gc_push_root(&casted);
@@ -11883,6 +11947,13 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     val = get_list(expr, 1LL);
     num_str = cg_int_to_str(val);
     ret_val = string_concat(num_str, (long long)"LL");
+    goto L_cleanup;
+    }
+    if (type == 42LL) {
+    fres = (long long)"({ double _fl = ";
+    fres = string_concat(fres, get_list(expr, 1LL));
+    fres = string_concat(fres, (long long)"; long long _fv; memcpy(&_fv, &_fl, sizeof(double)); _fv; })");
+    ret_val = fres;
     goto L_cleanup;
     }
     if (type == 2LL) {
@@ -11923,6 +11994,45 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     right = get_list(expr, 3LL);
     left_str = gen_expr(state, left, var_keys, var_values);
     right_str = gen_expr(state, right, var_keys, var_values);
+    flt = infer_type(state, left, var_keys, var_values);
+    frt = infer_type(state, right, var_keys, var_values);
+    if ((flt == 8LL || frt == 8LL)) {
+    fop = (long long)"+";
+    if (op == 2LL) {
+    fop = (long long)"-";
+    }
+    if (op == 3LL) {
+    fop = (long long)"*";
+    }
+    if (op == 4LL) {
+    fop = (long long)"/";
+    }
+    lu = (long long)"";
+    if (flt == 8LL) {
+    lu = string_concat((long long)"({ long long _lt = ", left_str);
+    lu = string_concat(lu, (long long)"; double _d; memcpy(&_d, &_lt, sizeof(double)); _d; })");
+    } else {
+    lu = string_concat((long long)"(double)(", left_str);
+    lu = string_concat(lu, (long long)")");
+    }
+    ru = (long long)"";
+    if (frt == 8LL) {
+    ru = string_concat((long long)"({ long long _rt = ", right_str);
+    ru = string_concat(ru, (long long)"; double _d; memcpy(&_d, &_rt, sizeof(double)); _d; })");
+    } else {
+    ru = string_concat((long long)"(double)(", right_str);
+    ru = string_concat(ru, (long long)")");
+    }
+    fr2 = (long long)"({ double _r = ";
+    fr2 = string_concat(fr2, lu);
+    fr2 = string_concat(fr2, (long long)" ");
+    fr2 = string_concat(fr2, fop);
+    fr2 = string_concat(fr2, (long long)" ");
+    fr2 = string_concat(fr2, ru);
+    fr2 = string_concat(fr2, (long long)"; long long _v; memcpy(&_v, &_r, sizeof(double)); _v; })");
+    ret_val = fr2;
+    goto L_cleanup;
+    }
     op_str = (long long)"";
     if (op == 1LL) {
     op_str = (long long)"+";
@@ -12489,7 +12599,7 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     ret_val = (long long)"";
     goto L_cleanup;
 L_cleanup:
-    ep_gc_pop_roots(33);
+    ep_gc_pop_roots(36);
     free_list(formatted_args);
     free_list(args_str_list);
     free_list(raw_names);

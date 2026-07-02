@@ -438,7 +438,14 @@ define analyze_return_types with state and program:
     set ok to map_put(keys and values and "ep_time_year" and 1)
     set ok to map_put(keys and values and "sleep_ms" and 1)
     set ok to map_put(keys and values and "ep_system" and 1)
-    set ok to map_put(keys and values and "int_to_float" and 1)
+    set ok to map_put(keys and values and "int_to_float" and 8)
+    set ok to map_put(keys and values and "ep_dlcall_f0" and 8)
+    set ok to map_put(keys and values and "ep_dlcall_f1" and 8)
+    set ok to map_put(keys and values and "ep_dlcall_f2" and 8)
+    set ok to map_put(keys and values and "ep_dlcall_f3" and 8)
+    set ok to map_put(keys and values and "ep_dlcall_f4" and 8)
+    set ok to map_put(keys and values and "ep_dlcall_f5" and 8)
+    set ok to map_put(keys and values and "ep_dlcall_f6" and 8)
     set ok to map_put(keys and values and "float_to_int" and 1)
     # Crypto (hex/encoded strings)
     set ok to map_put(keys and values and "ep_hmac_sha256" and 3)
@@ -615,7 +622,15 @@ define infer_type with state and expr and var_keys and var_values:
         if t != 0:
             return t
         return 1
-    if type == 4 || type == 5 || type == 14: # NODE_BINARY, NODE_COMP, NODE_LOGICAL
+    if type == 42: # NODE_FLOAT -> TYPE_FLOAT = 8
+        return 8
+    if type == 4: # NODE_BINARY: float-typed when either operand is float, else int
+        set fl to infer_type(state and get_list(expr and 1) and var_keys and var_values)
+        set fr to infer_type(state and get_list(expr and 3) and var_keys and var_values)
+        if fl == 8 || fr == 8:
+            return 8
+        return 1
+    if type == 5 || type == 14: # NODE_COMP, NODE_LOGICAL
         return 1
     if type == 31 || type == 32: # NODE_BOOL_LIT, NODE_UNARY_NOT -> TYPE_BOOL = 7
         return 7
@@ -1116,12 +1131,18 @@ define gen_statement with state and stmt and var_keys and var_values:
             set line to string_concat(line and ");\n")
             set ok to emit(state and line)
         else:
-          if t == 7: # TYPE_BOOL
-            set line to "    printf(\"%s\\n\", ("
+          if t == 8: # TYPE_FLOAT
+            set line to "    { long long _ftmp = "
             set line to string_concat(line and expr_str)
-            set line to string_concat(line and ") ? \"true\" : \"false\");\n")
+            set line to string_concat(line and "; double _dv; memcpy(&_dv, &_ftmp, sizeof(double)); printf(\"%.15g\\n\", _dv); }\n")
             set ok to emit(state and line)
           else:
+           if t == 7: # TYPE_BOOL
+             set line to "    printf(\"%s\\n\", ("
+             set line to string_concat(line and expr_str)
+             set line to string_concat(line and ") ? \"true\" : \"false\");\n")
+             set ok to emit(state and line)
+           else:
             set line to "    printf(\"%lld\\n\", "
             set line to string_concat(line and expr_str)
             set line to string_concat(line and ");\n")
@@ -1363,6 +1384,12 @@ define gen_expr with state and expr and var_keys and var_values:
         set val to get_list(expr and 1)
         set num_str to cg_int_to_str(val)
         return string_concat(num_str and "LL")
+
+    if type == 42: # NODE_FLOAT — double literal punned into a long long
+        set fres to "({ double _fl = "
+        set fres to string_concat(fres and get_list(expr and 1))
+        set fres to string_concat(fres and "; long long _fv; memcpy(&_fv, &_fl, sizeof(double)); _fv; })")
+        return fres
         
     if type == 2: # NODE_STR
         set val to get_list(expr and 1)
@@ -1399,7 +1426,41 @@ define gen_expr with state and expr and var_keys and var_values:
         
         set left_str to gen_expr(state and left and var_keys and var_values)
         set right_str to gen_expr(state and right and var_keys and var_values)
-        
+
+        # Float arithmetic: unpack punned doubles, compute, repack (mirrors Rust)
+        set flt to infer_type(state and left and var_keys and var_values)
+        set frt to infer_type(state and right and var_keys and var_values)
+        if flt == 8 || frt == 8:
+            set fop to "+"
+            if op == 2:
+                set fop to "-"
+            if op == 3:
+                set fop to "*"
+            if op == 4:
+                set fop to "/"
+            set lu to ""
+            if flt == 8:
+                set lu to string_concat("({ long long _lt = " and left_str)
+                set lu to string_concat(lu and "; double _d; memcpy(&_d, &_lt, sizeof(double)); _d; })")
+            else:
+                set lu to string_concat("(double)(" and left_str)
+                set lu to string_concat(lu and ")")
+            set ru to ""
+            if frt == 8:
+                set ru to string_concat("({ long long _rt = " and right_str)
+                set ru to string_concat(ru and "; double _d; memcpy(&_d, &_rt, sizeof(double)); _d; })")
+            else:
+                set ru to string_concat("(double)(" and right_str)
+                set ru to string_concat(ru and ")")
+            set fr2 to "({ double _r = "
+            set fr2 to string_concat(fr2 and lu)
+            set fr2 to string_concat(fr2 and " ")
+            set fr2 to string_concat(fr2 and fop)
+            set fr2 to string_concat(fr2 and " ")
+            set fr2 to string_concat(fr2 and ru)
+            set fr2 to string_concat(fr2 and "; long long _v; memcpy(&_v, &_r, sizeof(double)); _v; })")
+            return fr2
+
         set op_str to ""
         if op == 1:
             set op_str to "+"
