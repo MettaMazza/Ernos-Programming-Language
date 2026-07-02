@@ -4970,6 +4970,11 @@ long long parse_prefix(long long);
 long long parse_closure(long long);
 long long parse_struct_create(long long);
 long long parse_list_literal(long long);
+long long check_lit_category(long long);
+long long check_expr(long long, long long, long long);
+long long check_stmts(long long, long long);
+long long check_function(long long, long long);
+long long check_program(long long);
 long long map_get(long long, long long, long long);
 long long map_contains_key(long long, long long);
 long long collect_idents_expr(long long, long long);
@@ -5468,6 +5473,7 @@ long long _main() {
     long long ok = 0;
     long long empty_imports = 0;
     long long program_ast = 0;
+    long long check_ok = 0;
     long long c_code = 0;
     long long c_path = 0;
     long long compile_cmd = 0;
@@ -5611,6 +5617,12 @@ long long _main() {
     ok = append_list(program_ast, all_method_defs);
     ok = append_list(program_ast, all_trait_defs);
     ok = append_list(program_ast, all_trait_impls);
+    check_ok = check_program(program_ast);
+    if (check_ok == 0LL) {
+    printf("%s\n", (char*)(long long)"Compilation failed: semantic errors.");
+    ret_val = 1LL;
+    goto L_cleanup;
+    }
     printf("%s\n", (char*)(long long)"[2/3] Generating C Source...");
     c_code = generate_c(program_ast, is_test_mode);
     if (string_length((char*)c_code) == 0LL) {
@@ -9577,6 +9589,301 @@ long long parse_list_literal(long long state) {
     ret_val = make_node_list_lit(elements);
     goto L_cleanup;
 L_cleanup:
+    return ret_val;
+}
+
+long long check_lit_category(long long expr) {
+    long long t = 0;
+    long long ret_val = 0;
+
+    ep_gc_maybe_collect();
+
+    t = get_list(expr, 0LL);
+    if (t == 1LL) {
+    ret_val = 1LL;
+    goto L_cleanup;
+    }
+    if (t == 42LL) {
+    ret_val = 1LL;
+    goto L_cleanup;
+    }
+    if (t == 31LL) {
+    ret_val = 1LL;
+    goto L_cleanup;
+    }
+    if (t == 2LL) {
+    ret_val = 2LL;
+    goto L_cleanup;
+    }
+    ret_val = 0LL;
+    goto L_cleanup;
+L_cleanup:
+    return ret_val;
+}
+
+long long check_expr(long long expr, long long errs, long long in_spawn_arg) {
+    long long t = 0;
+    long long ok = 0;
+    long long elems = 0;
+    long long n = 0;
+    long long saw_str = 0;
+    long long saw_num = 0;
+    long long i = 0;
+    long long el = 0;
+    long long cat = 0;
+    long long oke = 0;
+    long long okl = 0;
+    long long okr = 0;
+    long long args = 0;
+    long long an = 0;
+    long long ai = 0;
+    long long oka = 0;
+    long long ret_val = 0;
+
+    ep_gc_maybe_collect();
+
+    if (expr == 0LL) {
+    ret_val = 0LL;
+    goto L_cleanup;
+    }
+    t = get_list(expr, 0LL);
+    if (t == 20LL) {
+    if (in_spawn_arg == 1LL) {
+    ok = append_list(errs, (long long)"Send safety (E0036): a borrowed reference is not Send and cannot be sent to a spawned thread");
+    }
+    ret_val = check_expr(get_list(expr, 1LL), errs, 0LL);
+    goto L_cleanup;
+    }
+    if (t == 35LL) {
+    elems = get_list(expr, 1LL);
+    n = length_list(elems);
+    saw_str = 0LL;
+    saw_num = 0LL;
+    i = 0LL;
+    while (i < n) {
+    el = get_list(elems, i);
+    cat = check_lit_category(el);
+    if (cat == 1LL) {
+    saw_num = 1LL;
+    }
+    if (cat == 2LL) {
+    saw_str = 1LL;
+    }
+    oke = check_expr(el, errs, 0LL);
+    i = (i + 1LL);
+    }
+    if (saw_str == 1LL) {
+    if (saw_num == 1LL) {
+    ok = append_list(errs, (long long)"list elements have conflicting types (string mixed with non-string)");
+    }
+    }
+    ret_val = 0LL;
+    goto L_cleanup;
+    }
+    if (((t == 4LL || t == 5LL) || t == 14LL)) {
+    okl = check_expr(get_list(expr, 1LL), errs, 0LL);
+    okr = check_expr(get_list(expr, 3LL), errs, 0LL);
+    ret_val = 0LL;
+    goto L_cleanup;
+    }
+    if (t == 6LL) {
+    args = get_list(expr, 2LL);
+    an = length_list(args);
+    ai = 0LL;
+    while (ai < an) {
+    oka = check_expr(get_list(args, ai), errs, 0LL);
+    ai = (ai + 1LL);
+    }
+    ret_val = 0LL;
+    goto L_cleanup;
+    }
+    if ((((t == 18LL || t == 21LL) || t == 32LL) || t == 33LL)) {
+    ret_val = check_expr(get_list(expr, 1LL), errs, 0LL);
+    goto L_cleanup;
+    }
+    ret_val = 0LL;
+    goto L_cleanup;
+L_cleanup:
+    return ret_val;
+}
+
+long long check_stmts(long long stmts, long long errs) {
+    long long n = 0;
+    long long idx = 0;
+    long long stmt = 0;
+    long long t = 0;
+    long long tgt = 0;
+    long long ok = 0;
+    long long okv = 0;
+    long long okr = 0;
+    long long okc = 0;
+    long long okt = 0;
+    long long eb = 0;
+    long long oke = 0;
+    long long okw = 0;
+    long long okwb = 0;
+    long long sargs = 0;
+    long long sn = 0;
+    long long si = 0;
+    long long oks = 0;
+    long long okn = 0;
+    long long okfe = 0;
+    long long okfeb = 0;
+    long long arms = 0;
+    long long arn = 0;
+    long long ari = 0;
+    long long okam = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&tgt);
+    ep_gc_maybe_collect();
+
+    n = length_list(stmts);
+    idx = 0LL;
+    while (idx < n) {
+    stmt = get_list(stmts, idx);
+    t = get_list(stmt, 0LL);
+    if (t == 7LL) {
+    tgt = string_concat(get_list(stmt, 1LL), (long long)"");
+    if ((strcmp((char*)tgt, (char*)(long long)"channel") == 0)) {
+    ok = append_list(errs, (long long)"cannot shadow the reserved keyword 'channel' (use it as a channel, not a variable name)");
+    }
+    okv = check_expr(get_list(stmt, 2LL), errs, 0LL);
+    }
+    if (((t == 8LL || t == 9LL) || t == 36LL)) {
+    okr = check_expr(get_list(stmt, 1LL), errs, 0LL);
+    }
+    if (t == 10LL) {
+    okc = check_expr(get_list(stmt, 1LL), errs, 0LL);
+    okt = check_stmts(get_list(stmt, 2LL), errs);
+    eb = get_list(stmt, 3LL);
+    if (eb != 0LL) {
+    oke = check_stmts(eb, errs);
+    }
+    }
+    if (t == 11LL) {
+    okw = check_expr(get_list(stmt, 1LL), errs, 0LL);
+    okwb = check_stmts(get_list(stmt, 2LL), errs);
+    }
+    if (t == 15LL) {
+    sargs = get_list(stmt, 2LL);
+    sn = length_list(sargs);
+    si = 0LL;
+    while (si < sn) {
+    oks = check_expr(get_list(sargs, si), errs, 1LL);
+    si = (si + 1LL);
+    }
+    }
+    if (t == 16LL) {
+    okn = check_expr(get_list(stmt, 2LL), errs, 1LL);
+    }
+    if (t == 28LL) {
+    okfe = check_expr(get_list(stmt, 2LL), errs, 0LL);
+    okfeb = check_stmts(get_list(stmt, 3LL), errs);
+    }
+    if (t == 27LL) {
+    arms = get_list(stmt, 2LL);
+    arn = length_list(arms);
+    ari = 0LL;
+    while (ari < arn) {
+    okam = check_stmts(get_list(get_list(arms, ari), 2LL), errs);
+    ari = (ari + 1LL);
+    }
+    }
+    idx = (idx + 1LL);
+    }
+    ret_val = 0LL;
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long check_function(long long func, long long errs) {
+    long long params = 0;
+    long long pn = 0;
+    long long pi = 0;
+    long long pname = 0;
+    long long ok = 0;
+    long long okb = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&pname);
+    ep_gc_maybe_collect();
+
+    params = get_list(func, 2LL);
+    pn = length_list(params);
+    pi = 0LL;
+    while (pi < pn) {
+    pname = string_concat(get_list(get_list(params, pi), 0LL), (long long)"");
+    if ((strcmp((char*)pname, (char*)(long long)"channel") == 0)) {
+    ok = append_list(errs, (long long)"cannot use the reserved keyword 'channel' as a parameter name");
+    }
+    pi = (pi + 1LL);
+    }
+    okb = check_stmts(get_list(func, 3LL), errs);
+    ret_val = 0LL;
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long check_program(long long program) {
+    long long errs = 0;
+    long long funcs = 0;
+    long long n = 0;
+    long long idx = 0;
+    long long okf = 0;
+    long long methods = 0;
+    long long mn = 0;
+    long long mi = 0;
+    long long mdef = 0;
+    long long okm = 0;
+    long long e_len = 0;
+    long long ei = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&errs);
+    ep_gc_maybe_collect();
+
+    {
+        long long tmp_val = create_list();
+        free_list(errs);
+        errs = tmp_val;
+    }
+    funcs = get_list(program, 3LL);
+    n = length_list(funcs);
+    idx = 0LL;
+    while (idx < n) {
+    okf = check_function(get_list(funcs, idx), errs);
+    idx = (idx + 1LL);
+    }
+    if (length_list(program) > 6LL) {
+    methods = get_list(program, 6LL);
+    mn = length_list(methods);
+    mi = 0LL;
+    while (mi < mn) {
+    mdef = get_list(methods, mi);
+    okm = check_stmts(get_list(mdef, 4LL), errs);
+    mi = (mi + 1LL);
+    }
+    }
+    e_len = length_list(errs);
+    if (e_len == 0LL) {
+    ret_val = 1LL;
+    goto L_cleanup;
+    }
+    ei = 0LL;
+    while (ei < e_len) {
+    printf("%s\n", (char*)concat((long long)"Type Error: ", get_list(errs, ei)));
+    ei = (ei + 1LL);
+    }
+    ret_val = 0LL;
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    free_list(errs);
     return ret_val;
 }
 

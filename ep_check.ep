@@ -1,0 +1,151 @@
+# ErnosPlain Self-Hosted Semantic Checker
+#
+# A pre-codegen enforcement pass mirroring the hard-error classes of the Rust
+# type checker (src/type_check.rs). Returns 1 when the program is well-formed,
+# 0 (after printing diagnostics) when it must be rejected.
+#
+# Covered so far: reserved-keyword shadowing (`channel`), Send-safety (a borrowed
+# reference may not be sent to a spawned thread), and heterogeneous list literals
+# (string mixed with non-string elements).
+
+# Coarse literal category used for list-homogeneity: 1=numeric, 2=string, 0=other.
+define check_lit_category with expr:
+    set t to get_list(expr and 0)
+    if t == 1: # NODE_INT
+        return 1
+    if t == 42: # NODE_FLOAT
+        return 1
+    if t == 31: # NODE_BOOL_LIT
+        return 1
+    if t == 2: # NODE_STR
+        return 2
+    return 0
+
+# Walk an expression; append a human-readable error string to `errs` for any
+# Send-unsafe borrow used where `in_spawn_arg` is 1, and for heterogeneous list
+# literals. Returns 0.
+define check_expr with expr and errs and in_spawn_arg:
+    if expr == 0:
+        return 0
+    set t to get_list(expr and 0)
+    if t == 20: # NODE_BORROW
+        if in_spawn_arg == 1:
+            set ok to append_list(errs and "Send safety (E0036): a borrowed reference is not Send and cannot be sent to a spawned thread")
+        return check_expr(get_list(expr and 1) and errs and 0)
+    if t == 35: # NODE_LIST_LIT — element homogeneity
+        set elems to get_list(expr and 1)
+        set n to length_list(elems)
+        set saw_str to 0
+        set saw_num to 0
+        set i to 0
+        repeat while i < n:
+            set el to get_list(elems and i)
+            set cat to check_lit_category(el)
+            if cat == 1:
+                set saw_num to 1
+            if cat == 2:
+                set saw_str to 1
+            set oke to check_expr(el and errs and 0)
+            set i to i + 1
+        if saw_str == 1:
+            if saw_num == 1:
+                set ok to append_list(errs and "list elements have conflicting types (string mixed with non-string)")
+        return 0
+    if t == 4 || t == 5 || t == 14: # BINARY / COMP / LOGICAL
+        set okl to check_expr(get_list(expr and 1) and errs and 0)
+        set okr to check_expr(get_list(expr and 3) and errs and 0)
+        return 0
+    if t == 6: # NODE_CALL
+        set args to get_list(expr and 2)
+        set an to length_list(args)
+        set ai to 0
+        repeat while ai < an:
+            set oka to check_expr(get_list(args and ai) and errs and 0)
+            set ai to ai + 1
+        return 0
+    if t == 18 || t == 21 || t == 32 || t == 33: # RECEIVE / AWAIT / NOT / TRY
+        return check_expr(get_list(expr and 1) and errs and 0)
+    return 0
+
+define check_stmts with stmts and errs:
+    set n to length_list(stmts)
+    set idx to 0
+    repeat while idx < n:
+        set stmt to get_list(stmts and idx)
+        set t to get_list(stmt and 0)
+        if t == 7: # NODE_SET — reserved-name target + value walk
+            set tgt to string_concat(get_list(stmt and 1) and "")
+            if tgt equals "channel":
+                set ok to append_list(errs and "cannot shadow the reserved keyword 'channel' (use it as a channel, not a variable name)")
+            set okv to check_expr(get_list(stmt and 2) and errs and 0)
+        if t == 8 || t == 9 || t == 36: # RETURN / DISPLAY / EXPR_STMT
+            set okr to check_expr(get_list(stmt and 1) and errs and 0)
+        if t == 10: # IF
+            set okc to check_expr(get_list(stmt and 1) and errs and 0)
+            set okt to check_stmts(get_list(stmt and 2) and errs)
+            set eb to get_list(stmt and 3)
+            if eb != 0:
+                set oke to check_stmts(eb and errs)
+        if t == 11: # REPEAT_WHILE
+            set okw to check_expr(get_list(stmt and 1) and errs and 0)
+            set okwb to check_stmts(get_list(stmt and 2) and errs)
+        if t == 15: # SPAWN — args checked in spawn context (Send safety)
+            set sargs to get_list(stmt and 2)
+            set sn to length_list(sargs)
+            set si to 0
+            repeat while si < sn:
+                set oks to check_expr(get_list(sargs and si) and errs and 1)
+                set si to si + 1
+        if t == 16: # SEND — value is sent across threads too
+            set okn to check_expr(get_list(stmt and 2) and errs and 1)
+        if t == 28: # FOR_EACH
+            set okfe to check_expr(get_list(stmt and 2) and errs and 0)
+            set okfeb to check_stmts(get_list(stmt and 3) and errs)
+        if t == 27: # MATCH
+            set arms to get_list(stmt and 2)
+            set arn to length_list(arms)
+            set ari to 0
+            repeat while ari < arn:
+                set okam to check_stmts(get_list(get_list(arms and ari) and 2) and errs)
+                set ari to ari + 1
+        set idx to idx + 1
+    return 0
+
+define check_function with func and errs:
+    set params to get_list(func and 2)
+    set pn to length_list(params)
+    set pi to 0
+    repeat while pi < pn:
+        set pname to string_concat(get_list(get_list(params and pi) and 0) and "")
+        if pname equals "channel":
+            set ok to append_list(errs and "cannot use the reserved keyword 'channel' as a parameter name")
+        set pi to pi + 1
+    set okb to check_stmts(get_list(func and 3) and errs)
+    return 0
+
+# Entry point: returns 1 if OK, 0 (after printing) if the program is rejected.
+define check_program with program:
+    set errs to create_list()
+    set funcs to get_list(program and 3)
+    set n to length_list(funcs)
+    set idx to 0
+    repeat while idx < n:
+        set okf to check_function(get_list(funcs and idx) and errs)
+        set idx to idx + 1
+    # methods (index 6) share the function shape
+    if length_list(program) > 6:
+        set methods to get_list(program and 6)
+        set mn to length_list(methods)
+        set mi to 0
+        repeat while mi < mn:
+            set mdef to get_list(methods and mi)
+            set okm to check_stmts(get_list(mdef and 4) and errs)
+            set mi to mi + 1
+    set e_len to length_list(errs)
+    if e_len == 0:
+        return 1
+    set ei to 0
+    repeat while ei < e_len:
+        display concat("Type Error: " and get_list(errs and ei))
+        set ei to ei + 1
+    return 0

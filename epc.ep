@@ -1,6 +1,7 @@
 # ErnosPlain Self-Hosted Compiler Driver
 import "ep_lexer"
 import "ep_parser"
+import "ep_check"
 import "ep_codegen"
 import "ep_runtime_gen"
 
@@ -267,9 +268,15 @@ define main:
     set ok to append_list(program_ast and all_trait_defs)
     set ok to append_list(program_ast and all_trait_impls)
     
+    # Semantic checking (hard errors) before codegen.
+    set check_ok to check_program(program_ast)
+    if check_ok == 0:
+        display "Compilation failed: semantic errors."
+        return 1
+
     display "[2/3] Generating C Source..."
     set c_code to generate_c(program_ast and is_test_mode)
-    
+
     if string_length(c_code) == 0:
         display "Compilation failed due to errors."
         return 1
