@@ -234,6 +234,15 @@ define lex_string_body with source and pos0 and source_len and tokens and curren
     set okr3 to append_list(res and err)
     return res
 
+# Match two consecutive words `w1 w2` starting at `pos`; returns the position
+# after w2 (or 0). Used for `is <w1> <w2>` comparison phrases.
+define lex_is_phrase2 with source and pos and w1 and w2:
+    set p1 to match_next_word(source and pos and w1)
+    if p1 == 0:
+        return 0
+    set p2 to match_next_word(source and p1 and w2)
+    return p2
+
 define tokenize_source with source:
     set tokens to create_list()
     set source_len to string_length(source)
@@ -440,10 +449,98 @@ define tokenize_source with source:
                                                     set pos to next_p2
                                                     set is_multi_phrase to 1
 
+                                        # Two-word comparison phrases (mirror src/lexer.rs)
+                                        if is_multi_phrase == 0:
+                                            set mp2 to lex_is_phrase2(source and pos and "more" and "than")
+                                            if mp2 > 0:
+                                                set tok_type to 17
+                                                set id_str to ">"
+                                                set current_col to current_col + (mp2 - pos)
+                                                set pos to mp2
+                                                set is_multi_phrase to 1
+                                        if is_multi_phrase == 0:
+                                            set mp2 to lex_is_phrase2(source and pos and "fewer" and "than")
+                                            if mp2 > 0:
+                                                set tok_type to 16
+                                                set id_str to "<"
+                                                set current_col to current_col + (mp2 - pos)
+                                                set pos to mp2
+                                                set is_multi_phrase to 1
+                                        if is_multi_phrase == 0:
+                                            set mp2 to lex_is_phrase2(source and pos and "smaller" and "than")
+                                            if mp2 > 0:
+                                                set tok_type to 16
+                                                set id_str to "<"
+                                                set current_col to current_col + (mp2 - pos)
+                                                set pos to mp2
+                                                set is_multi_phrase to 1
+                                        if is_multi_phrase == 0:
+                                            set mp2 to lex_is_phrase2(source and pos and "bigger" and "than")
+                                            if mp2 > 0:
+                                                set tok_type to 17
+                                                set id_str to ">"
+                                                set current_col to current_col + (mp2 - pos)
+                                                set pos to mp2
+                                                set is_multi_phrase to 1
+                                        if is_multi_phrase == 0:
+                                            set mp2 to lex_is_phrase2(source and pos and "larger" and "than")
+                                            if mp2 > 0:
+                                                set tok_type to 17
+                                                set id_str to ">"
+                                                set current_col to current_col + (mp2 - pos)
+                                                set pos to mp2
+                                                set is_multi_phrase to 1
+                                        if is_multi_phrase == 0:
+                                            set mp2 to lex_is_phrase2(source and pos and "at" and "least")
+                                            if mp2 > 0:
+                                                set tok_type to 68
+                                                set id_str to ">="
+                                                set current_col to current_col + (mp2 - pos)
+                                                set pos to mp2
+                                                set is_multi_phrase to 1
+                                        if is_multi_phrase == 0:
+                                            set mp2 to lex_is_phrase2(source and pos and "at" and "most")
+                                            if mp2 > 0:
+                                                set tok_type to 67
+                                                set id_str to "<="
+                                                set current_col to current_col + (mp2 - pos)
+                                                set pos to mp2
+                                                set is_multi_phrase to 1
+                                        if is_multi_phrase == 0:
+                                            set mp2 to lex_is_phrase2(source and pos and "different" and "from")
+                                            if mp2 > 0:
+                                                set tok_type to 19
+                                                set id_str to "!="
+                                                set current_col to current_col + (mp2 - pos)
+                                                set pos to mp2
+                                                set is_multi_phrase to 1
+                                        if is_multi_phrase == 0:
+                                            # `is the same as` -> == (three words)
+                                            set mp_the to match_next_word(source and pos and "the")
+                                            if mp_the > 0:
+                                                set mp3 to lex_is_phrase2(source and mp_the and "same" and "as")
+                                                if mp3 > 0:
+                                                    set tok_type to 18
+                                                    set id_str to "=="
+                                                    set current_col to current_col + (mp3 - pos)
+                                                    set pos to mp3
+                                                    set is_multi_phrase to 1
+
                                         if is_multi_phrase == 0:
                                             # Standalone 'is' for struct field defaults
                                             set tok_type to 72
                                             set is_multi_phrase to 1
+                                    if "does" equals id_str:
+                                        # `does not equal` -> !=
+                                        set dn to match_next_word(source and pos and "not")
+                                        if dn > 0:
+                                            set de to match_next_word(source and dn and "equal")
+                                            if de > 0:
+                                                set tok_type to 19
+                                                set id_str to "!="
+                                                set current_col to current_col + (de - pos)
+                                                set pos to de
+                                                set is_multi_phrase to 1
                                                     
                                 if is_multi_phrase == 0:
                                     if "and" equals id_str:

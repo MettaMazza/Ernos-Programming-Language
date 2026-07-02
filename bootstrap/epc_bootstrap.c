@@ -4903,6 +4903,7 @@ long long get_token_line(long long);
 long long get_token_col(long long);
 long long match_next_word(long long, long long, long long);
 long long lex_string_body(long long, long long, long long, long long, long long, long long, long long);
+long long lex_is_phrase2(long long, long long, long long, long long);
 long long tokenize_source(long long);
 long long parse_int(long long);
 long long make_node_int(long long);
@@ -6183,6 +6184,25 @@ L_cleanup:
     return ret_val;
 }
 
+long long lex_is_phrase2(long long source, long long pos, long long w1, long long w2) {
+    long long p1 = 0;
+    long long p2 = 0;
+    long long ret_val = 0;
+
+    ep_gc_maybe_collect();
+
+    p1 = match_next_word(source, pos, w1);
+    if (p1 == 0LL) {
+    ret_val = 0LL;
+    goto L_cleanup;
+    }
+    p2 = match_next_word(source, p1, w2);
+    ret_val = p2;
+    goto L_cleanup;
+L_cleanup:
+    return ret_val;
+}
+
 long long tokenize_source(long long source) {
     long long tokens = 0;
     long long source_len = 0;
@@ -6224,6 +6244,11 @@ long long tokenize_source(long long source) {
     long long next_p = 0;
     long long next_p2 = 0;
     long long next_p3 = 0;
+    long long mp2 = 0;
+    long long mp_the = 0;
+    long long mp3 = 0;
+    long long dn = 0;
+    long long de = 0;
     long long start_col = 0;
     long long is_fstring = 0;
     long long tok_count = 0;
@@ -6459,8 +6484,114 @@ long long tokenize_source(long long source) {
     }
     }
     if (is_multi_phrase == 0LL) {
+    mp2 = lex_is_phrase2(source, pos, (long long)"more", (long long)"than");
+    if (mp2 > 0LL) {
+    tok_type = 17LL;
+    id_str = (long long)">";
+    current_col = (current_col + (mp2 - pos));
+    pos = mp2;
+    is_multi_phrase = 1LL;
+    }
+    }
+    if (is_multi_phrase == 0LL) {
+    mp2 = lex_is_phrase2(source, pos, (long long)"fewer", (long long)"than");
+    if (mp2 > 0LL) {
+    tok_type = 16LL;
+    id_str = (long long)"<";
+    current_col = (current_col + (mp2 - pos));
+    pos = mp2;
+    is_multi_phrase = 1LL;
+    }
+    }
+    if (is_multi_phrase == 0LL) {
+    mp2 = lex_is_phrase2(source, pos, (long long)"smaller", (long long)"than");
+    if (mp2 > 0LL) {
+    tok_type = 16LL;
+    id_str = (long long)"<";
+    current_col = (current_col + (mp2 - pos));
+    pos = mp2;
+    is_multi_phrase = 1LL;
+    }
+    }
+    if (is_multi_phrase == 0LL) {
+    mp2 = lex_is_phrase2(source, pos, (long long)"bigger", (long long)"than");
+    if (mp2 > 0LL) {
+    tok_type = 17LL;
+    id_str = (long long)">";
+    current_col = (current_col + (mp2 - pos));
+    pos = mp2;
+    is_multi_phrase = 1LL;
+    }
+    }
+    if (is_multi_phrase == 0LL) {
+    mp2 = lex_is_phrase2(source, pos, (long long)"larger", (long long)"than");
+    if (mp2 > 0LL) {
+    tok_type = 17LL;
+    id_str = (long long)">";
+    current_col = (current_col + (mp2 - pos));
+    pos = mp2;
+    is_multi_phrase = 1LL;
+    }
+    }
+    if (is_multi_phrase == 0LL) {
+    mp2 = lex_is_phrase2(source, pos, (long long)"at", (long long)"least");
+    if (mp2 > 0LL) {
+    tok_type = 68LL;
+    id_str = (long long)">=";
+    current_col = (current_col + (mp2 - pos));
+    pos = mp2;
+    is_multi_phrase = 1LL;
+    }
+    }
+    if (is_multi_phrase == 0LL) {
+    mp2 = lex_is_phrase2(source, pos, (long long)"at", (long long)"most");
+    if (mp2 > 0LL) {
+    tok_type = 67LL;
+    id_str = (long long)"<=";
+    current_col = (current_col + (mp2 - pos));
+    pos = mp2;
+    is_multi_phrase = 1LL;
+    }
+    }
+    if (is_multi_phrase == 0LL) {
+    mp2 = lex_is_phrase2(source, pos, (long long)"different", (long long)"from");
+    if (mp2 > 0LL) {
+    tok_type = 19LL;
+    id_str = (long long)"!=";
+    current_col = (current_col + (mp2 - pos));
+    pos = mp2;
+    is_multi_phrase = 1LL;
+    }
+    }
+    if (is_multi_phrase == 0LL) {
+    mp_the = match_next_word(source, pos, (long long)"the");
+    if (mp_the > 0LL) {
+    mp3 = lex_is_phrase2(source, mp_the, (long long)"same", (long long)"as");
+    if (mp3 > 0LL) {
+    tok_type = 18LL;
+    id_str = (long long)"==";
+    current_col = (current_col + (mp3 - pos));
+    pos = mp3;
+    is_multi_phrase = 1LL;
+    }
+    }
+    }
+    if (is_multi_phrase == 0LL) {
     tok_type = 72LL;
     is_multi_phrase = 1LL;
+    }
+    }
+    if ((strcmp((char*)(long long)"does", (char*)id_str) == 0)) {
+    dn = match_next_word(source, pos, (long long)"not");
+    if (dn > 0LL) {
+    de = match_next_word(source, dn, (long long)"equal");
+    if (de > 0LL) {
+    tok_type = 19LL;
+    id_str = (long long)"!=";
+    current_col = (current_col + (de - pos));
+    pos = de;
+    is_multi_phrase = 1LL;
+    }
     }
     }
     }
