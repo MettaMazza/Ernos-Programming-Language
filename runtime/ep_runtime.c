@@ -562,7 +562,8 @@ static long long add_task_group(long long group_ptr, long long fut_ptr) {
 static long long wait_task_group(long long group_ptr) {
     EpTaskGroup* tg = (EpTaskGroup*)group_ptr;
     if (!tg) return 0;
-    
+
+    long long ep_wait_group_spin = 0;
     int all_done = 0;
     while (!all_done) {
         all_done = 1;
@@ -608,9 +609,19 @@ static long long wait_task_group(long long group_ptr) {
         } else {
             long long timeout = ep_get_next_timer_timeout();
             if (timeout == -1 && !ep_timers_head && ep_active_io_sources == 0) {
-                fprintf(stderr, "Deadlock detected: waiting on task group with no active tasks or timers.\n");
-                exit(1);
+                /* No coroutine tasks/timers/IO to drive. The futures may still be
+                   completed by detached worker THREADS (the self-hosted compiler
+                   emits thread-based async), so poll for their completion rather
+                   than declaring deadlock. Bounded so a genuinely stuck group
+                   still fails instead of hanging forever. */
+                ep_sleep_ms(1);
+                if (++ep_wait_group_spin > 60000) {
+                    fprintf(stderr, "Deadlock detected: waiting on task group with no active tasks or timers.\n");
+                    exit(1);
+                }
+                continue;
             }
+            ep_wait_group_spin = 0;
             if (ep_event_loop_fd == -1) {
                 if (timeout > 0) {
                     ep_sleep_ms(timeout);
