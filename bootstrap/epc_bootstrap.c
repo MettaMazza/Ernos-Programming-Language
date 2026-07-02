@@ -11002,6 +11002,7 @@ long long create_codegen_state() {
     ok = append_list(state, 0LL);
     ok = append_list(state, (create_list() + 0LL));
     ok = append_list(state, (create_list() + 0LL));
+    ok = append_list(state, 0LL);
     ret_val = state;
     state = 0;
     goto L_cleanup;
@@ -13259,8 +13260,8 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     if (type == 34LL) {
     params = get_list(expr, 1LL);
     body = get_list(expr, 2LL);
-    cidx = get_codegen_spawn_index(state);
-    dummy = set_codegen_spawn_index(state, (cidx + 1LL));
+    cidx = get_list(state, 13LL);
+    dummy = set_list(state, 13LL, (cidx + 1LL));
     cname = string_concat((long long)"_ep_closure_", cg_int_to_str(cidx));
     {
         long long tmp_val = create_list();

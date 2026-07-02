@@ -356,6 +356,7 @@ define create_codegen_state:
     set ok to append_list(state and 0)                 # builtin_count (10): entries in func_keys[0..n) that are C-runtime builtins
     set ok to append_list(state and (create_list() + 0)) # closure_bodies (11): lifted closure C functions, spliced at the marker
     set ok to append_list(state and (create_list() + 0)) # enum_variant_names (12): every declared variant, for bare-variant identifiers
+    set ok to append_list(state and 0)                 # closure_index (13): separate counter so closures don't perturb spawn_index
     return state
 
 # A user/imported .ep function whose name matches a C-runtime builtin must NOT
@@ -1871,8 +1872,10 @@ define gen_expr with state and expr and var_keys and var_values:
         # mallocs {magic, fn_ptr, env[]} and packs current capture values.
         set params to get_list(expr and 1)
         set body to get_list(expr and 2)
-        set cidx to get_codegen_spawn_index(state)
-        set dummy to set_codegen_spawn_index(state and cidx + 1)
+        # Dedicated closure counter (slot 13): sharing spawn_index desynced the
+        # spawn arg-struct indices when closures and spawn coexist.
+        set cidx to get_list(state and 13)
+        set dummy to set_list(state and 13 and cidx + 1)
         set cname to string_concat("_ep_closure_" and cg_int_to_str(cidx))
 
         # ---- capture analysis: identifiers read in the body that are outer
