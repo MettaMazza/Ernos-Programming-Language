@@ -2938,7 +2938,44 @@ define generate_c with program and is_test_mode:
             set method_func to make_node_func(mname and full_params and mbody and 0) + 0
             set ok to gen_function(state and method_func)
             set md_idx to md_idx + 1
-    
+
+    # Emit trait-implementation methods (index 8). Each impl is
+    # [41, trait_name, type_name, methods]; methods are function nodes. They are
+    # dispatched by bare method name (p.size() -> size(p)), so emit each distinct
+    # method name once — deduplicated across impls.
+    set emitted_methods to create_list()
+    if prog_len > 8:
+        set trait_impls to get_list(program and 8)
+        set ti_len to length_list(trait_impls)
+        set ti_idx to 0
+        repeat while ti_idx < ti_len:
+            set timpl to get_list(trait_impls and ti_idx)
+            set imethods to get_list(timpl and 3)
+            set im_len to length_list(imethods)
+            set im_idx to 0
+            repeat while im_idx < im_len:
+                set imeth to get_list(imethods and im_idx)
+                set imeth_name to get_list(imeth and 1)
+                if contains_string_val(emitted_methods and imeth_name) == 0:
+                    set ok to append_list(emitted_methods and imeth_name)
+                    # Build a function with self prepended to the method's params.
+                    set tparams to get_list(imeth and 2)
+                    set tbody to get_list(imeth and 3)
+                    set tfull to create_list() + 0
+                    set tself to create_list() + 0
+                    set ok to append_list(tself and "self")
+                    set ok to append_list(tself and 0)
+                    set ok to append_list(tfull and tself)
+                    set tp_len to length_list(tparams)
+                    set tp_idx to 0
+                    repeat while tp_idx < tp_len:
+                        set ok to append_list(tfull and get_list(tparams and tp_idx))
+                        set tp_idx to tp_idx + 1
+                    set tfunc to make_node_func(imeth_name and tfull and tbody and 0) + 0
+                    set ok to gen_function(state and tfunc)
+                set im_idx to im_idx + 1
+            set ti_idx to ti_idx + 1
+
     # Emit functions (skipping any that shadow a C-runtime builtin — the
     # builtin definition wins, mirroring the Rust compiler)
     set idx to 0

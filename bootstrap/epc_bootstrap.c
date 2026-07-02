@@ -14586,6 +14586,23 @@ long long generate_c(long long program, long long is_test_mode) {
     long long mp_idx = 0;
     long long mp = 0;
     long long method_func = 0;
+    long long emitted_methods = 0;
+    long long trait_impls = 0;
+    long long ti_len = 0;
+    long long ti_idx = 0;
+    long long timpl = 0;
+    long long imethods = 0;
+    long long im_len = 0;
+    long long im_idx = 0;
+    long long imeth = 0;
+    long long imeth_name = 0;
+    long long tparams = 0;
+    long long tbody = 0;
+    long long tfull = 0;
+    long long tself = 0;
+    long long tp_len = 0;
+    long long tp_idx = 0;
+    long long tfunc = 0;
     long long lines = 0;
     long long cbodies = 0;
     long long marker_line = 0;
@@ -14611,6 +14628,7 @@ long long generate_c(long long program, long long is_test_mode) {
     ep_gc_push_root(&spawn_list);
     ep_gc_push_root(&struct_decl);
     ep_gc_push_root(&wrap_fn);
+    ep_gc_push_root(&emitted_methods);
     ep_gc_push_root(&spliced);
     ep_gc_push_root(&c_code);
     ep_gc_maybe_collect();
@@ -14946,6 +14964,46 @@ long long generate_c(long long program, long long is_test_mode) {
     md_idx = (md_idx + 1LL);
     }
     }
+    {
+        long long tmp_val = create_list();
+        free_list(emitted_methods);
+        emitted_methods = tmp_val;
+    }
+    if (prog_len > 8LL) {
+    trait_impls = get_list(program, 8LL);
+    ti_len = length_list(trait_impls);
+    ti_idx = 0LL;
+    while (ti_idx < ti_len) {
+    timpl = get_list(trait_impls, ti_idx);
+    imethods = get_list(timpl, 3LL);
+    im_len = length_list(imethods);
+    im_idx = 0LL;
+    while (im_idx < im_len) {
+    imeth = get_list(imethods, im_idx);
+    imeth_name = get_list(imeth, 1LL);
+    if (contains_string_val(emitted_methods, imeth_name) == 0LL) {
+    ok = append_list(emitted_methods, imeth_name);
+    tparams = get_list(imeth, 2LL);
+    tbody = get_list(imeth, 3LL);
+    tfull = (create_list() + 0LL);
+    tself = (create_list() + 0LL);
+    ok = append_list(tself, (long long)"self");
+    ok = append_list(tself, 0LL);
+    ok = append_list(tfull, tself);
+    tp_len = length_list(tparams);
+    tp_idx = 0LL;
+    while (tp_idx < tp_len) {
+    ok = append_list(tfull, get_list(tparams, tp_idx));
+    tp_idx = (tp_idx + 1LL);
+    }
+    tfunc = (make_node_func(imeth_name, tfull, tbody, 0LL) + 0LL);
+    ok = gen_function(state, tfunc);
+    }
+    im_idx = (im_idx + 1LL);
+    }
+    ti_idx = (ti_idx + 1LL);
+    }
+    }
     idx = 0LL;
     while (idx < len) {
     func = get_list(funcs, idx);
@@ -14970,13 +15028,14 @@ long long generate_c(long long program, long long is_test_mode) {
     ret_val = c_code;
     goto L_cleanup;
 L_cleanup:
-    ep_gc_pop_roots(19);
+    ep_gc_pop_roots(20);
     free_list(state);
     free_list(field_slots);
     free_list(tag_slots);
     free_list(gk);
     free_list(gv);
     free_list(spawn_list);
+    free_list(emitted_methods);
     return ret_val;
 }
 
