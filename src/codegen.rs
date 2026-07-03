@@ -57,7 +57,7 @@ fn expr_contains_var(expr: &Expr, var_name: &str) -> bool {
     }
 }
 
-fn is_primitive_op_expr(expr: &Expr, param_name: &str) -> bool {
+fn is_primitive_op_expr(expr: &Expr, param_name: &str, prim_params: &HashMap<String, Vec<bool>>) -> bool {
     match &expr.node {
         ExprNode::Integer(_) | ExprNode::FloatLiteral(_) | ExprNode::BoolLiteral(_) | ExprNode::StringLiteral(_) => true,
         ExprNode::Identifier(_name) => {
@@ -65,10 +65,10 @@ fn is_primitive_op_expr(expr: &Expr, param_name: &str) -> bool {
             true
         }
         ExprNode::Binary(l, _, r) | ExprNode::Comparison(l, _, r) | ExprNode::Logical(l, _, r) => {
-            is_primitive_op_expr(l, param_name) && is_primitive_op_expr(r, param_name)
+            is_primitive_op_expr(l, param_name, prim_params) && is_primitive_op_expr(r, param_name, prim_params)
         }
         ExprNode::UnaryNot(inner) => {
-            is_primitive_op_expr(inner, param_name)
+            is_primitive_op_expr(inner, param_name, prim_params)
         }
         ExprNode::Call(name, args) => {
             let primitive_arg_builtins = [
@@ -76,7 +76,19 @@ fn is_primitive_op_expr(expr: &Expr, param_name: &str) -> bool {
                 "ep_sleep_ms", "sleep_ms", "ep_time_ms", "ep_random_int"
             ];
             if primitive_arg_builtins.contains(&name.as_str()) {
-                args.iter().all(|arg| is_primitive_op_expr(arg, param_name))
+                args.iter().all(|arg| is_primitive_op_expr(arg, param_name, prim_params))
+            } else if let Some(flags) = prim_params.get(name.as_str()) {
+                // User-defined callee: passing this variable into a parameter that
+                // is DECLARED Int/Float/Bool keeps it primitive — the callee treats
+                // it as a number, so no GC root is needed here (e.g. fib(n - 1)).
+                args.iter().enumerate().all(|(i, arg)| {
+                    if expr_contains_var(arg, param_name) {
+                        flags.get(i).copied().unwrap_or(false)
+                            && is_primitive_op_expr(arg, param_name, prim_params)
+                    } else {
+                        true
+                    }
+                })
             } else {
                 !expr_contains_var(expr, param_name)
             }
@@ -87,27 +99,27 @@ fn is_primitive_op_expr(expr: &Expr, param_name: &str) -> bool {
     }
 }
 
-fn stmt_contains_non_primitive_usage(stmt: &Stmt, param_name: &str) -> bool {
+fn stmt_contains_non_primitive_usage(stmt: &Stmt, param_name: &str, prim_params: &HashMap<String, Vec<bool>>) -> bool {
     match &stmt.node {
         StmtNode::Set(_, expr, _) => {
-            !is_primitive_op_expr(expr, param_name)
+            !is_primitive_op_expr(expr, param_name, prim_params)
         }
         StmtNode::If(cond, then_b, else_b) => {
-            if !is_primitive_op_expr(cond, param_name) { return true; }
-            then_b.iter().any(|s| stmt_contains_non_primitive_usage(s, param_name)) ||
-            else_b.as_ref().map_or(false, |eb| eb.iter().any(|s| stmt_contains_non_primitive_usage(s, param_name)))
+            if !is_primitive_op_expr(cond, param_name, prim_params) { return true; }
+            then_b.iter().any(|s| stmt_contains_non_primitive_usage(s, param_name, prim_params)) ||
+            else_b.as_ref().map_or(false, |eb| eb.iter().any(|s| stmt_contains_non_primitive_usage(s, param_name, prim_params)))
         }
         StmtNode::RepeatWhile(cond, body) => {
-            if !is_primitive_op_expr(cond, param_name) { return true; }
-            body.iter().any(|s| stmt_contains_non_primitive_usage(s, param_name))
+            if !is_primitive_op_expr(cond, param_name, prim_params) { return true; }
+            body.iter().any(|s| stmt_contains_non_primitive_usage(s, param_name, prim_params))
         }
         StmtNode::ForEach(loop_var, iterable, body) => {
             if loop_var == param_name { return true; }
-            if !is_primitive_op_expr(iterable, param_name) { return true; }
-            body.iter().any(|s| stmt_contains_non_primitive_usage(s, param_name))
+            if !is_primitive_op_expr(iterable, param_name, prim_params) { return true; }
+            body.iter().any(|s| stmt_contains_non_primitive_usage(s, param_name, prim_params))
         }
         StmtNode::Return(expr) | StmtNode::Display(expr) | StmtNode::ExprStmt(expr) => {
-            !is_primitive_op_expr(expr, param_name)
+            !is_primitive_op_expr(expr, param_name, prim_params)
         }
         StmtNode::Send(expr, body) => {
             expr_contains_var(expr, param_name) || expr_contains_var(body, param_name)
@@ -119,7 +131,7 @@ fn stmt_contains_non_primitive_usage(stmt: &Stmt, param_name: &str) -> bool {
             if expr_contains_var(expr, param_name) { return true; }
             for (_, bindings, body) in arms {
                 if bindings.contains(&param_name.to_string()) { return true; }
-                if body.iter().any(|s| stmt_contains_non_primitive_usage(s, param_name)) { return true; }
+                if body.iter().any(|s| stmt_contains_non_primitive_usage(s, param_name, prim_params)) { return true; }
             }
             false
         }
@@ -157,6 +169,10 @@ pub struct Codegen {
     /// Every lifted-closure C function name ever emitted (never cleared): used to
     /// keep names globally unique across functions and duplicated loop bodies.
     emitted_closure_names: std::collections::HashSet<String>,
+    /// Function name -> per-parameter "declared Int/Float/Bool" flags. Lets the
+    /// GC-root analysis treat passing an Int var to an Int-declared parameter as
+    /// primitive usage (no rooting), so numeric hot paths pay zero GC overhead.
+    prim_param_flags: HashMap<String, Vec<bool>>,
     /// Set by the Set handler to pass the variable name to Closure codegen
     pending_closure_name: Option<String>,
     /// Maps closure C function name -> list of captured variable names from outer scope
@@ -186,6 +202,7 @@ impl Codegen {
             list_element_types: HashMap::new(),
             closure_c_names: HashMap::new(),
             emitted_closure_names: std::collections::HashSet::new(),
+            prim_param_flags: HashMap::new(),
             pending_closure_name: None,
             closure_captures: HashMap::new(),
             builtin_c_funcs: std::collections::HashSet::new(),
@@ -568,6 +585,16 @@ impl Codegen {
             } else if !self.func_return_types.contains_key(&ext.name) {
                 self.func_return_types.insert(ext.name.clone(), Type::Int);
             }
+        }
+
+        // Per-parameter "declared primitive" flags for every user function, used
+        // by the GC-root analysis: passing an Int var to an Int-declared
+        // parameter is primitive usage and needs no root.
+        for func in &program.functions {
+            let flags: Vec<bool> = func.params.iter().map(|p| {
+                matches!(p.2, Some(TypeAnnotation::Int) | Some(TypeAnnotation::Float) | Some(TypeAnnotation::Bool))
+            }).collect();
+            self.prim_param_flags.insert(func.name.clone(), flags);
         }
 
         // Fixed-point iteration for resolution of dependencies/mutual calls
@@ -3592,7 +3619,7 @@ int main(int argc, char** argv) {{
                 let t = var_types.get(var_name);
                 let should_root = t.map(|ty| {
                     if !needs_gc_root(ty) {
-                        func.body.iter().any(|s| stmt_contains_non_primitive_usage(s, var_name))
+                        func.body.iter().any(|s| stmt_contains_non_primitive_usage(s, var_name, &self.prim_param_flags))
                     } else {
                         true
                     }
@@ -3608,7 +3635,7 @@ int main(int argc, char** argv) {{
             let t = var_types.get(&param.0);
             let should_root = t.map(|ty| {
                 if !needs_gc_root(ty) {
-                    func.body.iter().any(|s| stmt_contains_non_primitive_usage(s, &param.0))
+                    func.body.iter().any(|s| stmt_contains_non_primitive_usage(s, &param.0, &self.prim_param_flags))
                 } else {
                     true
                 }
@@ -3884,7 +3911,7 @@ int main(int argc, char** argv) {{
                 let t = var_types.get(var_name);
                 let should_root = t.map(|ty| {
                     if !needs_gc_root(ty) {
-                        md.body.iter().any(|s| stmt_contains_non_primitive_usage(s, var_name))
+                        md.body.iter().any(|s| stmt_contains_non_primitive_usage(s, var_name, &self.prim_param_flags))
                     } else {
                         true
                     }
@@ -3900,7 +3927,7 @@ int main(int argc, char** argv) {{
             let t = var_types.get("self");
             let should_root = t.map(|ty| {
                 if !needs_gc_root(ty) {
-                    md.body.iter().any(|s| stmt_contains_non_primitive_usage(s, "self"))
+                    md.body.iter().any(|s| stmt_contains_non_primitive_usage(s, "self", &self.prim_param_flags))
                 } else {
                     true
                 }
@@ -3915,7 +3942,7 @@ int main(int argc, char** argv) {{
             let t = var_types.get(&param.0);
             let should_root = t.map(|ty| {
                 if !needs_gc_root(ty) {
-                    md.body.iter().any(|s| stmt_contains_non_primitive_usage(s, &param.0))
+                    md.body.iter().any(|s| stmt_contains_non_primitive_usage(s, &param.0, &self.prim_param_flags))
                 } else {
                     true
                 }
