@@ -154,6 +154,9 @@ pub struct Codegen {
     list_element_types: HashMap<String, Type>,
     /// Maps closure variable name -> generated C function name
     closure_c_names: HashMap<String, String>,
+    /// Every lifted-closure C function name ever emitted (never cleared): used to
+    /// keep names globally unique across functions and duplicated loop bodies.
+    emitted_closure_names: std::collections::HashSet<String>,
     /// Set by the Set handler to pass the variable name to Closure codegen
     pending_closure_name: Option<String>,
     /// Maps closure C function name -> list of captured variable names from outer scope
@@ -182,6 +185,7 @@ impl Codegen {
             variant_to_enum: HashMap::new(),
             list_element_types: HashMap::new(),
             closure_c_names: HashMap::new(),
+            emitted_closure_names: std::collections::HashSet::new(),
             pending_closure_name: None,
             closure_captures: HashMap::new(),
             builtin_c_funcs: std::collections::HashSet::new(),
@@ -2284,16 +2288,32 @@ impl Codegen {
                 // Generate a static closure function
                 // Use pre-registered name if this closure is being assigned to a named variable
                 let closure_name = if let Some(var_name) = self.pending_closure_name.take() {
-                    self.closure_c_names.get(&var_name)
+                    let base = self.closure_c_names.get(&var_name)
                         .cloned()
-                        .unwrap_or_else(|| {
-                            let name = format!("_ep_closure_{}", self.spawn_index);
+                        .unwrap_or_else(|| format!("_ep_closure_{}", Self::sanitize_c_name(&var_name)));
+                    // Every emission gets a globally unique C name: the same variable
+                    // name in two functions (or the same closure duplicated by loop
+                    // unrolling) must not produce colliding function definitions.
+                    let unique = if self.emitted_closure_names.contains(&base) {
+                        loop {
+                            let candidate = format!("{}_{}", base, self.spawn_index);
                             self.spawn_index += 1;
-                            name
-                        })
+                            if !self.emitted_closure_names.contains(&candidate) {
+                                break candidate;
+                            }
+                        }
+                    } else {
+                        base
+                    };
+                    self.emitted_closure_names.insert(unique.clone());
+                    // Later call sites resolve through this map, so point the
+                    // variable at the name we actually emitted.
+                    self.closure_c_names.insert(var_name, unique.clone());
+                    unique
                 } else {
                     let name = format!("_ep_closure_{}", self.spawn_index);
                     self.spawn_index += 1;
+                    self.emitted_closure_names.insert(name.clone());
                     name
                 };
 

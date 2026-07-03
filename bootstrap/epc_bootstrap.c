@@ -5000,8 +5000,9 @@ long long check_stmts(long long, long long);
 long long check_function(long long, long long);
 long long en_arg_type(long long, long long, long long);
 long long en_field_type_at(long long, long long, long long, long long);
-long long en_check_expr(long long, long long, long long, long long, long long);
-long long en_check_stmts(long long, long long, long long, long long, long long);
+long long en_type_conflict(long long, long long, long long, long long);
+long long en_check_expr(long long, long long, long long, long long, long long, long long, long long);
+long long en_check_stmts(long long, long long, long long, long long, long long, long long, long long, long long);
 long long check_program(long long);
 long long opt_fold_expr(long long);
 long long opt_fold_stmts(long long);
@@ -7999,13 +8000,17 @@ long long parse_param_list(long long state) {
     long long is_borrow = 0;
     long long tok_param = 0;
     long long param_name = 0;
+    long long ptype = 0;
     long long next_as = 0;
+    long long tok_ptype = 0;
     long long param_node = 0;
     long long ok = 0;
     long long loop = 0;
     long long tok_and = 0;
     long long next_tok3 = 0;
     long long is_borrow3 = 0;
+    long long ptype3 = 0;
+    long long tok_ptype3 = 0;
     long long ret_val = 0;
 
     ep_gc_maybe_collect();
@@ -8022,14 +8027,17 @@ long long parse_param_list(long long state) {
     }
     tok_param = advance_token(state);
     param_name = get_token_value(tok_param);
+    ptype = (long long)"";
     next_as = peek_token(state);
     if (get_token_type(next_as) == 42LL) {
     dummy = advance_token(state);
-    dummy = advance_token(state);
+    tok_ptype = advance_token(state);
+    ptype = get_token_value(tok_ptype);
     }
     param_node = (create_list() + 0LL);
     ok = append_list(param_node, param_name);
     ok = append_list(param_node, is_borrow);
+    ok = append_list(param_node, ptype);
     ok = append_list(params, param_node);
     loop = 1LL;
     while (loop == 1LL) {
@@ -8044,14 +8052,17 @@ long long parse_param_list(long long state) {
     }
     tok_param = advance_token(state);
     param_name = get_token_value(tok_param);
+    ptype3 = (long long)"";
     next_as = peek_token(state);
     if (get_token_type(next_as) == 42LL) {
     dummy = advance_token(state);
-    dummy = advance_token(state);
+    tok_ptype3 = advance_token(state);
+    ptype3 = get_token_value(tok_ptype3);
     }
     param_node = (create_list() + 0LL);
     ok = append_list(param_node, param_name);
     ok = append_list(param_node, is_borrow3);
+    ok = append_list(param_node, ptype3);
     ok = append_list(params, param_node);
     } else {
     loop = 0LL;
@@ -9827,7 +9838,69 @@ L_cleanup:
     return ret_val;
 }
 
-long long en_check_expr(long long expr, long long errs, long long vk, long long vo, long long vf) {
+long long en_type_conflict(long long dt, long long arg, long long vk, long long vo) {
+    long long dts = 0;
+    long long at = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&dts);
+    ep_gc_push_root(&at);
+    ep_gc_maybe_collect();
+
+    dts = string_concat(dt, (long long)"");
+    if (string_length((char*)dts) == 0LL) {
+    ret_val = 0LL;
+    goto L_cleanup;
+    }
+    at = string_concat(en_arg_type(arg, vk, vo), (long long)"");
+    if (string_length((char*)at) == 0LL) {
+    ret_val = 0LL;
+    goto L_cleanup;
+    }
+    if ((strcmp((char*)dts, (char*)(long long)"Str") == 0)) {
+    if ((strcmp((char*)at, (char*)(long long)"Int") == 0)) {
+    if (get_list(arg, 0LL) == 1LL) {
+    if (get_list(arg, 1LL) == 0LL) {
+    ret_val = 0LL;
+    goto L_cleanup;
+    }
+    }
+    ret_val = 1LL;
+    goto L_cleanup;
+    }
+    if ((strcmp((char*)at, (char*)(long long)"Float") == 0)) {
+    ret_val = 1LL;
+    goto L_cleanup;
+    }
+    if ((strcmp((char*)at, (char*)(long long)"Bool") == 0)) {
+    ret_val = 1LL;
+    goto L_cleanup;
+    }
+    ret_val = 0LL;
+    goto L_cleanup;
+    }
+    if ((strcmp((char*)at, (char*)(long long)"Str") == 0)) {
+    if ((strcmp((char*)dts, (char*)(long long)"Int") == 0)) {
+    ret_val = 1LL;
+    goto L_cleanup;
+    }
+    if ((strcmp((char*)dts, (char*)(long long)"Float") == 0)) {
+    ret_val = 1LL;
+    goto L_cleanup;
+    }
+    if ((strcmp((char*)dts, (char*)(long long)"Bool") == 0)) {
+    ret_val = 1LL;
+    goto L_cleanup;
+    }
+    }
+    ret_val = 0LL;
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(2);
+    return ret_val;
+}
+
+long long en_check_expr(long long expr, long long errs, long long vk, long long vo, long long vf, long long fk, long long fp) {
     long long t = 0;
     long long variant = 0;
     long long args = 0;
@@ -9839,9 +9912,21 @@ long long en_check_expr(long long expr, long long errs, long long vk, long long 
     long long msg = 0;
     long long ok = 0;
     long long oka = 0;
+    long long bl = 0;
+    long long bop = 0;
+    long long br = 0;
+    long long blt = 0;
+    long long brt = 0;
+    long long castok = 0;
+    long long castok2 = 0;
     long long okl = 0;
     long long okr = 0;
+    long long cname = 0;
     long long cargs = 0;
+    long long fi = 0;
+    long long pi = 0;
+    long long dt = 0;
+    long long amsg = 0;
     long long ci = 0;
     long long okc = 0;
     long long ret_val = 0;
@@ -9849,6 +9934,11 @@ long long en_check_expr(long long expr, long long errs, long long vk, long long 
     ep_gc_push_root(&ft);
     ep_gc_push_root(&at);
     ep_gc_push_root(&msg);
+    ep_gc_push_root(&blt);
+    ep_gc_push_root(&brt);
+    ep_gc_push_root(&cname);
+    ep_gc_push_root(&dt);
+    ep_gc_push_root(&amsg);
     ep_gc_maybe_collect();
 
     if (expr == 0LL) {
@@ -9876,49 +9966,112 @@ long long en_check_expr(long long expr, long long errs, long long vk, long long 
     }
     }
     }
-    oka = en_check_expr(arg, errs, vk, vo, vf);
+    oka = en_check_expr(arg, errs, vk, vo, vf, fk, fp);
     ai = (ai + 1LL);
     }
     ret_val = 0LL;
     goto L_cleanup;
     }
-    if (((t == 4LL || t == 5LL) || t == 14LL)) {
-    okl = en_check_expr(get_list(expr, 1LL), errs, vk, vo, vf);
-    okr = en_check_expr(get_list(expr, 3LL), errs, vk, vo, vf);
+    if (t == 4LL) {
+    bl = get_list(expr, 1LL);
+    bop = get_list(expr, 2LL);
+    br = get_list(expr, 3LL);
+    blt = string_concat(en_arg_type(bl, vk, vo), (long long)"");
+    brt = string_concat(en_arg_type(br, vk, vo), (long long)"");
+    if ((strcmp((char*)blt, (char*)(long long)"Str") == 0)) {
+    castok = 0LL;
+    if (bop == 1LL) {
+    if (get_list(br, 0LL) == 1LL) {
+    if (get_list(br, 1LL) == 0LL) {
+    castok = 1LL;
+    }
+    }
+    }
+    if (castok == 0LL) {
+    ok = append_list(errs, (long long)"arithmetic on a string: a Str operand is only allowed in the '+ 0' int-cast idiom");
+    }
+    }
+    if ((strcmp((char*)brt, (char*)(long long)"Str") == 0)) {
+    castok2 = 0LL;
+    if (bop == 1LL) {
+    if (get_list(bl, 0LL) == 1LL) {
+    if (get_list(bl, 1LL) == 0LL) {
+    castok2 = 1LL;
+    }
+    }
+    }
+    if (castok2 == 0LL) {
+    ok = append_list(errs, (long long)"arithmetic on a string: a Str operand is only allowed in the '+ 0' int-cast idiom");
+    }
+    }
+    okl = en_check_expr(bl, errs, vk, vo, vf, fk, fp);
+    okr = en_check_expr(br, errs, vk, vo, vf, fk, fp);
+    ret_val = 0LL;
+    goto L_cleanup;
+    }
+    if ((t == 5LL || t == 14LL)) {
+    okl = en_check_expr(get_list(expr, 1LL), errs, vk, vo, vf, fk, fp);
+    okr = en_check_expr(get_list(expr, 3LL), errs, vk, vo, vf, fk, fp);
     ret_val = 0LL;
     goto L_cleanup;
     }
     if (t == 6LL) {
+    cname = string_concat(get_list(expr, 1LL), (long long)"");
     cargs = get_list(expr, 2LL);
+    fi = 0LL;
+    while (fi < length_list(fk)) {
+    if ((strcmp((char*)cname, (char*)get_list(fk, fi)) == 0)) {
+    pi = 0LL;
+    while (pi < length_list(cargs)) {
+    if (pi < length_list(get_list(fp, fi))) {
+    dt = string_concat(get_list(get_list(fp, fi), pi), (long long)"");
+    if (en_type_conflict(dt, get_list(cargs, pi), vk, vo) == 1LL) {
+    amsg = string_concat((long long)"argument type mismatch in call to '", cname);
+    amsg = string_concat(amsg, (long long)"': expected ");
+    amsg = string_concat(amsg, dt);
+    amsg = string_concat(amsg, (long long)" but got ");
+    amsg = string_concat(amsg, en_arg_type(get_list(cargs, pi), vk, vo));
+    ok = append_list(errs, amsg);
+    }
+    }
+    pi = (pi + 1LL);
+    }
+    fi = length_list(fk);
+    } else {
+    fi = (fi + 1LL);
+    }
+    }
     ci = 0LL;
     while (ci < length_list(cargs)) {
-    okc = en_check_expr(get_list(cargs, ci), errs, vk, vo, vf);
+    okc = en_check_expr(get_list(cargs, ci), errs, vk, vo, vf, fk, fp);
     ci = (ci + 1LL);
     }
     ret_val = 0LL;
     goto L_cleanup;
     }
     if (((((t == 18LL || t == 20LL) || t == 21LL) || t == 32LL) || t == 33LL)) {
-    ret_val = en_check_expr(get_list(expr, 1LL), errs, vk, vo, vf);
+    ret_val = en_check_expr(get_list(expr, 1LL), errs, vk, vo, vf, fk, fp);
     goto L_cleanup;
     }
     ret_val = 0LL;
     goto L_cleanup;
 L_cleanup:
-    ep_gc_pop_roots(3);
+    ep_gc_pop_roots(8);
     return ret_val;
 }
 
-long long en_check_stmts(long long stmts, long long errs, long long vk, long long vo, long long vf) {
+long long en_check_stmts(long long stmts, long long errs, long long vk, long long vo, long long vf, long long fk, long long fp, long long drt) {
     long long i = 0;
     long long stmt = 0;
     long long t = 0;
     long long ok = 0;
+    long long rmsg = 0;
     long long eb = 0;
     long long arms = 0;
     long long ari = 0;
     long long ret_val = 0;
 
+    ep_gc_push_root(&rmsg);
     ep_gc_maybe_collect();
 
     i = 0LL;
@@ -9926,32 +10079,40 @@ long long en_check_stmts(long long stmts, long long errs, long long vk, long lon
     stmt = get_list(stmts, i);
     t = get_list(stmt, 0LL);
     if (t == 7LL) {
-    ok = en_check_expr(get_list(stmt, 2LL), errs, vk, vo, vf);
+    ok = en_check_expr(get_list(stmt, 2LL), errs, vk, vo, vf, fk, fp);
+    }
+    if (t == 8LL) {
+    if (en_type_conflict(drt, get_list(stmt, 1LL), vk, vo) == 1LL) {
+    rmsg = string_concat((long long)"return type mismatch: function is declared to return ", drt);
+    rmsg = string_concat(rmsg, (long long)" but returns ");
+    rmsg = string_concat(rmsg, en_arg_type(get_list(stmt, 1LL), vk, vo));
+    ok = append_list(errs, rmsg);
+    }
     }
     if (((t == 8LL || t == 9LL) || t == 36LL)) {
-    ok = en_check_expr(get_list(stmt, 1LL), errs, vk, vo, vf);
+    ok = en_check_expr(get_list(stmt, 1LL), errs, vk, vo, vf, fk, fp);
     }
     if (t == 10LL) {
-    ok = en_check_expr(get_list(stmt, 1LL), errs, vk, vo, vf);
-    ok = en_check_stmts(get_list(stmt, 2LL), errs, vk, vo, vf);
+    ok = en_check_expr(get_list(stmt, 1LL), errs, vk, vo, vf, fk, fp);
+    ok = en_check_stmts(get_list(stmt, 2LL), errs, vk, vo, vf, fk, fp, drt);
     eb = get_list(stmt, 3LL);
     if (eb != 0LL) {
-    ok = en_check_stmts(eb, errs, vk, vo, vf);
+    ok = en_check_stmts(eb, errs, vk, vo, vf, fk, fp, drt);
     }
     }
     if (t == 11LL) {
-    ok = en_check_expr(get_list(stmt, 1LL), errs, vk, vo, vf);
-    ok = en_check_stmts(get_list(stmt, 2LL), errs, vk, vo, vf);
+    ok = en_check_expr(get_list(stmt, 1LL), errs, vk, vo, vf, fk, fp);
+    ok = en_check_stmts(get_list(stmt, 2LL), errs, vk, vo, vf, fk, fp, drt);
     }
     if (t == 28LL) {
-    ok = en_check_expr(get_list(stmt, 2LL), errs, vk, vo, vf);
-    ok = en_check_stmts(get_list(stmt, 3LL), errs, vk, vo, vf);
+    ok = en_check_expr(get_list(stmt, 2LL), errs, vk, vo, vf, fk, fp);
+    ok = en_check_stmts(get_list(stmt, 3LL), errs, vk, vo, vf, fk, fp, drt);
     }
     if (t == 27LL) {
     arms = get_list(stmt, 2LL);
     ari = 0LL;
     while (ari < length_list(arms)) {
-    ok = en_check_stmts(get_list(get_list(arms, ari), 2LL), errs, vk, vo, vf);
+    ok = en_check_stmts(get_list(get_list(arms, ari), 2LL), errs, vk, vo, vf, fk, fp, drt);
     ari = (ari + 1LL);
     }
     }
@@ -9960,6 +10121,7 @@ long long en_check_stmts(long long stmts, long long errs, long long vk, long lon
     ret_val = 0LL;
     goto L_cleanup;
 L_cleanup:
+    ep_gc_pop_roots(1);
     return ret_val;
 }
 
@@ -9979,8 +10141,18 @@ long long check_program(long long program) {
     long long fields = 0;
     long long fi = 0;
     long long ok = 0;
+    long long en_fk = 0;
+    long long en_fp = 0;
     long long en_funcs = 0;
+    long long bfi = 0;
+    long long bfn = 0;
+    long long pts = 0;
+    long long bpl = 0;
+    long long bpi = 0;
+    long long ptname = 0;
     long long efi = 0;
+    long long efn = 0;
+    long long edrt = 0;
     long long en_methods = 0;
     long long emi = 0;
     long long funcs = 0;
@@ -10000,6 +10172,10 @@ long long check_program(long long program) {
     ep_gc_push_root(&en_vo);
     ep_gc_push_root(&en_vf);
     ep_gc_push_root(&fts);
+    ep_gc_push_root(&en_fk);
+    ep_gc_push_root(&en_fp);
+    ep_gc_push_root(&pts);
+    ep_gc_push_root(&edrt);
     ep_gc_maybe_collect();
 
     errs = create_list();
@@ -10031,17 +10207,42 @@ long long check_program(long long program) {
     ei = (ei + 1LL);
     }
     }
+    en_fk = create_list();
+    en_fp = create_list();
     en_funcs = get_list(program, 3LL);
+    bfi = 0LL;
+    while (bfi < length_list(en_funcs)) {
+    bfn = get_list(en_funcs, bfi);
+    pts = create_list();
+    bpl = get_list(bfn, 2LL);
+    bpi = 0LL;
+    while (bpi < length_list(bpl)) {
+    ptname = (long long)"";
+    if (length_list(get_list(bpl, bpi)) > 2LL) {
+    ptname = get_list(get_list(bpl, bpi), 2LL);
+    }
+    ok = append_list(pts, ptname);
+    bpi = (bpi + 1LL);
+    }
+    ok = append_list(en_fk, get_list(bfn, 1LL));
+    ok = append_list(en_fp, pts);
+    bfi = (bfi + 1LL);
+    }
     efi = 0LL;
     while (efi < length_list(en_funcs)) {
-    ok = en_check_stmts(get_list(get_list(en_funcs, efi), 3LL), errs, en_vk, en_vo, en_vf);
+    efn = get_list(en_funcs, efi);
+    edrt = (long long)"";
+    if (length_list(efn) > 5LL) {
+    edrt = string_concat(get_list(efn, 5LL), (long long)"");
+    }
+    ok = en_check_stmts(get_list(efn, 3LL), errs, en_vk, en_vo, en_vf, en_fk, en_fp, edrt);
     efi = (efi + 1LL);
     }
     if (length_list(program) > 6LL) {
     en_methods = get_list(program, 6LL);
     emi = 0LL;
     while (emi < length_list(en_methods)) {
-    ok = en_check_stmts(get_list(get_list(en_methods, emi), 4LL), errs, en_vk, en_vo, en_vf);
+    ok = en_check_stmts(get_list(get_list(en_methods, emi), 4LL), errs, en_vk, en_vo, en_vf, en_fk, en_fp, (long long)"");
     emi = (emi + 1LL);
     }
     }
@@ -10075,7 +10276,7 @@ long long check_program(long long program) {
     ret_val = 0LL;
     goto L_cleanup;
 L_cleanup:
-    ep_gc_pop_roots(5);
+    ep_gc_pop_roots(9);
     return ret_val;
 }
 
@@ -13592,9 +13793,9 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     if (type == 32LL) {
     inner = get_list(expr, 1LL);
     inner_str = gen_expr(state, inner, var_keys, var_values);
-    res = (long long)"(!";
+    res = (long long)"(!(";
     res = string_concat(res, inner_str);
-    res = string_concat(res, (long long)")");
+    res = string_concat(res, (long long)"))");
     ret_val = res;
     goto L_cleanup;
     }

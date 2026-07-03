@@ -463,14 +463,18 @@ define parse_param_list with state:
             set is_borrow to 1
         set tok_param to advance_token(state)
         set param_name to get_token_value(tok_param)
-        # Optional type annotation: as Type
+        # Optional type annotation: as Type — captured (index 2 on the param
+        # node) so the semantic checker can verify call-site argument types.
+        set ptype to ""
         set next_as to peek_token(state)
         if get_token_type(next_as) == 42: # as
             set dummy to advance_token(state)
-            set dummy to advance_token(state) # consume type name
+            set tok_ptype to advance_token(state) # the type name
+            set ptype to get_token_value(tok_ptype)
         set param_node to create_list() + 0
         set ok to append_list(param_node and param_name)
         set ok to append_list(param_node and is_borrow)
+        set ok to append_list(param_node and ptype)
         set ok to append_list(params and param_node)
         set loop to 1
         repeat while loop == 1:
@@ -484,14 +488,17 @@ define parse_param_list with state:
                     set is_borrow3 to 1
                 set tok_param to advance_token(state)
                 set param_name to get_token_value(tok_param)
-                # Optional type annotation
+                # Optional type annotation — captured like the first parameter's.
+                set ptype3 to ""
                 set next_as to peek_token(state)
                 if get_token_type(next_as) == 42: # as
                     set dummy to advance_token(state)
-                    set dummy to advance_token(state)
+                    set tok_ptype3 to advance_token(state)
+                    set ptype3 to get_token_value(tok_ptype3)
                 set param_node to create_list() + 0
                 set ok to append_list(param_node and param_name)
                 set ok to append_list(param_node and is_borrow3)
+                set ok to append_list(param_node and ptype3)
                 set ok to append_list(params and param_node)
             else:
                 set loop to 0

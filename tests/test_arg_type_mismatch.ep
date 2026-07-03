@@ -1,0 +1,9 @@
+# expected_compile_error
+# Passing a Str literal where an Int parameter is declared must be rejected by
+# both compilers.
+define double_it with n as Int returning Int:
+    return n * 2
+
+define main:
+    display double_it("five")
+    return 0

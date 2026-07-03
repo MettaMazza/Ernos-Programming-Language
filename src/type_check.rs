@@ -1298,7 +1298,31 @@ impl TypeChecker {
                 let ret_type = self.check_expr(expr);
                 // Enforce the declared return type when the function annotates one.
                 if let Some(declared) = self.current_return_type.clone() {
-                    if unify(&mut self.subst, &ret_type, &declared, stmt.span).is_err() {
+                    // A literal of a plainly wrong primitive type is never
+                    // runtime-safe (a Str literal returned as Int prints a pointer):
+                    // reject it outright. Everything subtler stays a warning below
+                    // (the `return 0` null idiom, unresolved inference vars, etc.).
+                    let literal_conflict = match (&expr.node, &declared) {
+                        (ExprNode::StringLiteral(_), MonoType::Int)
+                        | (ExprNode::StringLiteral(_), MonoType::Float)
+                        | (ExprNode::StringLiteral(_), MonoType::Bool)
+                        | (ExprNode::FloatLiteral(_), MonoType::Str)
+                        | (ExprNode::BoolLiteral(_), MonoType::Str) => true,
+                        (ExprNode::Integer(n), MonoType::Str) => *n != 0, // 0 = null idiom
+                        _ => false,
+                    };
+                    if literal_conflict {
+                        let found = self.subst.apply(&ret_type);
+                        let expected = self.subst.apply(&declared);
+                        self.error_with_hint(
+                            format!(
+                                "Return type mismatch: function is declared to return {} but this returns {}",
+                                expected.display_name(), found.display_name()
+                            ),
+                            stmt.span,
+                            format!("Return a {} value, or change the function's declared return type.", expected.display_name()),
+                        );
+                    } else if unify(&mut self.subst, &ret_type, &declared, stmt.span).is_err() {
                         let found = self.subst.apply(&ret_type);
                         let expected = self.subst.apply(&declared);
                         // Downgraded from a hard error to a warning: the codegen
@@ -1571,17 +1595,22 @@ impl TypeChecker {
                     }
                     MonoType::Float
                 } else {
-                    // For addition (+), allow Str/DynStr — this is the "pointer + 0" cast
-                    // pattern used by the self-hosted compiler to coerce string pointers to int.
-                    // For *, /, -, %: reject Str (e.g. "hello" * 2 is always a bug).
+                    // A Str operand is allowed in addition ONLY as the "pointer + 0"
+                    // cast idiom the self-hosted compiler uses to coerce a string
+                    // pointer to int. Any other Str arithmetic (`"abc" + 5`,
+                    // `"hello" * 2`) is C pointer arithmetic on a literal — always
+                    // a bug — and is rejected.
                     let is_add = matches!(op, Op::Add);
-                    
-                    let str_ok = |ty: &MonoType| -> bool {
+                    let other_is_zero = |e: &Expr| matches!(e.node, ExprNode::Integer(0));
+                    let cast_idiom_l = is_add && other_is_zero(right);
+                    let cast_idiom_r = is_add && other_is_zero(left);
+
+                    let str_ok = |ty: &MonoType, cast_idiom: bool| -> bool {
                         matches!(ty, MonoType::Int | MonoType::Bool | MonoType::Any | MonoType::DynStr | MonoType::List(_))
-                        || (is_add && matches!(ty, MonoType::Str))
+                        || (cast_idiom && matches!(ty, MonoType::Str))
                     };
                     
-                    if !str_ok(&lt_r) {
+                    if !str_ok(&lt_r, cast_idiom_l) {
                         if let Err(_) = unify(&mut self.subst, &lt, &MonoType::Int, expr.span) {
                             self.error(
                                 format!("Left operand of arithmetic must be numeric, found {}", self.subst.apply(&lt).display_name()),
@@ -1589,7 +1618,7 @@ impl TypeChecker {
                             );
                         }
                     }
-                    if !str_ok(&rt_r) {
+                    if !str_ok(&rt_r, cast_idiom_r) {
                         if let Err(_) = unify(&mut self.subst, &rt, &MonoType::Int, expr.span) {
                             self.error(
                                 format!("Right operand of arithmetic must be numeric, found {}", self.subst.apply(&rt).display_name()),

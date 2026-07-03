@@ -2100,9 +2100,11 @@ define gen_expr with state and expr and var_keys and var_values:
     if type == 32: # NODE_UNARY_NOT
         set inner to get_list(expr and 1)
         set inner_str to gen_expr(state and inner and var_keys and var_values)
-        set res to "(!"
+        # The operand must be parenthesized: comparisons emit as bare `a > b`,
+        # and C gives `!` higher precedence, so `!a > b` would negate only `a`.
+        set res to "(!("
         set res to string_concat(res and inner_str)
-        set res to string_concat(res and ")")
+        set res to string_concat(res and "))")
         return res
 
     if type == 33: # NODE_TRY

@@ -165,7 +165,38 @@ define en_field_type_at with variant and ai and vk and vf:
         set i to i + 1
     return ""
 
-define en_check_expr with expr and errs and vk and vo and vf:
+# 1 when an expression whose coarse type is statically known conflicts with the
+# declared primitive type name `dt` in a way that is never runtime-safe:
+# a Str where Int/Float/Bool is declared, or a non-zero literal where Str is
+# declared. The literal 0 is exempt everywhere (the null idiom).
+define en_type_conflict with dt and arg and vk and vo:
+    set dts to string_concat(dt and "")
+    if string_length(dts) == 0:
+        return 0
+    set at to string_concat(en_arg_type(arg and vk and vo) and "")
+    if string_length(at) == 0:
+        return 0
+    if dts equals "Str":
+        if at equals "Int":
+            if get_list(arg and 0) == 1:
+                if get_list(arg and 1) == 0:
+                    return 0
+            return 1
+        if at equals "Float":
+            return 1
+        if at equals "Bool":
+            return 1
+        return 0
+    if at equals "Str":
+        if dts equals "Int":
+            return 1
+        if dts equals "Float":
+            return 1
+        if dts equals "Bool":
+            return 1
+    return 0
+
+define en_check_expr with expr and errs and vk and vo and vf and fk and fp:
     if expr == 0:
         return 0
     set t to get_list(expr and 0)
@@ -186,50 +217,100 @@ define en_check_expr with expr and errs and vk and vo and vf:
                         set msg to string_concat(msg and " but got ")
                         set msg to string_concat(msg and at)
                         set ok to append_list(errs and msg)
-            set oka to en_check_expr(arg and errs and vk and vo and vf)
+            set oka to en_check_expr(arg and errs and vk and vo and vf and fk and fp)
             set ai to ai + 1
         return 0
-    if t == 4 || t == 5 || t == 14:
-        set okl to en_check_expr(get_list(expr and 1) and errs and vk and vo and vf)
-        set okr to en_check_expr(get_list(expr and 3) and errs and vk and vo and vf)
+    if t == 4: # BINARY arithmetic — a Str operand is only legal as the `+ 0` cast
+        set bl to get_list(expr and 1)
+        set bop to get_list(expr and 2)
+        set br to get_list(expr and 3)
+        set blt to string_concat(en_arg_type(bl and vk and vo) and "")
+        set brt to string_concat(en_arg_type(br and vk and vo) and "")
+        if blt equals "Str":
+            set castok to 0
+            if bop == 1: # OP_ADD
+                if get_list(br and 0) == 1:
+                    if get_list(br and 1) == 0:
+                        set castok to 1
+            if castok == 0:
+                set ok to append_list(errs and "arithmetic on a string: a Str operand is only allowed in the '+ 0' int-cast idiom")
+        if brt equals "Str":
+            set castok2 to 0
+            if bop == 1:
+                if get_list(bl and 0) == 1:
+                    if get_list(bl and 1) == 0:
+                        set castok2 to 1
+            if castok2 == 0:
+                set ok to append_list(errs and "arithmetic on a string: a Str operand is only allowed in the '+ 0' int-cast idiom")
+        set okl to en_check_expr(bl and errs and vk and vo and vf and fk and fp)
+        set okr to en_check_expr(br and errs and vk and vo and vf and fk and fp)
         return 0
-    if t == 6: # CALL
+    if t == 5 || t == 14:
+        set okl to en_check_expr(get_list(expr and 1) and errs and vk and vo and vf and fk and fp)
+        set okr to en_check_expr(get_list(expr and 3) and errs and vk and vo and vf and fk and fp)
+        return 0
+    if t == 6: # CALL — check each argument against the declared parameter type
+        set cname to string_concat(get_list(expr and 1) and "")
         set cargs to get_list(expr and 2)
+        set fi to 0
+        repeat while fi < length_list(fk):
+            if cname equals get_list(fk and fi):
+                set pi to 0
+                repeat while pi < length_list(cargs):
+                    if pi < length_list(get_list(fp and fi)):
+                        set dt to string_concat(get_list(get_list(fp and fi) and pi) and "")
+                        if en_type_conflict(dt and get_list(cargs and pi) and vk and vo) == 1:
+                            set amsg to string_concat("argument type mismatch in call to '" and cname)
+                            set amsg to string_concat(amsg and "': expected ")
+                            set amsg to string_concat(amsg and dt)
+                            set amsg to string_concat(amsg and " but got ")
+                            set amsg to string_concat(amsg and en_arg_type(get_list(cargs and pi) and vk and vo))
+                            set ok to append_list(errs and amsg)
+                    set pi to pi + 1
+                set fi to length_list(fk)
+            else:
+                set fi to fi + 1
         set ci to 0
         repeat while ci < length_list(cargs):
-            set okc to en_check_expr(get_list(cargs and ci) and errs and vk and vo and vf)
+            set okc to en_check_expr(get_list(cargs and ci) and errs and vk and vo and vf and fk and fp)
             set ci to ci + 1
         return 0
     if t == 18 || t == 20 || t == 21 || t == 32 || t == 33:
-        return en_check_expr(get_list(expr and 1) and errs and vk and vo and vf)
+        return en_check_expr(get_list(expr and 1) and errs and vk and vo and vf and fk and fp)
     return 0
 
-define en_check_stmts with stmts and errs and vk and vo and vf:
+define en_check_stmts with stmts and errs and vk and vo and vf and fk and fp and drt:
     set i to 0
     repeat while i < length_list(stmts):
         set stmt to get_list(stmts and i)
         set t to get_list(stmt and 0)
         if t == 7:
-            set ok to en_check_expr(get_list(stmt and 2) and errs and vk and vo and vf)
+            set ok to en_check_expr(get_list(stmt and 2) and errs and vk and vo and vf and fk and fp)
+        if t == 8: # RETURN — a literal of the wrong primitive type is a hard error
+            if en_type_conflict(drt and get_list(stmt and 1) and vk and vo) == 1:
+                set rmsg to string_concat("return type mismatch: function is declared to return " and drt)
+                set rmsg to string_concat(rmsg and " but returns ")
+                set rmsg to string_concat(rmsg and en_arg_type(get_list(stmt and 1) and vk and vo))
+                set ok to append_list(errs and rmsg)
         if t == 8 || t == 9 || t == 36:
-            set ok to en_check_expr(get_list(stmt and 1) and errs and vk and vo and vf)
+            set ok to en_check_expr(get_list(stmt and 1) and errs and vk and vo and vf and fk and fp)
         if t == 10:
-            set ok to en_check_expr(get_list(stmt and 1) and errs and vk and vo and vf)
-            set ok to en_check_stmts(get_list(stmt and 2) and errs and vk and vo and vf)
+            set ok to en_check_expr(get_list(stmt and 1) and errs and vk and vo and vf and fk and fp)
+            set ok to en_check_stmts(get_list(stmt and 2) and errs and vk and vo and vf and fk and fp and drt)
             set eb to get_list(stmt and 3)
             if eb != 0:
-                set ok to en_check_stmts(eb and errs and vk and vo and vf)
+                set ok to en_check_stmts(eb and errs and vk and vo and vf and fk and fp and drt)
         if t == 11:
-            set ok to en_check_expr(get_list(stmt and 1) and errs and vk and vo and vf)
-            set ok to en_check_stmts(get_list(stmt and 2) and errs and vk and vo and vf)
+            set ok to en_check_expr(get_list(stmt and 1) and errs and vk and vo and vf and fk and fp)
+            set ok to en_check_stmts(get_list(stmt and 2) and errs and vk and vo and vf and fk and fp and drt)
         if t == 28:
-            set ok to en_check_expr(get_list(stmt and 2) and errs and vk and vo and vf)
-            set ok to en_check_stmts(get_list(stmt and 3) and errs and vk and vo and vf)
+            set ok to en_check_expr(get_list(stmt and 2) and errs and vk and vo and vf and fk and fp)
+            set ok to en_check_stmts(get_list(stmt and 3) and errs and vk and vo and vf and fk and fp and drt)
         if t == 27:
             set arms to get_list(stmt and 2)
             set ari to 0
             repeat while ari < length_list(arms):
-                set ok to en_check_stmts(get_list(get_list(arms and ari) and 2) and errs and vk and vo and vf)
+                set ok to en_check_stmts(get_list(get_list(arms and ari) and 2) and errs and vk and vo and vf and fk and fp and drt)
                 set ari to ari + 1
         set i to i + 1
     return 0
@@ -264,16 +345,39 @@ define check_program with program:
                 set ok to append_list(en_vf and fts)
                 set evi to evi + 1
             set ei to ei + 1
+    # Function name -> declared parameter type names (parallel lists), read from
+    # the param nodes' captured annotations ([name, is_borrow, type_name]).
+    set en_fk to create_list()
+    set en_fp to create_list()
     set en_funcs to get_list(program and 3)
+    set bfi to 0
+    repeat while bfi < length_list(en_funcs):
+        set bfn to get_list(en_funcs and bfi)
+        set pts to create_list()
+        set bpl to get_list(bfn and 2)
+        set bpi to 0
+        repeat while bpi < length_list(bpl):
+            set ptname to ""
+            if length_list(get_list(bpl and bpi)) > 2:
+                set ptname to get_list(get_list(bpl and bpi) and 2)
+            set ok to append_list(pts and ptname)
+            set bpi to bpi + 1
+        set ok to append_list(en_fk and get_list(bfn and 1))
+        set ok to append_list(en_fp and pts)
+        set bfi to bfi + 1
     set efi to 0
     repeat while efi < length_list(en_funcs):
-        set ok to en_check_stmts(get_list(get_list(en_funcs and efi) and 3) and errs and en_vk and en_vo and en_vf)
+        set efn to get_list(en_funcs and efi)
+        set edrt to ""
+        if length_list(efn) > 5:
+            set edrt to string_concat(get_list(efn and 5) and "")
+        set ok to en_check_stmts(get_list(efn and 3) and errs and en_vk and en_vo and en_vf and en_fk and en_fp and edrt)
         set efi to efi + 1
     if length_list(program) > 6:
         set en_methods to get_list(program and 6)
         set emi to 0
         repeat while emi < length_list(en_methods):
-            set ok to en_check_stmts(get_list(get_list(en_methods and emi) and 4) and errs and en_vk and en_vo and en_vf)
+            set ok to en_check_stmts(get_list(get_list(en_methods and emi) and 4) and errs and en_vk and en_vo and en_vf and en_fk and en_fp and "")
             set emi to emi + 1
 
     set funcs to get_list(program and 3)

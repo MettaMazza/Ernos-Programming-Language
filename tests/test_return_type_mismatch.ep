@@ -1,5 +1,7 @@
-# A function declared to return Int must not return a Str.
-# Since return type mismatches are warnings, this will compile and run.
+# expected_compile_error
+# A function declared to return Int must not return a Str literal — this is
+# never runtime-safe and is rejected outright (subtler mismatches, like the
+# `return 0` null idiom, remain warnings).
 define bad_return returning Int:
     return "not an int"
 

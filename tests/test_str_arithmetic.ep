@@ -1,0 +1,7 @@
+# expected_compile_error
+# Arithmetic on a string literal is C pointer arithmetic in disguise — always a
+# bug. The only sanctioned form is the `+ 0` int-cast idiom.
+define main:
+    set s to "abc" + 5
+    display s
+    return 0

@@ -1150,11 +1150,19 @@ impl Parser {
                     params.push(next_param);
                 }
                 self.expect(Token::Colon)?;
-                if self.peek() == &Token::Newline {
-                    self.advance();
-                }
-                // parse_block handles the Indent/Dedent
-                let body = self.parse_block()?;
+                let body = if self.peek() == &Token::Return {
+                    // Single-line form: `given x: return x * 2` (documented in the
+                    // README quick reference and accepted by the self-hosted parser).
+                    self.advance(); // consume "return"
+                    let ret = self.parse_expr(Precedence::Lowest)?;
+                    vec![Stmt::new(StmtNode::Return(ret))]
+                } else {
+                    if self.peek() == &Token::Newline {
+                        self.advance();
+                    }
+                    // parse_block handles the Indent/Dedent
+                    self.parse_block()?
+                };
                 Expr::with_span(ExprNode::Closure(params, body), span)
             }
             Token::Borrow => {
