@@ -53,10 +53,20 @@ pub fn emit_js_from_ep(program: &Program) -> String {
         out.push('\n');
     }
 
-    // Method definitions → standalone functions or class methods
+    // Delegate methods (`define m on Type`) → prototype methods on the class.
     for md in &program.method_defs {
         emit_method_def(&mut out, md);
         out.push('\n');
+    }
+
+    // Trait implementations (`implement Trait for Type`) → prototype methods,
+    // so `value.method(...)` dispatches to the right impl at runtime.
+    for ti in &program.trait_impls {
+        for m in &ti.methods {
+            let params: Vec<String> = m.params.iter().map(|(n, _, _)| n.clone()).collect();
+            emit_proto_method(&mut out, &ti.for_type, &m.name, &params, &m.body, m.is_async);
+        }
+        if !ti.methods.is_empty() { out.push('\n'); }
     }
 
     // Functions
@@ -112,44 +122,57 @@ fn type_default_js(ta: &TypeAnnotation) -> &'static str {
 }
 
 fn emit_enum_def(out: &mut String, ed: &EnumDef) {
-    out.push_str(&format!("const {} = Object.freeze({{\n", ed.name));
+    // A choice/enum becomes a class. Each value carries its variant tag and an
+    // ordered list of payload fields, so pattern matching can bind positionally
+    // and so delegate methods (`define m on Enum`) can hang off the prototype.
+    out.push_str(&format!("class {} {{\n", ed.name));
+    out.push_str("    constructor(_variant, _fields) { this._variant = _variant; this._fields = _fields || []; }\n");
     for (vname, fields) in &ed.variants {
         if fields.is_empty() {
-            out.push_str(&format!("    {}: \"{}\",\n", vname, vname));
+            // Fieldless variant: a stable singleton so equality comparisons work.
+            out.push_str(&format!("    static {} = new {}(\"{}\", []);\n", vname, ed.name, vname));
         } else {
             let params: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
             out.push_str(&format!(
-                "    {}: ({}) => ({{ _variant: \"{}\", {} }}),\n",
-                vname,
-                params.join(", "),
-                vname,
-                params.iter().map(|p| format!("{p}")).collect::<Vec<_>>().join(", ")
+                "    static {}({}) {{ return new {}(\"{}\", [{}]); }}\n",
+                vname, params.join(", "), ed.name, vname, params.join(", ")
             ));
         }
     }
-    out.push_str("});\n");
+    out.push_str("}\n");
+    // Top-level aliases so `PlayerType(x)` and fieldless `Foo` work unqualified.
+    for (vname, _fields) in &ed.variants {
+        out.push_str(&format!("const {} = {}.{};\n", vname, ed.name, vname));
+    }
 }
 
 fn emit_method_def(out: &mut String, md: &MethodDef) {
-    let func_name = format!("{}_{}", md.struct_name.to_lowercase(), md.name);
-    let mut params = vec!["self".to_string()];
-    let param_names: HashSet<String> = md.params.iter().map(|(n, _, _)| n.clone()).collect();
-    for (name, _, _) in &md.params {
-        params.push(name.clone());
-    }
-    out.push_str(&format!("function {}({}) {{\n", func_name, params.join(", ")));
-    // Pre-declare all local variables
+    let params: Vec<String> = md.params.iter().map(|(n, _, _)| n.clone()).collect();
+    emit_proto_method(out, &md.struct_name, &md.name, &params, &md.body, false);
+}
+
+/// Emit a method as `ClassName.prototype.name = function(params) { ... }`, with
+/// `self` bound to the receiver. Works for both struct impls and enum delegates,
+/// since structs and enums alike are emitted as JS classes.
+fn emit_proto_method(out: &mut String, class_name: &str, name: &str,
+                     params: &[String], body: &[Stmt], is_async: bool) {
+    let kw = if is_async { "async function" } else { "function" };
+    out.push_str(&format!("{}.prototype.{} = {}({}) {{\n", class_name, name, kw, params.join(", ")));
+    indent(out, 1);
+    out.push_str("const self = this;\n");
+    // Pre-declare locals (excluding params and `self`).
+    let param_names: HashSet<String> = params.iter().cloned().collect();
     let mut local_vars = HashSet::new();
-    collect_set_names_js(&md.body, &mut local_vars);
+    collect_set_names_js(body, &mut local_vars);
     let locals: Vec<&String> = local_vars.iter().filter(|n| !param_names.contains(*n) && *n != "self").collect();
     if !locals.is_empty() {
         indent(out, 1);
         out.push_str(&format!("let {};\n", locals.iter().map(|n| n.as_str()).collect::<Vec<_>>().join(", ")));
     }
-    for stmt in &md.body {
+    for stmt in body {
         emit_stmt(out, &stmt.node, 1);
     }
-    out.push_str("}\n");
+    out.push_str("};\n");
 }
 
 fn emit_function(out: &mut String, func: &Function) {
@@ -283,23 +306,24 @@ fn emit_stmt(out: &mut String, stmt: &StmtNode, depth: usize) {
             indent(out, depth);
             out.push_str("switch (");
             emit_expr(out, &expr.node);
-            out.push_str(") {\n");
+            out.push_str("._variant) {\n");
             for (variant, bindings, body) in arms {
                 indent(out, depth + 1);
-                out.push_str(&format!("case \"{}\":\n", variant));
-                if !bindings.is_empty() {
-                    for (i, b) in bindings.iter().enumerate() {
-                        indent(out, depth + 2);
-                        out.push_str(&format!("const {} = ", b));
-                        emit_expr(out, &expr.node);
-                        out.push_str(&format!(".data[{}];\n", i));
-                    }
+                // Braced case so per-arm `const` bindings don't collide.
+                out.push_str(&format!("case \"{}\": {{\n", variant));
+                for (i, b) in bindings.iter().enumerate() {
+                    indent(out, depth + 2);
+                    out.push_str(&format!("const {} = ", b));
+                    emit_expr(out, &expr.node);
+                    out.push_str(&format!("._fields[{}];\n", i));
                 }
                 for s in body {
                     emit_stmt(out, &s.node, depth + 2);
                 }
                 indent(out, depth + 2);
                 out.push_str("break;\n");
+                indent(out, depth + 1);
+                out.push_str("}\n");
             }
             indent(out, depth);
             out.push_str("}\n");
@@ -468,6 +492,10 @@ fn emit_expr(out: &mut String, expr: &ExprNode) {
                         return;
                     }
                     "push"
+                }
+                "create_list" if args.is_empty() => {
+                    out.push_str("[]");
+                    return;
                 }
                 "get_list" => {
                     if args.len() >= 2 {

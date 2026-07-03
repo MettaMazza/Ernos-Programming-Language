@@ -973,6 +973,10 @@ impl TypeChecker {
         let v_cancel_fut = self.fresh_var();
         self.func_types.insert("cancel_task".into(), (vec![v_cancel_fut], MonoType::Unit));
         self.func_types.insert("sleep_ms".into(), (vec![MonoType::Int], MonoType::Future(Box::new(MonoType::Int))));
+        // async_wait_readable(fd) -> Future<Int>: suspends until the socket fd is
+        // readable, so I/O-bound async tasks (e.g. agents awaiting an LLM response)
+        // yield the single event-loop thread to each other instead of blocking.
+        self.func_types.insert("async_wait_readable".into(), (vec![MonoType::Int], MonoType::Future(Box::new(MonoType::Int))));
 
         // File system
         self.func_types.insert("read_file_content".into(), (vec![MonoType::Str], MonoType::DynStr));
