@@ -1705,15 +1705,26 @@ fn find_closest_match<'a>(target: &str, candidates: &[&'a str], max_distance: us
 }
 
 fn get_suggestion(message: &str) -> Option<String> {
-    // Keep specific suggestions for known patterns
-    if message.contains("character: ','") {
-        return Some("In Ernos, function arguments are separated by 'and', not commas.".to_string());
+    // Targeted, plain-English hints for the most common mistakes first.
+    if message.contains("character: ','") || message.contains("found Comma") {
+        return Some("In Ernos, arguments and list items are joined with 'and', not commas — e.g. add(1 and 2).".to_string());
     }
     if message.contains("Unexpected statement start: Identifier") {
         return Some("Functions called as statements must be assigned to variables, e.g. 'set ok to func(...)'.".to_string());
     }
+    if message.contains("Expected Colon") {
+        return Some("Lines that start a block — 'define', 'if', 'repeat while', 'for each' — must end with ':'.".to_string());
+    }
+    if message.contains("Indentation error") {
+        return Some("Every statement in the same block must be indented by the same amount (4 spaces per level is conventional).".to_string());
+    }
+    if message.contains("Unexpected statement start") {
+        return Some("Statements begin with a keyword like 'set', 'display', 'if', 'repeat while', 'for each', or 'return'.".to_string());
+    }
 
-    // Try Levenshtein matching against all ErnosPlain keywords
+    // Fuzzy keyword matching — but ONLY against words the user actually wrote
+    // (quoted in the message). Matching against the message's own prose
+    // produced nonsense like `found` -> "Did you mean 'for'?".
     let keywords: &[&str] = &[
         "set", "to", "define", "with", "return", "display",
         "if", "else", "repeat", "while", "for", "each", "in",
@@ -1725,15 +1736,16 @@ fn get_suggestion(message: &str) -> Option<String> {
         "import", "as", "returning", "of", "try", "from", "range",
     ];
 
-    // Extract potential misspelled words from the error message
-    // Look for words in the message that might be misspellings
-    let words: Vec<&str> = message.split(|c: char| !c.is_alphanumeric() && c != '_')
-        .filter(|w| !w.is_empty() && w.len() >= 2)
+    let quoted: Vec<&str> = message
+        .split('\'')
+        .skip(1)
+        .step_by(2)
+        .filter(|w| !w.is_empty() && w.len() >= 2 && w.chars().all(|c| c.is_alphanumeric() || c == '_'))
         .collect();
 
-    for word in &words {
+    for word in &quoted {
         let lower = word.to_lowercase();
-        let max_dist = if lower.len() <= 4 { 2 } else { 3 };
+        let max_dist = if lower.len() <= 4 { 1 } else { 2 };
         if let Some(closest) = find_closest_match(&lower, keywords, max_dist) {
             // Don't suggest if the word is already a keyword
             if lower != closest {
