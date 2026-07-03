@@ -123,9 +123,159 @@ define check_function with func and errs:
     set okb to check_stmts(get_list(func and 3) and errs)
     return 0
 
+# ---- Enum-variant field-type checking ----
+# The coarse "type name" of an argument expression, or "" if not statically
+# known. A variant construction has the type of its owning enum.
+define en_arg_type with arg and vk and vo:
+    if arg == 0:
+        return ""
+    set t to get_list(arg and 0)
+    if t == 26: # ENUM_CREATE -> owning enum name
+        set vn to string_concat(get_list(arg and 1) and "")
+        set i to 0
+        repeat while i < length_list(vk):
+            if vn equals get_list(vk and i):
+                return get_list(vo and i)
+            set i to i + 1
+        return ""
+    if t == 1:
+        return "Int"
+    if t == 2:
+        return "Str"
+    if t == 42:
+        return "Float"
+    if t == 31:
+        return "Bool"
+    return ""
+
+# The declared field type name at position `ai` for `variant`, or "" if the
+# variant is unknown or `ai` is out of range. Returns a freshly-built string and
+# binds NO list-typed local: the shared `vf` sub-lists are read strictly inline
+# (`get_list(vf and i)` is never stored), so the caller-side cleanup pass can
+# never free a list that is aliased into `vf`. (A stored alias here caused a
+# heap-use-after-free — the auto-cleanup freed the shared sub-list.)
+define en_field_type_at with variant and ai and vk and vf:
+    set vn to string_concat(variant and "")
+    set i to 0
+    repeat while i < length_list(vk):
+        if vn equals get_list(vk and i):
+            if ai < length_list(get_list(vf and i)):
+                return string_concat(get_list(get_list(vf and i) and ai) and "")
+            return ""
+        set i to i + 1
+    return ""
+
+define en_check_expr with expr and errs and vk and vo and vf:
+    if expr == 0:
+        return 0
+    set t to get_list(expr and 0)
+    if t == 26: # ENUM_CREATE
+        set variant to get_list(expr and 1)
+        set args to get_list(expr and 2)
+        set ai to 0
+        repeat while ai < length_list(args):
+            set arg to get_list(args and ai)
+            set ft to string_concat(en_field_type_at(variant and ai and vk and vf) and "")
+            if string_length(ft) > 0:
+                set at to string_concat(en_arg_type(arg and vk and vo) and "")
+                if string_length(at) > 0:
+                    if at equals ft:
+                        set noop to 0
+                    else:
+                        set msg to string_concat("enum variant field type mismatch: expected " and ft)
+                        set msg to string_concat(msg and " but got ")
+                        set msg to string_concat(msg and at)
+                        set ok to append_list(errs and msg)
+            set oka to en_check_expr(arg and errs and vk and vo and vf)
+            set ai to ai + 1
+        return 0
+    if t == 4 || t == 5 || t == 14:
+        set okl to en_check_expr(get_list(expr and 1) and errs and vk and vo and vf)
+        set okr to en_check_expr(get_list(expr and 3) and errs and vk and vo and vf)
+        return 0
+    if t == 6: # CALL
+        set cargs to get_list(expr and 2)
+        set ci to 0
+        repeat while ci < length_list(cargs):
+            set okc to en_check_expr(get_list(cargs and ci) and errs and vk and vo and vf)
+            set ci to ci + 1
+        return 0
+    if t == 18 || t == 20 || t == 21 || t == 32 || t == 33:
+        return en_check_expr(get_list(expr and 1) and errs and vk and vo and vf)
+    return 0
+
+define en_check_stmts with stmts and errs and vk and vo and vf:
+    set i to 0
+    repeat while i < length_list(stmts):
+        set stmt to get_list(stmts and i)
+        set t to get_list(stmt and 0)
+        if t == 7:
+            set ok to en_check_expr(get_list(stmt and 2) and errs and vk and vo and vf)
+        if t == 8 || t == 9 || t == 36:
+            set ok to en_check_expr(get_list(stmt and 1) and errs and vk and vo and vf)
+        if t == 10:
+            set ok to en_check_expr(get_list(stmt and 1) and errs and vk and vo and vf)
+            set ok to en_check_stmts(get_list(stmt and 2) and errs and vk and vo and vf)
+            set eb to get_list(stmt and 3)
+            if eb != 0:
+                set ok to en_check_stmts(eb and errs and vk and vo and vf)
+        if t == 11:
+            set ok to en_check_expr(get_list(stmt and 1) and errs and vk and vo and vf)
+            set ok to en_check_stmts(get_list(stmt and 2) and errs and vk and vo and vf)
+        if t == 28:
+            set ok to en_check_expr(get_list(stmt and 2) and errs and vk and vo and vf)
+            set ok to en_check_stmts(get_list(stmt and 3) and errs and vk and vo and vf)
+        if t == 27:
+            set arms to get_list(stmt and 2)
+            set ari to 0
+            repeat while ari < length_list(arms):
+                set ok to en_check_stmts(get_list(get_list(arms and ari) and 2) and errs and vk and vo and vf)
+                set ari to ari + 1
+        set i to i + 1
+    return 0
+
 # Entry point: returns 1 if OK, 0 (after printing) if the program is rejected.
 define check_program with program:
     set errs to create_list()
+
+    # Build variant -> (owner enum, field type names) from the enum definitions,
+    # then check every enum construction's argument types against them.
+    set en_vk to create_list()
+    set en_vo to create_list()
+    set en_vf to create_list()
+    if length_list(program) > 5:
+        set enums to get_list(program and 5)
+        set ei to 0
+        repeat while ei < length_list(enums):
+            set edef to get_list(enums and ei)
+            set ename to get_list(edef and 1)
+            set evs to get_list(edef and 2)
+            set evi to 0
+            repeat while evi < length_list(evs):
+                set ev to get_list(evs and evi)
+                set fts to create_list()
+                set fields to get_list(ev and 1)
+                set fi to 0
+                repeat while fi < length_list(fields):
+                    set ok to append_list(fts and get_list(get_list(fields and fi) and 1))
+                    set fi to fi + 1
+                set ok to append_list(en_vk and get_list(ev and 0))
+                set ok to append_list(en_vo and ename)
+                set ok to append_list(en_vf and fts)
+                set evi to evi + 1
+            set ei to ei + 1
+    set en_funcs to get_list(program and 3)
+    set efi to 0
+    repeat while efi < length_list(en_funcs):
+        set ok to en_check_stmts(get_list(get_list(en_funcs and efi) and 3) and errs and en_vk and en_vo and en_vf)
+        set efi to efi + 1
+    if length_list(program) > 6:
+        set en_methods to get_list(program and 6)
+        set emi to 0
+        repeat while emi < length_list(en_methods):
+            set ok to en_check_stmts(get_list(get_list(en_methods and emi) and 4) and errs and en_vk and en_vo and en_vf)
+            set emi to emi + 1
+
     set funcs to get_list(program and 3)
     set n to length_list(funcs)
     set idx to 0

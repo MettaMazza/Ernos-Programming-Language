@@ -1318,37 +1318,19 @@ define gen_statement with state and stmt and var_keys and var_values:
                 set ok to emit(state and al)
                 return 0
 
-        set is_global to is_global_var(name)
-        set borrowed_keys to get_codegen_borrowed_keys(state)
-        set borrowed_values to get_codegen_borrowed_values(state)
-        set is_borrowed to map_get(borrowed_keys and borrowed_values and name)
-        if t == 4 && is_global == 0 && is_borrowed == 0: # TYPE_LIST
-            set ok to emit(state and "    {\n")
-            
-            set line to "        long long tmp_val = "
-            set line to string_concat(line and expr_str)
-            set line to string_concat(line and ";\n")
-            set ok to emit(state and line)
-            
-            set line to "        free_list("
-            set line to string_concat(line and name)
-            set line to string_concat(line and ");\n")
-            set ok to emit(state and line)
-            
-            set line to "        "
-            set line to string_concat(line and name)
-            set line to string_concat(line and " = tmp_val;\n")
-            set ok to emit(state and line)
-            
-            set ok to emit(state and "    }\n")
-        else:
-            # Normal assignment
-            set line to "    "
-            set line to string_concat(line and name)
-            set line to string_concat(line and " = ")
-            set line to string_concat(line and expr_str)
-            set line to string_concat(line and ";\n")
-            set ok to emit(state and line)
+        # Reassigning a list local does NOT free the previous value. Auto-freeing
+        # the old list here was unsound in the same way cleanup-free was (see the
+        # note in gen_function): it freed lists that had escaped via a container —
+        # e.g. a per-iteration `fts` appended into an outer list — corrupting that
+        # shared value on the next iteration (a heap-use-after-free). The
+        # generational GC reclaims genuinely-unreachable lists after their roots
+        # go out of scope, which is correct without ownership tracking.
+        set line to "    "
+        set line to string_concat(line and name)
+        set line to string_concat(line and " = ")
+        set line to string_concat(line and expr_str)
+        set line to string_concat(line and ";\n")
+        set ok to emit(state and line)
         return 0
         
     if type == 8: # NODE_RETURN

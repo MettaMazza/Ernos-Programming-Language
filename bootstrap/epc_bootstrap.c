@@ -4998,6 +4998,10 @@ long long check_lit_category(long long);
 long long check_expr(long long, long long, long long);
 long long check_stmts(long long, long long);
 long long check_function(long long, long long);
+long long en_arg_type(long long, long long, long long);
+long long en_field_type_at(long long, long long, long long, long long);
+long long en_check_expr(long long, long long, long long, long long, long long);
+long long en_check_stmts(long long, long long, long long, long long, long long);
 long long check_program(long long);
 long long opt_fold_expr(long long);
 long long opt_fold_stmts(long long);
@@ -5345,11 +5349,7 @@ long long parse_all_modules(long long current_file, long long parsed_files, long
     ret_val = 1LL;
     goto L_cleanup;
     }
-    {
-        long long tmp_val = create_parser_state(tokens);
-        free_list(state);
-        state = tmp_val;
-    }
+    state = create_parser_state(tokens);
     program_ast = parse_program(state);
     if (get_parser_error(state) == 1LL) {
     printf("%s\n", (char*)(long long)"Compiler Error: Parsing failed in:");
@@ -5443,16 +5443,8 @@ long long parse_all_modules(long long current_file, long long parsed_files, long
     goto L_cleanup;
     }
     } else {
-    {
-        long long tmp_val = create_list();
-        free_list(mod_funcs);
-        mod_funcs = tmp_val;
-    }
-    {
-        long long tmp_val = create_list();
-        free_list(mod_externals);
-        mod_externals = tmp_val;
-    }
+    mod_funcs = create_list();
+    mod_externals = create_list();
     status = parse_all_modules(resolved_path, parsed_files, mod_funcs, mod_externals, all_struct_defs, all_enum_defs, all_method_defs, all_trait_defs, all_trait_impls, all_constants);
     if (status != 0LL) {
     ret_val = status;
@@ -5598,61 +5590,21 @@ long long _main() {
     }
     stem = get_file_stem(input_path);
     printf("%s\n", (char*)(long long)"[1/3] Tokenizing and Parsing...");
-    {
-        long long tmp_val = create_list();
-        free_list(all_functions);
-        all_functions = tmp_val;
-    }
-    {
-        long long tmp_val = create_list();
-        free_list(all_externals);
-        all_externals = tmp_val;
-    }
-    {
-        long long tmp_val = create_list();
-        free_list(all_struct_defs);
-        all_struct_defs = tmp_val;
-    }
-    {
-        long long tmp_val = create_list();
-        free_list(all_enum_defs);
-        all_enum_defs = tmp_val;
-    }
-    {
-        long long tmp_val = create_list();
-        free_list(all_method_defs);
-        all_method_defs = tmp_val;
-    }
-    {
-        long long tmp_val = create_list();
-        free_list(all_trait_defs);
-        all_trait_defs = tmp_val;
-    }
-    {
-        long long tmp_val = create_list();
-        free_list(all_trait_impls);
-        all_trait_impls = tmp_val;
-    }
-    {
-        long long tmp_val = create_list();
-        free_list(all_constants);
-        all_constants = tmp_val;
-    }
-    {
-        long long tmp_val = create_list();
-        free_list(parsed_files);
-        parsed_files = tmp_val;
-    }
+    all_functions = create_list();
+    all_externals = create_list();
+    all_struct_defs = create_list();
+    all_enum_defs = create_list();
+    all_method_defs = create_list();
+    all_trait_defs = create_list();
+    all_trait_impls = create_list();
+    all_constants = create_list();
+    parsed_files = create_list();
     status = parse_all_modules(input_path, parsed_files, all_functions, all_externals, all_struct_defs, all_enum_defs, all_method_defs, all_trait_defs, all_trait_impls, all_constants);
     if (status != 0LL) {
     ret_val = 1LL;
     goto L_cleanup;
     }
-    {
-        long long tmp_val = create_list();
-        free_list(f_names);
-        f_names = tmp_val;
-    }
+    f_names = create_list();
     all_len = length_list(all_functions);
     idx = 0LL;
     duplicate_found = 0LL;
@@ -5672,16 +5624,8 @@ long long _main() {
     ret_val = 1LL;
     goto L_cleanup;
     }
-    {
-        long long tmp_val = create_list();
-        free_list(empty_imports);
-        empty_imports = tmp_val;
-    }
-    {
-        long long tmp_val = create_list();
-        free_list(program_ast);
-        program_ast = tmp_val;
-    }
+    empty_imports = create_list();
+    program_ast = create_list();
     ok = append_list(program_ast, 13LL);
     ok = append_list(program_ast, empty_imports);
     ok = append_list(program_ast, all_externals);
@@ -5774,11 +5718,7 @@ long long create_token(long long type, long long value, long long line, long lon
     ep_gc_push_root(&tok);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(tok);
-        tok = tmp_val;
-    }
+    tok = create_list();
     ok = append_list(tok, type);
     ok = append_list(tok, value);
     ok = append_list(tok, line);
@@ -5967,11 +5907,7 @@ long long lex_string_body(long long source, long long pos0, long long source_len
     pos = (pos0 + 1LL);
     col = (start_col + 1LL);
     opens = 0LL;
-    {
-        long long tmp_val = create_list();
-        free_list(str_chars);
-        str_chars = tmp_val;
-    }
+    str_chars = create_list();
     closed = 0LL;
     err = 0LL;
     looping = 1LL;
@@ -5987,11 +5923,7 @@ long long lex_string_body(long long source, long long pos0, long long source_len
     pos = (pos + 1LL);
     col = (col + 1LL);
     lit = (long long)string_from_list(str_chars);
-    {
-        long long tmp_val = create_list();
-        free_list(str_chars);
-        str_chars = tmp_val;
-    }
+    str_chars = create_list();
     if (string_length((char*)lit) != 0LL) {
     t1 = (create_token(27LL, (long long)"concat", current_line, col) + 0LL);
     ok1 = append_list(tokens, t1);
@@ -6012,11 +5944,7 @@ long long lex_string_body(long long source, long long pos0, long long source_len
     t8 = (create_token(23LL, (long long)"(", current_line, col) + 0LL);
     ok8 = append_list(tokens, t8);
     depth = 1LL;
-    {
-        long long tmp_val = create_list();
-        free_list(expr_chars);
-        expr_chars = tmp_val;
-    }
+    expr_chars = create_list();
     eloop = 1LL;
     while ((pos < source_len && eloop == 1LL)) {
     ec = get_character((char*)source, pos);
@@ -6170,11 +6098,7 @@ long long lex_string_body(long long source, long long pos0, long long source_len
     }
     }
     }
-    {
-        long long tmp_val = create_list();
-        free_list(res);
-        res = tmp_val;
-    }
+    res = create_list();
     okr1 = append_list(res, pos);
     okr2 = append_list(res, col);
     okr3 = append_list(res, err);
@@ -6266,20 +6190,12 @@ long long tokenize_source(long long source) {
     ep_gc_push_root(&num_str);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(tokens);
-        tokens = tmp_val;
-    }
+    tokens = create_list();
     source_len = string_length((char*)source);
     pos = 0LL;
     current_line = 1LL;
     current_col = 1LL;
-    {
-        long long tmp_val = create_list();
-        free_list(indent_stack);
-        indent_stack = tmp_val;
-    }
+    indent_stack = create_list();
     ok = append_list(indent_stack, 0LL);
     at_line_start = 1LL;
     while (pos < source_len) {
@@ -6997,11 +6913,7 @@ long long make_node_int(long long val) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 1LL);
     ok = append_list(node, val);
     ret_val = node;
@@ -7020,11 +6932,7 @@ long long make_node_str(long long val) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 2LL);
     ok = append_list(node, val);
     ret_val = node;
@@ -7043,11 +6951,7 @@ long long make_node_ident(long long name) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 3LL);
     ok = append_list(node, name);
     ret_val = node;
@@ -7066,11 +6970,7 @@ long long make_node_binary(long long left, long long op, long long right) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 4LL);
     ok = append_list(node, left);
     ok = append_list(node, op);
@@ -7091,11 +6991,7 @@ long long make_node_comp(long long left, long long op, long long right) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 5LL);
     ok = append_list(node, left);
     ok = append_list(node, op);
@@ -7116,11 +7012,7 @@ long long make_node_call(long long name, long long args) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 6LL);
     ok = append_list(node, name);
     ok = append_list(node, args);
@@ -7140,11 +7032,7 @@ long long make_node_set(long long var, long long expr) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 7LL);
     ok = append_list(node, var);
     ok = append_list(node, expr);
@@ -7164,11 +7052,7 @@ long long make_node_return(long long expr) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 8LL);
     ok = append_list(node, expr);
     ret_val = node;
@@ -7187,11 +7071,7 @@ long long make_node_display(long long expr) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 9LL);
     ok = append_list(node, expr);
     ret_val = node;
@@ -7210,11 +7090,7 @@ long long make_node_if(long long cond, long long then_b, long long else_b) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 10LL);
     ok = append_list(node, cond);
     ok = append_list(node, then_b);
@@ -7235,11 +7111,7 @@ long long make_node_repeat_while(long long cond, long long body) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 11LL);
     ok = append_list(node, cond);
     ok = append_list(node, body);
@@ -7259,11 +7131,7 @@ long long make_node_func(long long name, long long params, long long body, long 
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 12LL);
     ok = append_list(node, name);
     ok = append_list(node, params);
@@ -7285,11 +7153,7 @@ long long make_node_program(long long imports, long long externals, long long fu
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 13LL);
     ok = append_list(node, imports);
     ok = append_list(node, externals);
@@ -7316,11 +7180,7 @@ long long make_node_spawn(long long func_name, long long args) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 15LL);
     ok = append_list(node, func_name);
     ok = append_list(node, args);
@@ -7340,11 +7200,7 @@ long long make_node_send(long long chan, long long val) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 16LL);
     ok = append_list(node, chan);
     ok = append_list(node, val);
@@ -7364,11 +7220,7 @@ long long make_node_channel() {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 17LL);
     ret_val = node;
     node = 0;
@@ -7386,11 +7238,7 @@ long long make_node_receive(long long chan) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 18LL);
     ok = append_list(node, chan);
     ret_val = node;
@@ -7409,11 +7257,7 @@ long long make_node_external(long long name, long long params, long long ret_typ
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 19LL);
     ok = append_list(node, name);
     ok = append_list(node, params);
@@ -7434,11 +7278,7 @@ long long make_node_borrow(long long target) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 20LL);
     ok = append_list(node, target);
     ret_val = node;
@@ -7457,11 +7297,7 @@ long long make_node_await(long long target) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 21LL);
     ok = append_list(node, target);
     ret_val = node;
@@ -7480,11 +7316,7 @@ long long make_node_logical(long long left, long long op, long long right) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 14LL);
     ok = append_list(node, left);
     ok = append_list(node, op);
@@ -7505,11 +7337,7 @@ long long make_node_field_access(long long obj, long long field_name) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 22LL);
     ok = append_list(node, obj);
     ok = append_list(node, field_name);
@@ -7529,11 +7357,7 @@ long long make_node_field_set(long long obj, long long field_name, long long val
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 23LL);
     ok = append_list(node, obj);
     ok = append_list(node, field_name);
@@ -7554,11 +7378,7 @@ long long make_node_struct_create(long long struct_name, long long fields) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 24LL);
     ok = append_list(node, struct_name);
     ok = append_list(node, fields);
@@ -7578,11 +7398,7 @@ long long make_node_method_call(long long obj, long long method_name, long long 
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 25LL);
     ok = append_list(node, obj);
     ok = append_list(node, method_name);
@@ -7603,11 +7419,7 @@ long long make_node_enum_create(long long variant_name, long long args) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 26LL);
     ok = append_list(node, variant_name);
     ok = append_list(node, args);
@@ -7627,11 +7439,7 @@ long long make_node_match(long long expr, long long arms) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 27LL);
     ok = append_list(node, expr);
     ok = append_list(node, arms);
@@ -7651,11 +7459,7 @@ long long make_node_for_each(long long var_name, long long iter_expr, long long 
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 28LL);
     ok = append_list(node, var_name);
     ok = append_list(node, iter_expr);
@@ -7676,11 +7480,7 @@ long long make_node_break() {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 29LL);
     ret_val = node;
     node = 0;
@@ -7698,11 +7498,7 @@ long long make_node_continue() {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 30LL);
     ret_val = node;
     node = 0;
@@ -7720,11 +7516,7 @@ long long make_node_bool(long long val) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 31LL);
     ok = append_list(node, val);
     ret_val = node;
@@ -7743,11 +7535,7 @@ long long make_node_unary_not(long long expr) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 32LL);
     ok = append_list(node, expr);
     ret_val = node;
@@ -7766,11 +7554,7 @@ long long make_node_try(long long expr) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 33LL);
     ok = append_list(node, expr);
     ret_val = node;
@@ -7789,11 +7573,7 @@ long long make_node_closure(long long params, long long body) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 34LL);
     ok = append_list(node, params);
     ok = append_list(node, body);
@@ -7813,11 +7593,7 @@ long long make_node_list_lit(long long elements) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 35LL);
     ok = append_list(node, elements);
     ret_val = node;
@@ -7836,11 +7612,7 @@ long long make_node_expr_stmt(long long expr) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 36LL);
     ok = append_list(node, expr);
     ret_val = node;
@@ -7859,11 +7631,7 @@ long long make_node_struct_def(long long name, long long fields) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 37LL);
     ok = append_list(node, name);
     ok = append_list(node, fields);
@@ -7883,11 +7651,7 @@ long long make_node_enum_def(long long name, long long variants) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 38LL);
     ok = append_list(node, name);
     ok = append_list(node, variants);
@@ -7907,11 +7671,7 @@ long long make_node_method_def(long long method_name, long long struct_name, lon
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 39LL);
     ok = append_list(node, method_name);
     ok = append_list(node, struct_name);
@@ -7933,11 +7693,7 @@ long long make_node_trait_def(long long name, long long method_sigs) {
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 40LL);
     ok = append_list(node, name);
     ok = append_list(node, method_sigs);
@@ -7957,11 +7713,7 @@ long long make_node_trait_impl(long long trait_name, long long type_name, long l
     ep_gc_push_root(&node);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(node);
-        node = tmp_val;
-    }
+    node = create_list();
     ok = append_list(node, 41LL);
     ok = append_list(node, trait_name);
     ok = append_list(node, type_name);
@@ -7982,11 +7734,7 @@ long long create_parser_state(long long tokens) {
     ep_gc_push_root(&state);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(state);
-        state = tmp_val;
-    }
+    state = create_list();
     ok = append_list(state, tokens);
     ok = append_list(state, 0LL);
     ok = append_list(state, 0LL);
@@ -10001,8 +9749,240 @@ L_cleanup:
     return ret_val;
 }
 
+long long en_arg_type(long long arg, long long vk, long long vo) {
+    long long t = 0;
+    long long vn = 0;
+    long long i = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&vn);
+    ep_gc_maybe_collect();
+
+    if (arg == 0LL) {
+    ret_val = (long long)"";
+    goto L_cleanup;
+    }
+    t = get_list(arg, 0LL);
+    if (t == 26LL) {
+    vn = string_concat(get_list(arg, 1LL), (long long)"");
+    i = 0LL;
+    while (i < length_list(vk)) {
+    if ((strcmp((char*)vn, (char*)get_list(vk, i)) == 0)) {
+    ret_val = get_list(vo, i);
+    goto L_cleanup;
+    }
+    i = (i + 1LL);
+    }
+    ret_val = (long long)"";
+    goto L_cleanup;
+    }
+    if (t == 1LL) {
+    ret_val = (long long)"Int";
+    goto L_cleanup;
+    }
+    if (t == 2LL) {
+    ret_val = (long long)"Str";
+    goto L_cleanup;
+    }
+    if (t == 42LL) {
+    ret_val = (long long)"Float";
+    goto L_cleanup;
+    }
+    if (t == 31LL) {
+    ret_val = (long long)"Bool";
+    goto L_cleanup;
+    }
+    ret_val = (long long)"";
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long en_field_type_at(long long variant, long long ai, long long vk, long long vf) {
+    long long vn = 0;
+    long long i = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&vn);
+    ep_gc_maybe_collect();
+
+    vn = string_concat(variant, (long long)"");
+    i = 0LL;
+    while (i < length_list(vk)) {
+    if ((strcmp((char*)vn, (char*)get_list(vk, i)) == 0)) {
+    if (ai < length_list(get_list(vf, i))) {
+    ret_val = string_concat(get_list(get_list(vf, i), ai), (long long)"");
+    goto L_cleanup;
+    }
+    ret_val = (long long)"";
+    goto L_cleanup;
+    }
+    i = (i + 1LL);
+    }
+    ret_val = (long long)"";
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long en_check_expr(long long expr, long long errs, long long vk, long long vo, long long vf) {
+    long long t = 0;
+    long long variant = 0;
+    long long args = 0;
+    long long ai = 0;
+    long long arg = 0;
+    long long ft = 0;
+    long long at = 0;
+    long long noop = 0;
+    long long msg = 0;
+    long long ok = 0;
+    long long oka = 0;
+    long long okl = 0;
+    long long okr = 0;
+    long long cargs = 0;
+    long long ci = 0;
+    long long okc = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&ft);
+    ep_gc_push_root(&at);
+    ep_gc_push_root(&msg);
+    ep_gc_maybe_collect();
+
+    if (expr == 0LL) {
+    ret_val = 0LL;
+    goto L_cleanup;
+    }
+    t = get_list(expr, 0LL);
+    if (t == 26LL) {
+    variant = get_list(expr, 1LL);
+    args = get_list(expr, 2LL);
+    ai = 0LL;
+    while (ai < length_list(args)) {
+    arg = get_list(args, ai);
+    ft = string_concat(en_field_type_at(variant, ai, vk, vf), (long long)"");
+    if (string_length((char*)ft) > 0LL) {
+    at = string_concat(en_arg_type(arg, vk, vo), (long long)"");
+    if (string_length((char*)at) > 0LL) {
+    if ((strcmp((char*)at, (char*)ft) == 0)) {
+    noop = 0LL;
+    } else {
+    msg = string_concat((long long)"enum variant field type mismatch: expected ", ft);
+    msg = string_concat(msg, (long long)" but got ");
+    msg = string_concat(msg, at);
+    ok = append_list(errs, msg);
+    }
+    }
+    }
+    oka = en_check_expr(arg, errs, vk, vo, vf);
+    ai = (ai + 1LL);
+    }
+    ret_val = 0LL;
+    goto L_cleanup;
+    }
+    if (((t == 4LL || t == 5LL) || t == 14LL)) {
+    okl = en_check_expr(get_list(expr, 1LL), errs, vk, vo, vf);
+    okr = en_check_expr(get_list(expr, 3LL), errs, vk, vo, vf);
+    ret_val = 0LL;
+    goto L_cleanup;
+    }
+    if (t == 6LL) {
+    cargs = get_list(expr, 2LL);
+    ci = 0LL;
+    while (ci < length_list(cargs)) {
+    okc = en_check_expr(get_list(cargs, ci), errs, vk, vo, vf);
+    ci = (ci + 1LL);
+    }
+    ret_val = 0LL;
+    goto L_cleanup;
+    }
+    if (((((t == 18LL || t == 20LL) || t == 21LL) || t == 32LL) || t == 33LL)) {
+    ret_val = en_check_expr(get_list(expr, 1LL), errs, vk, vo, vf);
+    goto L_cleanup;
+    }
+    ret_val = 0LL;
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(3);
+    return ret_val;
+}
+
+long long en_check_stmts(long long stmts, long long errs, long long vk, long long vo, long long vf) {
+    long long i = 0;
+    long long stmt = 0;
+    long long t = 0;
+    long long ok = 0;
+    long long eb = 0;
+    long long arms = 0;
+    long long ari = 0;
+    long long ret_val = 0;
+
+    ep_gc_maybe_collect();
+
+    i = 0LL;
+    while (i < length_list(stmts)) {
+    stmt = get_list(stmts, i);
+    t = get_list(stmt, 0LL);
+    if (t == 7LL) {
+    ok = en_check_expr(get_list(stmt, 2LL), errs, vk, vo, vf);
+    }
+    if (((t == 8LL || t == 9LL) || t == 36LL)) {
+    ok = en_check_expr(get_list(stmt, 1LL), errs, vk, vo, vf);
+    }
+    if (t == 10LL) {
+    ok = en_check_expr(get_list(stmt, 1LL), errs, vk, vo, vf);
+    ok = en_check_stmts(get_list(stmt, 2LL), errs, vk, vo, vf);
+    eb = get_list(stmt, 3LL);
+    if (eb != 0LL) {
+    ok = en_check_stmts(eb, errs, vk, vo, vf);
+    }
+    }
+    if (t == 11LL) {
+    ok = en_check_expr(get_list(stmt, 1LL), errs, vk, vo, vf);
+    ok = en_check_stmts(get_list(stmt, 2LL), errs, vk, vo, vf);
+    }
+    if (t == 28LL) {
+    ok = en_check_expr(get_list(stmt, 2LL), errs, vk, vo, vf);
+    ok = en_check_stmts(get_list(stmt, 3LL), errs, vk, vo, vf);
+    }
+    if (t == 27LL) {
+    arms = get_list(stmt, 2LL);
+    ari = 0LL;
+    while (ari < length_list(arms)) {
+    ok = en_check_stmts(get_list(get_list(arms, ari), 2LL), errs, vk, vo, vf);
+    ari = (ari + 1LL);
+    }
+    }
+    i = (i + 1LL);
+    }
+    ret_val = 0LL;
+    goto L_cleanup;
+L_cleanup:
+    return ret_val;
+}
+
 long long check_program(long long program) {
     long long errs = 0;
+    long long en_vk = 0;
+    long long en_vo = 0;
+    long long en_vf = 0;
+    long long enums = 0;
+    long long ei = 0;
+    long long edef = 0;
+    long long ename = 0;
+    long long evs = 0;
+    long long evi = 0;
+    long long ev = 0;
+    long long fts = 0;
+    long long fields = 0;
+    long long fi = 0;
+    long long ok = 0;
+    long long en_funcs = 0;
+    long long efi = 0;
+    long long en_methods = 0;
+    long long emi = 0;
     long long funcs = 0;
     long long n = 0;
     long long idx = 0;
@@ -10013,16 +9993,57 @@ long long check_program(long long program) {
     long long mdef = 0;
     long long okm = 0;
     long long e_len = 0;
-    long long ei = 0;
     long long ret_val = 0;
 
     ep_gc_push_root(&errs);
+    ep_gc_push_root(&en_vk);
+    ep_gc_push_root(&en_vo);
+    ep_gc_push_root(&en_vf);
+    ep_gc_push_root(&fts);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(errs);
-        errs = tmp_val;
+    errs = create_list();
+    en_vk = create_list();
+    en_vo = create_list();
+    en_vf = create_list();
+    if (length_list(program) > 5LL) {
+    enums = get_list(program, 5LL);
+    ei = 0LL;
+    while (ei < length_list(enums)) {
+    edef = get_list(enums, ei);
+    ename = get_list(edef, 1LL);
+    evs = get_list(edef, 2LL);
+    evi = 0LL;
+    while (evi < length_list(evs)) {
+    ev = get_list(evs, evi);
+    fts = create_list();
+    fields = get_list(ev, 1LL);
+    fi = 0LL;
+    while (fi < length_list(fields)) {
+    ok = append_list(fts, get_list(get_list(fields, fi), 1LL));
+    fi = (fi + 1LL);
+    }
+    ok = append_list(en_vk, get_list(ev, 0LL));
+    ok = append_list(en_vo, ename);
+    ok = append_list(en_vf, fts);
+    evi = (evi + 1LL);
+    }
+    ei = (ei + 1LL);
+    }
+    }
+    en_funcs = get_list(program, 3LL);
+    efi = 0LL;
+    while (efi < length_list(en_funcs)) {
+    ok = en_check_stmts(get_list(get_list(en_funcs, efi), 3LL), errs, en_vk, en_vo, en_vf);
+    efi = (efi + 1LL);
+    }
+    if (length_list(program) > 6LL) {
+    en_methods = get_list(program, 6LL);
+    emi = 0LL;
+    while (emi < length_list(en_methods)) {
+    ok = en_check_stmts(get_list(get_list(en_methods, emi), 4LL), errs, en_vk, en_vo, en_vf);
+    emi = (emi + 1LL);
+    }
     }
     funcs = get_list(program, 3LL);
     n = length_list(funcs);
@@ -10054,7 +10075,7 @@ long long check_program(long long program) {
     ret_val = 0LL;
     goto L_cleanup;
 L_cleanup:
-    ep_gc_pop_roots(1);
+    ep_gc_pop_roots(5);
     return ret_val;
 }
 
@@ -10636,11 +10657,7 @@ long long string_concat(long long s1, long long s2) {
     ep_gc_push_root(&res);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lst);
-        lst = tmp_val;
-    }
+    lst = create_list();
     len1 = string_length((char*)s1);
     idx = 0LL;
     while (idx < len1) {
@@ -10676,11 +10693,7 @@ long long cg_sanitize_name(long long name) {
     ret_val = (long long)"_main";
     goto L_cleanup;
     }
-    {
-        long long tmp_val = create_list();
-        free_list(kws);
-        kws = tmp_val;
-    }
+    kws = create_list();
     ok = append_list(kws, (long long)"auto");
     ok = append_list(kws, (long long)"break");
     ok = append_list(kws, (long long)"case");
@@ -10802,17 +10815,9 @@ long long cg_int_to_str(long long n) {
     neg = 1LL;
     n = (0LL - n);
     }
-    {
-        long long tmp_val = create_list();
-        free_list(lst);
-        lst = tmp_val;
-    }
+    lst = create_list();
     temp = n;
-    {
-        long long tmp_val = create_list();
-        free_list(digits);
-        digits = tmp_val;
-    }
+    digits = create_list();
     while (temp > 0LL) {
     digit = (temp - ((temp / 10LL) * 10LL));
     ok = append_list(digits, (digit + 48LL));
@@ -10849,11 +10854,7 @@ long long escape_string(long long s) {
     ep_gc_push_root(&res);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lst);
-        lst = tmp_val;
-    }
+    lst = create_list();
     len = string_length((char*)s);
     idx = 0LL;
     while (idx < len) {
@@ -10909,11 +10910,7 @@ long long join_strings(long long lines) {
     ep_gc_push_root(&res);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lst);
-        lst = tmp_val;
-    }
+    lst = create_list();
     len = length_list(lines);
     idx = 0LL;
     while (idx < len) {
@@ -10942,11 +10939,7 @@ long long create_codegen_state() {
     ep_gc_push_root(&state);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(state);
-        state = tmp_val;
-    }
+    state = create_list();
     ok = append_list(state, (create_list() + 0LL));
     ok = append_list(state, (create_list() + 0LL));
     ok = append_list(state, 0LL);
@@ -12112,11 +12105,7 @@ long long var_returned_in_stmts(long long name, long long stmts) {
     stmt = get_list(stmts, idx);
     t = get_list(stmt, 0LL);
     if (t == 8LL) {
-    {
-        long long tmp_val = create_list();
-        free_list(ids);
-        ids = tmp_val;
-    }
+    ids = create_list();
     ok = collect_idents_expr(get_list(stmt, 1LL), ids);
     if (contains_string_val(ids, name) == 1LL) {
     ret_val = 1LL;
@@ -12263,11 +12252,7 @@ long long gen_function(long long state, long long func) {
     if (is_async == 1LL) {
     cname = get_fn_c_name(func);
     aw_count = count_awaits_stmts(body);
-    {
-        long long tmp_val = create_list();
-        free_list(async_locals);
-        async_locals = tmp_val;
-    }
+    async_locals = create_list();
     al_i = 0LL;
     while (al_i < length_list(var_types_keys)) {
     okal = append_list(async_locals, get_list(var_types_keys, al_i));
@@ -12492,10 +12477,6 @@ long long gen_statement(long long state, long long stmt, long long var_keys, lon
     long long expr_str = 0;
     long long al = 0;
     long long ok = 0;
-    long long is_global = 0;
-    long long borrowed_keys = 0;
-    long long borrowed_values = 0;
-    long long is_borrowed = 0;
     long long line = 0;
     long long arl = 0;
     long long expr_type = 0;
@@ -12593,33 +12574,12 @@ long long gen_statement(long long state, long long stmt, long long var_keys, lon
     goto L_cleanup;
     }
     }
-    is_global = is_global_var(name);
-    borrowed_keys = get_codegen_borrowed_keys(state);
-    borrowed_values = get_codegen_borrowed_values(state);
-    is_borrowed = map_get(borrowed_keys, borrowed_values, name);
-    if (((t == 4LL && is_global == 0LL) && is_borrowed == 0LL)) {
-    ok = emit(state, (long long)"    {\n");
-    line = (long long)"        long long tmp_val = ";
-    line = string_concat(line, expr_str);
-    line = string_concat(line, (long long)";\n");
-    ok = emit(state, line);
-    line = (long long)"        free_list(";
-    line = string_concat(line, name);
-    line = string_concat(line, (long long)");\n");
-    ok = emit(state, line);
-    line = (long long)"        ";
-    line = string_concat(line, name);
-    line = string_concat(line, (long long)" = tmp_val;\n");
-    ok = emit(state, line);
-    ok = emit(state, (long long)"    }\n");
-    } else {
     line = (long long)"    ";
     line = string_concat(line, name);
     line = string_concat(line, (long long)" = ");
     line = string_concat(line, expr_str);
     line = string_concat(line, (long long)";\n");
     ok = emit(state, line);
-    }
     ret_val = 0LL;
     goto L_cleanup;
     }
@@ -13400,11 +13360,7 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     name = get_list(expr, 1LL);
     args = get_list(expr, 2LL);
     args_len = length_list(args);
-    {
-        long long tmp_val = create_list();
-        free_list(formatted_args);
-        formatted_args = tmp_val;
-    }
+    formatted_args = create_list();
     idx = 0LL;
     while (idx < args_len) {
     arg = get_list(args, idx);
@@ -13442,11 +13398,7 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     ok = append_list(formatted_args, casted);
     idx = (idx + 1LL);
     }
-    {
-        long long tmp_val = create_list();
-        free_list(args_str_list);
-        args_str_list = tmp_val;
-    }
+    args_str_list = create_list();
     idx = 0LL;
     while (idx < args_len) {
     arg_item = get_list(formatted_args, idx);
@@ -13692,19 +13644,11 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     cidx = get_list(state, 13LL);
     dummy = set_list(state, 13LL, (cidx + 1LL));
     cname = string_concat((long long)"_ep_closure_", cg_int_to_str(cidx));
-    {
-        long long tmp_val = create_list();
-        free_list(raw_names);
-        raw_names = tmp_val;
-    }
+    raw_names = create_list();
     okr = collect_idents_stmts(body, raw_names);
     func_keys = get_list(state, 3LL);
     p_len = length_list(params);
-    {
-        long long tmp_val = create_list();
-        free_list(captured);
-        captured = tmp_val;
-    }
+    captured = create_list();
     rn_len = length_list(raw_names);
     rn_i = 0LL;
     while (rn_i < rn_len) {
@@ -13769,16 +13713,8 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     oku = emit(state, unp);
     cp_i = (cp_i + 1LL);
     }
-    {
-        long long tmp_val = create_list();
-        free_list(c_keys);
-        c_keys = tmp_val;
-    }
-    {
-        long long tmp_val = create_list();
-        free_list(c_values);
-        c_values = tmp_val;
-    }
+    c_keys = create_list();
+    c_values = create_list();
     ov_len = length_list(var_keys);
     ov_i = 0LL;
     while (ov_i < ov_len) {
@@ -13791,16 +13727,8 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     okpv = map_put(c_keys, c_values, get_list(p_node, 0LL), 1LL);
     pv_i = (pv_i + 1LL);
     }
-    {
-        long long tmp_val = create_list();
-        free_list(b_keys);
-        b_keys = tmp_val;
-    }
-    {
-        long long tmp_val = create_list();
-        free_list(b_values);
-        b_values = tmp_val;
-    }
+    b_keys = create_list();
+    b_values = create_list();
     okbv = collect_var_types(state, body, b_keys, b_values);
     bv_len = length_list(b_keys);
     bv_i = 0LL;
@@ -13912,11 +13840,7 @@ long long get_c_main_source() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"\n/* Bootstrapper C main */\n");
     ok = append_list(lines, (long long)"void __ep_init_constants(void);\n");
     ok = append_list(lines, (long long)"int main(int argc, char** argv) {\n");
@@ -13956,11 +13880,7 @@ long long get_c_test_main_source(long long program) {
 
     funcs = get_list(program, 3LL);
     funcs_len = length_list(funcs);
-    {
-        long long tmp_val = create_list();
-        free_list(test_cases);
-        test_cases = tmp_val;
-    }
+    test_cases = create_list();
     idx = 0LL;
     while (idx < funcs_len) {
     func = get_list(funcs, idx);
@@ -13975,11 +13895,7 @@ long long get_c_test_main_source(long long program) {
     idx = (idx + 1LL);
     }
     test_count = length_list(test_cases);
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"\n/* Test runner C main */\n");
     ok = append_list(lines, (long long)"#include <sys/types.h>\n");
     ok = append_list(lines, (long long)"#include <sys/wait.h>\n");
@@ -14104,11 +14020,7 @@ long long collect_all_spawns(long long program) {
     ep_gc_push_root(&spawn_list);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(spawn_list);
-        spawn_list = tmp_val;
-    }
+    spawn_list = create_list();
     funcs = get_list(program, 3LL);
     len = length_list(funcs);
     idx = 0LL;
@@ -14137,11 +14049,7 @@ long long clone_list(long long lst) {
     ep_gc_push_root(&new_lst);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(new_lst);
-        new_lst = tmp_val;
-    }
+    new_lst = create_list();
     len = length_list(lst);
     idx = 0LL;
     while (idx < len) {
@@ -14642,71 +14550,23 @@ long long check_safety_stmts(long long func, long long stmts, long long var_keys
     ret_val = 0LL;
     goto L_cleanup;
     }
-    {
-        long long tmp_val = clone_list(state_keys);
-        free_list(then_state_keys);
-        then_state_keys = tmp_val;
-    }
-    {
-        long long tmp_val = clone_list(state_values);
-        free_list(then_state_values);
-        then_state_values = tmp_val;
-    }
-    {
-        long long tmp_val = clone_list(borrow_keys);
-        free_list(then_borrow_keys);
-        then_borrow_keys = tmp_val;
-    }
-    {
-        long long tmp_val = clone_list(borrow_values);
-        free_list(then_borrow_values);
-        then_borrow_values = tmp_val;
-    }
-    {
-        long long tmp_val = clone_list(count_keys);
-        free_list(then_count_keys);
-        then_count_keys = tmp_val;
-    }
-    {
-        long long tmp_val = clone_list(count_values);
-        free_list(then_count_values);
-        then_count_values = tmp_val;
-    }
+    then_state_keys = clone_list(state_keys);
+    then_state_values = clone_list(state_values);
+    then_borrow_keys = clone_list(borrow_keys);
+    then_borrow_values = clone_list(borrow_values);
+    then_count_keys = clone_list(count_keys);
+    then_count_values = clone_list(count_values);
     ok = check_safety_stmts(func, then_b, var_keys, var_values, then_state_keys, then_state_values, then_borrow_keys, then_borrow_values, then_count_keys, then_count_values);
     if (ok == 0LL) {
     ret_val = 0LL;
     goto L_cleanup;
     }
-    {
-        long long tmp_val = clone_list(state_keys);
-        free_list(else_state_keys);
-        else_state_keys = tmp_val;
-    }
-    {
-        long long tmp_val = clone_list(state_values);
-        free_list(else_state_values);
-        else_state_values = tmp_val;
-    }
-    {
-        long long tmp_val = clone_list(borrow_keys);
-        free_list(else_borrow_keys);
-        else_borrow_keys = tmp_val;
-    }
-    {
-        long long tmp_val = clone_list(borrow_values);
-        free_list(else_borrow_values);
-        else_borrow_values = tmp_val;
-    }
-    {
-        long long tmp_val = clone_list(count_keys);
-        free_list(else_count_keys);
-        else_count_keys = tmp_val;
-    }
-    {
-        long long tmp_val = clone_list(count_values);
-        free_list(else_count_values);
-        else_count_values = tmp_val;
-    }
+    else_state_keys = clone_list(state_keys);
+    else_state_values = clone_list(state_values);
+    else_borrow_keys = clone_list(borrow_keys);
+    else_borrow_values = clone_list(borrow_values);
+    else_count_keys = clone_list(count_keys);
+    else_count_values = clone_list(count_values);
     if (else_b != 0LL) {
     ok = check_safety_stmts(func, else_b, var_keys, var_values, else_state_keys, else_state_values, else_borrow_keys, else_borrow_values, else_count_keys, else_count_values);
     if (ok == 0LL) {
@@ -14772,16 +14632,8 @@ long long check_safety_stmts(long long func, long long stmts, long long var_keys
     ret_val = 0LL;
     goto L_cleanup;
     }
-    {
-        long long tmp_val = clone_list(state_keys);
-        free_list(start_state_keys);
-        start_state_keys = tmp_val;
-    }
-    {
-        long long tmp_val = clone_list(state_values);
-        free_list(start_state_values);
-        start_state_values = tmp_val;
-    }
+    start_state_keys = clone_list(state_keys);
+    start_state_values = clone_list(state_values);
     ok = check_safety_stmts(func, body, var_keys, var_values, state_keys, state_values, borrow_keys, borrow_values, count_keys, count_values);
     if (ok == 0LL) {
     ret_val = 0LL;
@@ -15061,11 +14913,7 @@ long long generate_c(long long program, long long is_test_mode) {
     ep_gc_push_root(&c_code);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_codegen_state();
-        free_list(state);
-        state = tmp_val;
-    }
+    state = create_codegen_state();
     ok = analyze_return_types(state, program);
     if (length_list(program) > 8LL) {
     it_impls = get_list(program, 8LL);
@@ -15086,11 +14934,7 @@ long long generate_c(long long program, long long is_test_mode) {
     }
     ok = emit(state, get_c_runtime_source());
     prog_len = length_list(program);
-    {
-        long long tmp_val = create_list();
-        free_list(field_slots);
-        field_slots = tmp_val;
-    }
+    field_slots = create_list();
     if (prog_len > 4LL) {
     struct_defs = get_list(program, 4LL);
     sd_len = length_list(struct_defs);
@@ -15128,11 +14972,7 @@ long long generate_c(long long program, long long is_test_mode) {
     slot_line = string_concat(slot_line, cg_int_to_str((length_list(field_slots) + 8LL)));
     slot_line = string_concat(slot_line, (long long)"\n");
     ok = emit(state, slot_line);
-    {
-        long long tmp_val = create_list();
-        free_list(tag_slots);
-        tag_slots = tmp_val;
-    }
+    tag_slots = create_list();
     if (prog_len > 5LL) {
     enum_defs = get_list(program, 5LL);
     ed_len = length_list(enum_defs);
@@ -15180,11 +15020,7 @@ long long generate_c(long long program, long long is_test_mode) {
     while (vpv_i < vpv_len) {
     vp_var = get_list(vp_variants, vpv_i);
     vp_fields = get_list(vp_var, 1LL);
-    {
-        long long tmp_val = create_list();
-        free_list(vp_codes);
-        vp_codes = tmp_val;
-    }
+    vp_codes = create_list();
     vpf_i = 0LL;
     vpf_len = length_list(vp_fields);
     while (vpf_i < vpf_len) {
@@ -15271,16 +15107,8 @@ long long generate_c(long long program, long long is_test_mode) {
     ok = emit(state, (long long)"void __ep_init_constants(void) {\n");
     ok = emit(state, (long long)"    ep_gc_mark_globals_major = __ep_mark_globals_major;\n");
     ok = emit(state, (long long)"    ep_gc_mark_globals_minor = __ep_mark_globals_minor;\n");
-    {
-        long long tmp_val = create_list();
-        free_list(gk);
-        gk = tmp_val;
-    }
-    {
-        long long tmp_val = create_list();
-        free_list(gv);
-        gv = tmp_val;
-    }
+    gk = create_list();
+    gv = create_list();
     ci = 0LL;
     while (ci < const_n) {
     cstmt = get_list(constants, ci);
@@ -15360,11 +15188,7 @@ long long generate_c(long long program, long long is_test_mode) {
     idx = (idx + 1LL);
     }
     ok = emit(state, (long long)"\n");
-    {
-        long long tmp_val = collect_all_spawns(program);
-        free_list(spawn_list);
-        spawn_list = tmp_val;
-    }
+    spawn_list = collect_all_spawns(program);
     dummy = set_codegen_spawn_list(state, spawn_list);
     spawn_len = length_list(spawn_list);
     ok = emit(state, (long long)"\n/* Thread Spawn Wrappers */\n");
@@ -15452,11 +15276,7 @@ long long generate_c(long long program, long long is_test_mode) {
     md_idx = (md_idx + 1LL);
     }
     }
-    {
-        long long tmp_val = create_list();
-        free_list(emitted_methods);
-        emitted_methods = tmp_val;
-    }
+    emitted_methods = create_list();
     if (prog_len > 8LL) {
     trait_impls = get_list(program, 8LL);
     ti_len = length_list(trait_impls);
@@ -15528,11 +15348,7 @@ long long ep_rt_core_0() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"#include <stdio.h>\n");
     ok = append_list(lines, (long long)"#include <stdlib.h>\n");
     ok = append_list(lines, (long long)"#include <stdint.h>\n");
@@ -15698,11 +15514,7 @@ long long ep_rt_core_1() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"#elif defined(_WIN32)\n");
     ok = append_list(lines, (long long)"  #include <winsock2.h>\n");
     ok = append_list(lines, (long long)"  #include <ws2tcpip.h>\n");
@@ -15868,11 +15680,7 @@ long long ep_rt_core_2() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"            cur = cur->next;\n");
     ok = append_list(lines, (long long)"        }\n");
     ok = append_list(lines, (long long)"        timer->next = cur->next;\n");
@@ -16038,11 +15846,7 @@ long long ep_rt_core_3() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"                    if (res != -999999) {\n");
     ok = append_list(lines, (long long)"                        if (task->fut) {\n");
     ok = append_list(lines, (long long)"                            task->fut->value = res;\n");
@@ -16208,11 +16012,7 @@ long long ep_rt_core_4() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"                                task->fut->waiting_task = NULL;\n");
     ok = append_list(lines, (long long)"                            }\n");
     ok = append_list(lines, (long long)"                        }\n");
@@ -16378,11 +16178,7 @@ long long ep_rt_core_5() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"   oneshot read-readiness task with the loop, return the future. When fd becomes\n");
     ok = append_list(lines, (long long)"   readable, ep_async_wait_step re-enqueues the task; its step completes the future\n");
     ok = append_list(lines, (long long)"   and wakes whoever awaited it. This is what lets I/O-bound agents run concurrently\n");
@@ -16548,11 +16344,7 @@ long long ep_rt_core_6() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"static __thread void* volatile ep_thread_local_top = NULL;\n");
     ok = append_list(lines, (long long)"static __thread void* ep_thread_local_bottom = NULL;\n");
     ok = append_list(lines, (long long)"\n");
@@ -16718,11 +16510,7 @@ long long ep_rt_core_7() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"               active check, it will see sp=0 and walk no roots instead\n");
     ok = append_list(lines, (long long)"               of dereferencing stale __thread pointers */\n");
     ok = append_list(lines, (long long)"            if (ep_thread_gc_states[i]) {\n");
@@ -16888,11 +16676,7 @@ long long ep_rt_core_8() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"    EpGCObject* obj = ep_gc_table_get(ptr);\n");
     ok = append_list(lines, (long long)"    pthread_mutex_unlock(&ep_gc_mutex);\n");
     ok = append_list(lines, (long long)"    return obj;\n");
@@ -17058,11 +16842,7 @@ long long ep_rt_core_9() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"    for (int t = 0; t < ep_num_threads; t++) {\n");
     ok = append_list(lines, (long long)"        if (!ep_thread_active[t]) continue;\n");
     ok = append_list(lines, (long long)"        if (!ep_thread_tops[t]) continue;\n");
@@ -17228,11 +17008,7 @@ long long ep_rt_core_10() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"    }\n");
     ok = append_list(lines, (long long)"    /* Mark active tasks in the scheduler run queue for minor collection */\n");
     ok = append_list(lines, (long long)"    EpTask* task = ep_run_queue_head;\n");
@@ -17398,11 +17174,7 @@ long long ep_rt_core_11() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"static void ep_gc_maybe_collect(void) {\n");
     ok = append_list(lines, (long long)"    if (!ep_gc_enabled) return;  /* Early exit if GC suppressed (e.g. during channel ops) */\n");
     ok = append_list(lines, (long long)"    /* Safepoint: lock-free fast check, then park under the lock if a collection\n");
@@ -17568,11 +17340,7 @@ long long ep_rt_core_12() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"    pthread_mutex_lock(&ep_channel_registry_mutex);\n");
     ok = append_list(lines, (long long)"    if (ep_channel_count < EP_MAX_CHANNELS) {\n");
     ok = append_list(lines, (long long)"        ep_channel_registry[ep_channel_count++] = chan;\n");
@@ -17738,11 +17506,7 @@ long long ep_rt_core_13() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"            if (chan) {\n");
     ok = append_list(lines, (long long)"                ep_mutex_lock(&chan->mutex);\n");
     ok = append_list(lines, (long long)"                if (chan->size > 0) {\n");
@@ -17908,11 +17672,7 @@ long long ep_rt_core_14() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"    serv_addr.sin_family = AF_INET;\n");
     ok = append_list(lines, (long long)"    serv_addr.sin_addr.s_addr = INADDR_ANY;\n");
     ok = append_list(lines, (long long)"    serv_addr.sin_port = htons(port);\n");
@@ -18078,11 +17838,7 @@ long long ep_rt_core_15() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"long long ep_dlcall1(long long fptr, long long a0) {\n");
     ok = append_list(lines, (long long)"    return ((ep_fn1)fptr)(a0);\n");
     ok = append_list(lines, (long long)"}\n");
@@ -18248,11 +18004,7 @@ long long ep_rt_core_16() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"        }\n");
     ok = append_list(lines, (long long)"    }\n");
     ok = append_list(lines, (long long)"}\n");
@@ -18418,11 +18170,7 @@ long long ep_rt_core_17() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"                map->entries[next_h].value = 0;\n");
     ok = append_list(lines, (long long)"                map->entries[next_h].used = 0;\n");
     ok = append_list(lines, (long long)"                map->size--;\n");
@@ -18588,11 +18336,7 @@ long long ep_rt_core_18() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"/* Filesystem Operations */\n");
@@ -18758,11 +18502,7 @@ long long ep_rt_core_19() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"        \"%s%s\"\n");
     ok = append_list(lines, (long long)"        \"\\r\\n\",\n");
     ok = append_list(lines, (long long)"        method, path, host, body_len, headers ? headers : \"\", (headers && strlen(headers) > 0 && headers[strlen(headers)-1] != '\\n') ? \"\\r\\n\" : \"\");\n");
@@ -18928,11 +18668,7 @@ long long ep_rt_core_20() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"            snprintf(result + (i * 2), 3, \"%02x\", hash[i]);\n");
     ok = append_list(lines, (long long)"        }\n");
     ok = append_list(lines, (long long)"        result[64] = '\\0';\n");
@@ -19098,11 +18834,7 @@ long long ep_rt_core_21() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"    unsigned int index = (ctx->count[0] >> 3) & 0x3F, pad_len = (index < 56) ? (56 - index) : (120 - index);\n");
     ok = append_list(lines, (long long)"    unsigned char padding[64];\n");
     ok = append_list(lines, (long long)"    memset(padding, 0, 64); padding[0] = 0x80;\n");
@@ -19268,11 +19000,7 @@ long long ep_rt_core_22() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"/* SQLite type-safe wrappers — marshal between int and long long */\n");
     ok = append_list(lines, (long long)"#ifdef EP_HAS_SQLITE\n");
@@ -19438,11 +19166,7 @@ long long ep_rt_core_23() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"        ep_gc_register(empty, EP_OBJ_STRING);\n");
     ok = append_list(lines, (long long)"        return empty;\n");
     ok = append_list(lines, (long long)"    }\n");
@@ -19608,11 +19332,7 @@ long long ep_rt_core_24() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"    fputs(content, f);\n");
     ok = append_list(lines, (long long)"    fclose(f);\n");
     ok = append_list(lines, (long long)"    return 1;\n");
@@ -19778,11 +19498,7 @@ long long ep_rt_core_25() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"long long ep_setenv(long long name_ptr, long long val_ptr) {\n");
     ok = append_list(lines, (long long)"    return setenv((const char*)name_ptr, (const char*)val_ptr, 1) == 0 ? 1 : 0;\n");
     ok = append_list(lines, (long long)"}\n");
@@ -19948,11 +19664,7 @@ long long ep_rt_core_26() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"long long ep_rwlock_read_lock(long long rwl) {\n");
     ok = append_list(lines, (long long)"    AcquireSRWLockShared((SRWLOCK*)rwl);\n");
@@ -20118,11 +19830,7 @@ long long ep_rt_core_27() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"typedef struct {\n");
     ok = append_list(lines, (long long)"    pthread_mutex_t mutex;\n");
     ok = append_list(lines, (long long)"    pthread_cond_t cond;\n");
@@ -20288,11 +19996,7 @@ long long ep_rt_core_28() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"    regfree(&regex);\n");
     ok = append_list(lines, (long long)"    return (long long)result;\n");
     ok = append_list(lines, (long long)"}\n");
@@ -20458,11 +20162,7 @@ long long ep_rt_core_29() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"        if (strncmp(p, old_str, old_len) == 0) {\n");
     ok = append_list(lines, (long long)"            memcpy(dst, new_str, new_len);\n");
     ok = append_list(lines, (long long)"            dst += new_len;\n");
@@ -20628,11 +20328,7 @@ long long ep_rt_core_30() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"    if (max <= min) return min;\n");
     ok = append_list(lines, (long long)"    /* Draw from the OS CSPRNG with rejection sampling to avoid modulo bias. */\n");
     ok = append_list(lines, (long long)"    unsigned long long range = (unsigned long long)(max - min) + 1ULL;\n");
@@ -20798,11 +20494,7 @@ long long ep_rt_core_31() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"        for (int i = 16; i < 80; i++) w[i] = sha1_left_rotate(w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16], 1);\n");
     ok = append_list(lines, (long long)"        unsigned int a = h0, b = h1, c = h2, d = h3, e = h4;\n");
     ok = append_list(lines, (long long)"        for (int i = 0; i < 80; i++) {\n");
@@ -20900,11 +20592,7 @@ long long ep_rt_builtins_0() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"/* Built-in: string concatenation */\n");
     ok = append_list(lines, (long long)"long long concat(long long a, long long b) {\n");
@@ -21070,11 +20758,7 @@ long long ep_rt_builtins_1() {
     ep_gc_push_root(&lines);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(lines);
-        lines = tmp_val;
-    }
+    lines = create_list();
     ok = append_list(lines, (long long)"long long int_to_float(long long val) {\n");
     ok = append_list(lines, (long long)"    double d = (double)val;\n");
     ok = append_list(lines, (long long)"    long long result; memcpy(&result, &d, sizeof(double));\n");
@@ -21101,11 +20785,7 @@ long long get_shared_runtime_source() {
     ep_gc_push_root(&parts);
     ep_gc_maybe_collect();
 
-    {
-        long long tmp_val = create_list();
-        free_list(parts);
-        parts = tmp_val;
-    }
+    parts = create_list();
     ok = append_list(parts, ep_rt_core_0());
     ok = append_list(parts, ep_rt_core_1());
     ok = append_list(parts, ep_rt_core_2());
