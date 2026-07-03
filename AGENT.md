@@ -60,9 +60,12 @@ cargo run -- epc.ep && ./epc tests/test_basic_math.ep && ./test_basic_math
 # Stronger gates (run after any epc-visible change):
 bash tests/run_fixpoint.sh      # 3-stage byte-identical self-compile
 bash tests/run_epc_parity.sh    # self-hosted coverage scoreboard (must not regress)
+bash bootstrap/verify.sh        # clang-only, Rust-free 3-stage fixpoint + parity + freshness
 ```
 
-The self-hosted compiler is 5,800+ lines of real ErnosPlain that exercises the full type system, all builtin functions, list operations, string operations, struct creation, pattern matching, and closures. If it doesn't compile, you broke something.
+Current state of these gates: `run_tests.sh` **69/69**, `run_epc_parity.sh` **54/54 runnable + 9/9 compile-error rejections** (0 wrongly accepted), `run_fixpoint.sh` byte-identical, `bootstrap/verify.sh` green.
+
+The self-hosted compiler is ~6,400 lines of real ErnosPlain — `ep_lexer.ep` (lexer), `ep_parser.ep` (parser), `ep_check.ep` (semantic checker), `ep_optimizer.ep` (constant folding + DCE), `ep_codegen.ep` (C codegen), `epc.ep` (driver) — that exercises the full type system, all builtin functions, list/string operations, struct creation, pattern matching, closures, floats, traits, `try`/Result, and coroutine async. If it doesn't compile, you broke something.
 
 **Shared runtime.** `runtime/ep_runtime.c` + `runtime/ep_builtins.c` are the single source of truth for the emitted C runtime. The Rust compiler embeds them via `include_str!`; the self-hosted compiler embeds them via the generated `ep_runtime_gen.ep`. After editing either `runtime/*.c` file, regenerate: `./target/release/ernos tools/gen_runtime_ep.ep && ./tools/gen_runtime_ep`.
 
@@ -152,7 +155,7 @@ Every language construct should read like a sentence a non-programmer could unde
 Symbol shortcuts (`+`, `<`, `==`, `&&`) are allowed as opt-in shorthands for experienced programmers. The plain English form is always the primary syntax.
 
 ### Self-Hosting is Non-Negotiable
-The self-hosted compiler (`epc.ep` + modules) must always compile itself using the Rust bootstrap compiler. This is the ultimate integration test. If the type checker rejects the self-hosted compiler, the type checker is too strict — not the self-hosted compiler is wrong. The self-hosted compiler is 5,800+ lines of real, working ErnosPlain. It is the language's own dogfood.
+The self-hosted compiler (`epc.ep` + modules) must always compile itself using the Rust bootstrap compiler. This is the ultimate integration test. If the type checker rejects the self-hosted compiler, the type checker is too strict — not the self-hosted compiler is wrong. The self-hosted compiler is ~6,400 lines of real, working ErnosPlain. It is the language's own dogfood, and it bootstraps from a frozen C snapshot with no Rust in the loop.
 
 ### Cross-Platform by Default
 Ernos must work on:
@@ -516,7 +519,7 @@ Usage: `import "stdlib/bridge/sqlite"` — all functions use `ep_dlopen`/`ep_dls
 - Source files: `snake_case.ep`
 - Test files: `tests/test_feature_name.ep` with optional `tests/test_feature_name.expected`
 - Stdlib modules: `stdlib/module_name.ep`
-- Self-hosted compiler: `epc.ep`, `ep_lexer.ep`, `ep_parser.ep`, `ep_codegen.ep`
+- Self-hosted compiler: `epc.ep`, `ep_lexer.ep`, `ep_parser.ep`, `ep_check.ep`, `ep_optimizer.ep`, `ep_codegen.ep` (+ generated `ep_runtime_gen.ep`)
 - Generated C: `filename_compiled.c` (temporary, cleaned up by compiler)
 - Generated binary: `./dirname/filename` (next to source file, same stem)
 

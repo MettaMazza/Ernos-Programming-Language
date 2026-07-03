@@ -1,14 +1,16 @@
 <p align="center">
   <h1 align="center">Ernos Programming Language</h1>
-  <p align="center">A compiled language with plain English syntax, unification-based type inference, garbage-collected memory with ownership safety checks, and C-level performance.</p>
+  <p align="center">A compiled language with plain-English syntax, unification-based type inference, garbage-collected memory with ownership-safety checks, C-level performance — and a compiler that compiles itself all the way down to a Rust-free, clang-only bootstrap.</p>
 </p>
 
 <p align="center">
   <a href="#"><img src="https://img.shields.io/badge/Version-1.0.0-blue.svg" alt="Version"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Tests-51%2F51-brightgreen.svg" alt="Tests"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Performance-C--Level-orange.svg" alt="Performance"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-blueviolet.svg" alt="Platform"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Compiler-Self--Hosted-success.svg" alt="Self-Hosted"></a>
+  <a href="#the-test-matrix"><img src="https://img.shields.io/badge/Rust_suite-69%2F69-brightgreen.svg" alt="Rust suite 69/69"></a>
+  <a href="#self-hosting--the-bootstrap"><img src="https://img.shields.io/badge/Self--hosted_parity-54%2F54-brightgreen.svg" alt="Self-hosted parity 54/54"></a>
+  <a href="#self-hosting--the-bootstrap"><img src="https://img.shields.io/badge/Compile--error_gate-9%2F9-brightgreen.svg" alt="Rejection gate 9/9"></a>
+  <a href="#self-hosting--the-bootstrap"><img src="https://img.shields.io/badge/Bootstrap-clang--only-success.svg" alt="Clang-only bootstrap"></a>
+  <a href="#self-hosting--the-bootstrap"><img src="https://img.shields.io/badge/Fixpoint-byte--identical-success.svg" alt="Byte-identical fixpoint"></a>
+  <a href="#platform-support"><img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-blueviolet.svg" alt="Platform"></a>
 </p>
 
 ---
@@ -30,6 +32,17 @@ define main:
 ```
 
 **No curly braces. No semicolons. No noise.** Just code that reads like instructions.
+
+### The headline: Ernos compiles itself, with no Rust in the loop
+
+Ernos ships **two** complete compilers for the same language:
+
+- **`ernos`** — the reference compiler, written in Rust (~30k lines).
+- **`epc`** — the self-hosted compiler, **written entirely in Ernos** (`ep_lexer.ep`, `ep_parser.ep`, `ep_check.ep`, `ep_optimizer.ep`, `ep_codegen.ep`, `epc.ep`).
+
+`epc` compiles **every one of the 54 runnable test programs**, rejects **all 9** compile-error tests through its own semantic checker, and — compiling its own source — reaches a **byte-identical fixpoint** (`gen2 == gen3`). A frozen C snapshot (`bootstrap/epc_bootstrap.c`) means the whole toolchain rebuilds from **clang alone** — no Rust, no `cargo`, no bootstrap chicken-and-egg. This is verified end-to-end on every change, **with zero disclosed caveats**.
+
+> `clang bootstrap/epc_bootstrap.c -o epc && ./epc epc.ep` → a working compiler that recompiles itself and passes the full suite.
 
 ---
 
@@ -294,85 +307,108 @@ Source (.ep)
 
 > **Note:** The codegen phase performs additional ownership checks (use-after-move, borrow violations) as a safety net alongside the dedicated borrow checker. Both must pass for compilation to succeed.
 
-### Compiler Modules
+### Reference compiler (Rust) — `~30,000` lines across 24 modules
 
 | File | Lines | Description |
 |------|-------|-------------|
-| `src/lexer.rs` | ~900 | Tokenizer with indentation tracking |
-| `src/parser.rs` | ~1,640 | Recursive descent parser with Pratt precedence |
-| `src/type_check.rs` | ~1,900 | Type inference via unification (HM-style; no let-generalization) |
-| `src/borrow_check.rs` | ~830 | Ownership, borrowing, Send/Sync analysis |
-| `src/optimizer.rs` | ~1,450 | Constant folding, DCE, CSE, LICM, inlining, loop unrolling |
-| `src/codegen.rs` | ~7,700 | C code generation with full runtime |
-| `src/llvm_codegen.rs` | ~80 | LLVM IR backend (via clang -emit-llvm) |
-| `src/lsp.rs` | ~1,200 | Language Server Protocol implementation |
-| `src/diagnostics.rs` | ~380 | Rich error reporting with ANSI colors |
-| `src/native_codegen.rs` | ~660 | ARM64 native assembly backend (macOS + Linux) |
-| `src/x86_64_codegen.rs` | ~620 | x86_64 native assembly backend (macOS + Linux) |
-| `src/bind_c.rs` | ~1,440 | C header binding generator (zero-dependency) |
-| `src/main.rs` | ~2,090 | CLI, imports, REPL, compilation pipeline |
-| `src/transpile_py.rs` | ~1,880 | Python → ErnosPlain transpiler |
-| `src/transpile_c.rs` | ~1,380 | C → ErnosPlain transpiler |
-| `src/transpile_js.rs` | ~1,240 | JavaScript → ErnosPlain transpiler |
-| `src/transpile_go.rs` | ~1,360 | Go → ErnosPlain transpiler |
-| `src/transpile_rs.rs` | ~1,210 | Rust → ErnosPlain transpiler |
-| `src/transpile_rb.rs` | ~1,080 | Ruby → ErnosPlain transpiler |
-| `src/transpile_java.rs` | ~730 | Java → ErnosPlain transpiler |
-| `src/transpile_ts.rs` | ~730 | TypeScript → ErnosPlain transpiler |
-| `src/emit_c.rs` | ~570 | ErnosPlain → C emitter |
-| `src/emit_js.rs` | ~590 | ErnosPlain → JavaScript emitter |
-| `src/emit_python.rs` | ~640 | ErnosPlain → Python emitter |
-| **Total** | **~32,750** | |
+| `src/lexer.rs` | 896 | Tokenizer with indentation tracking |
+| `src/parser.rs` | 1,639 | Recursive-descent parser with Pratt precedence |
+| `src/type_check.rs` | 1,987 | Type inference via unification (HM-style; no let-generalization) |
+| `src/borrow_check.rs` | 783 | Ownership, borrowing, Send/Sync analysis |
+| `src/optimizer.rs` | 1,577 | Constant folding, DCE, CSE, LICM, inlining, loop unrolling |
+| `src/codegen.rs` | 3,958 | C code generation (runtime lives in `runtime/`, embedded via `include_str!`) |
+| `src/llvm_codegen.rs` | 76 | LLVM IR backend (via `clang -emit-llvm`) |
+| `src/lsp.rs` | 1,198 | Language Server Protocol implementation |
+| `src/diagnostics.rs` | 382 | Rich error reporting with ANSI colors |
+| `src/native_codegen.rs` | 656 | ARM64 native-assembly backend (macOS + Linux) |
+| `src/x86_64_codegen.rs` | 623 | x86-64 native-assembly backend (macOS + Linux) |
+| `src/bind_c.rs` | 1,441 | C-header binding generator (zero-dependency) |
+| `src/main.rs` | 2,087 | CLI, imports, REPL, compilation pipeline |
+| `src/transpile_py.rs` | 2,673 | Python → Ernos transpiler |
+| `src/transpile_c.rs` | 1,376 | C → Ernos transpiler |
+| `src/transpile_js.rs` | 1,235 | JavaScript → Ernos transpiler |
+| `src/transpile_go.rs` | 1,362 | Go → Ernos transpiler |
+| `src/transpile_rs.rs` | 1,211 | Rust → Ernos transpiler |
+| `src/transpile_rb.rs` | 1,080 | Ruby → Ernos transpiler |
+| `src/transpile_java.rs` | 731 | Java → Ernos transpiler |
+| `src/transpile_ts.rs` | 725 | TypeScript → Ernos transpiler |
+| `src/emit_c.rs` | 569 | Ernos → C emitter |
+| `src/emit_js.rs` | 622 | Ernos → JavaScript emitter (enums → ES classes, trait-impl dispatch) |
+| `src/emit_python.rs` | 640 | Ernos → Python emitter |
+| **Total** | **~30,094** | |
+
+### Shared C runtime — one source of truth, embedded by both compilers
+
+| File | Lines | Description |
+|------|-------|-------------|
+| `runtime/ep_runtime.c` | 4,732 | Generational GC (precise STW + conservative stack scan, write barrier, OOM-guarded allocators), pointer-safe object accessors, coroutine/`EpFuture` scheduler, TCP/HTTP, SQLite, crypto, FFI |
+| `runtime/ep_builtins.c` | 161 | Builtin registration glue |
+
+The reference compiler embeds this via `include_str!`; the self-hosted compiler embeds the **byte-for-byte same source** through the generated `ep_runtime_gen.ep` (regenerate with `tools/gen_runtime_ep.ep`). Both compilers therefore emit the identical GC, accessors, and allocators — there is no "runtime drift" between them.
 
 ---
 
-## Self-Hosting
+## Self-Hosting & the Bootstrap
 
-Ernos compiles its own compiler. The self-hosted compiler modules:
+This is the part most languages never finish. Ernos does — and proves it on every commit.
 
-- `ep_lexer.ep` — Lexer (incl. f-string desugaring, English keyword aliases)
-- `ep_parser.ep` — Parser (incl. `import "x" as alias`)
-- `ep_codegen.ep` — Code generator (closures, enums, the shared runtime)
-- `epc.ep` — Compiler driver (module flattening, aliased imports)
+### The self-hosted compiler (`epc`) — written in Ernos, ~6,400 lines
 
-The self-hosted compiler and the Rust compiler **share one C runtime**
-(`runtime/ep_runtime.c` + `runtime/ep_builtins.c`), embedded by the Rust
-compiler via `include_str!` and by the self-hosted compiler via the generated
-`ep_runtime_gen.ep` (regenerate with `tools/gen_runtime_ep.ep`). So both emit
-the same generational GC, pointer-safe accessors, and OOM-guarded allocators.
+| File | Lines | Description |
+|------|-------|-------------|
+| `ep_lexer.ep` | 817 | Lexer — indentation, f-string desugaring, English keyword aliases |
+| `ep_parser.ep` | 1,449 | Parser — full grammar, `import "x" as alias`, traits, enums, closures |
+| `ep_check.ep` | 301 | Semantic checker — reserved-name shadowing, Send-safety, list homogeneity, **enum-variant field-type checking** |
+| `ep_optimizer.ep` | 122 | Constant folding + dead-code elimination |
+| `ep_codegen.ep` | 3,342 | C code generator — closures, floats, traits, iterator protocol, `try`/Result, coroutine async, globals |
+| `epc.ep` | 370 | Compiler driver — module flattening, aliased imports, `check`/`format`/`repl`/`doc` subcommands |
+| `ep_runtime_gen.ep` | 5,070 | Generated: emits the shared C runtime verbatim |
 
-### Stable fixpoint
+The self-hosted pipeline is a full `lex → parse → **check** → **optimize** → codegen`, not just a lex/parse/emit skeleton.
 
-`epc` compiling itself reaches a **byte-identical fixpoint** (gen2 == gen3),
-verified by `tests/run_fixpoint.sh`. Self-hosted coverage of the test suite is
-tracked by `tests/run_epc_parity.sh` (currently 54/54 runnable programs; 8/9
-compile-error tests correctly rejected by the `ep_check.ep` semantic pass).
-`epc check <file>` runs the checks without codegen.
+### What "done" actually means here
 
-The self-hosted pipeline is `lex → parse → check → optimize → codegen`
-(`ep_lexer` · `ep_parser` · `ep_check` · `ep_optimizer` · `ep_codegen`), covering
-the full runnable test suite — closures, floats, traits + the iterator protocol,
-`try`/Result, coroutine async, globals, and the English-alias surface. The Rust
-compiler additionally provides the LSP and
-cross-language transpilers.
+| Gate | Result | Verified by |
+|------|--------|-------------|
+| Reference-compiler suite | **69 / 69** | `./run_tests.sh` |
+| Self-hosted parity (runnable programs `epc` compiles + runs correctly) | **54 / 54** | `bash tests/run_epc_parity.sh` |
+| Compile-error gate (programs `epc`'s checker must reject) | **9 / 9**, 0 wrongly accepted | `bash tests/run_epc_parity.sh` |
+| 3-stage self-compilation fixpoint (`gen2 == gen3`, byte-identical) | **OK** | `bash tests/run_fixpoint.sh` |
+| Rust-free, clang-only bootstrap → recompile → fixpoint → full suite | **OK** | `bash bootstrap/verify.sh` |
+| Cargo build warnings | **0** | `cargo build --release` |
 
-### Fully self-contained bootstrap (no Rust required)
+The self-hosted checker is memory-safe under AddressSanitizer under **both** the Rust-built and the clang-built `epc` — the enum field-type pass, the last feature to land, was hardened against two distinct use-after-free classes (an aliased-sublist local and an unsound list-reassignment free) before it was accepted.
 
-`bootstrap/epc_bootstrap.c` is `epc` compiled by `epc` — the whole toolchain
-builds with only a C compiler:
+### Fully self-contained bootstrap — no Rust required
+
+`bootstrap/epc_bootstrap.c` is `epc` compiled by `epc` (the fixpoint output). The whole toolchain rebuilds from a C compiler alone:
 
 ```bash
 bash bootstrap/build.sh     # clang bootstrap/epc_bootstrap.c -> epc, then epc rebuilds epc.ep
-bash bootstrap/verify.sh    # proves the clang-only 3-stage fixpoint + artifact freshness
+bash bootstrap/verify.sh    # clang-only 3-stage fixpoint + parity suite + artifact-freshness check
 ```
 
-The Rust compiler builds the same self-hosted compiler and is still used for the
-LSP and the cross-language transpilers:
+`bootstrap/verify.sh` asserts the frozen C is **fresh** (matches the current `epc.ep`), so the artifact can never silently drift from source. Any change touching the self-hosted compiler must regenerate the bootstrap in the same commit.
+
+The Rust compiler builds the same self-hosted compiler and remains the home of the two features intentionally kept Rust-only — the **LSP** and the **cross-language transpilers**:
 
 ```bash
 ./target/release/ernos epc.ep   # Rust compiler builds epc
-./epc hello.ep && ./hello       # epc compiles programs
+./epc hello.ep && ./hello       # epc compiles programs — no Rust involved
 ```
+
+---
+
+## The Test Matrix
+
+```bash
+./run_tests.sh                 # reference (Rust) compiler:      69/69
+bash tests/run_epc_parity.sh   # self-hosted: 54/54 runnable + 9/9 rejections
+bash tests/run_fixpoint.sh     # 3-stage byte-identical fixpoint
+bash bootstrap/verify.sh       # clang-only, Rust-free end-to-end proof
+```
+
+Every one of the 63 programs in `tests/` (54 runnable + 9 compile-error) is exercised by **both** compilers. Conformance tests live in [`conformance/`](conformance/); the formal grammar and type/memory/concurrency rules are in [`spec/ernos-spec.md`](spec/ernos-spec.md).
 
 ---
 
