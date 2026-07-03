@@ -1,0 +1,11 @@
+define main:
+    set i to 0
+    repeat while i < 10:
+        set i to i + 1
+        if i % 2 == 0:
+            continue
+        if i > 7:
+            break
+        display i
+    display "done"
+    return 0

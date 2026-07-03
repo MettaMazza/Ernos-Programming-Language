@@ -1,0 +1,10 @@
+define noisy with tag as Int and val as Int returning Int:
+    display tag
+    return val
+
+define main:
+    if noisy(1 and 0) && noisy(2 and 1):
+        display 100
+    if noisy(3 and 1) || noisy(4 and 1):
+        display 200
+    return 0

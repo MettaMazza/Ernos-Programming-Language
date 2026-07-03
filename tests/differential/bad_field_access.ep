@@ -1,0 +1,9 @@
+define structure Point:
+    field x as Int
+    field y as Int
+define main:
+    set p to create Point:
+        x is 1
+        y is 2
+    display p.z
+    return 0

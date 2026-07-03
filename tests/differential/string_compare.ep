@@ -1,0 +1,11 @@
+define main:
+    set a to concat("he" and "llo")
+    set b to concat("hel" and "lo")
+    if a equals b:
+        display "computed strings equal"
+    else:
+        display "BUG pointer compare"
+    set c to substring("xhellox" and 1 and 5)
+    if a equals c:
+        display "substring equal too"
+    return 0

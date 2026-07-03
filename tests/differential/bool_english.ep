@@ -1,0 +1,12 @@
+define main:
+    set a to 5
+    set b to 10
+    if a < b and also b < 20:
+        display "both"
+    if a > b or else a < b:
+        display "one"
+    if not (a equals b):
+        display "different"
+    if a is not equal to b:
+        display "alias works"
+    return 0

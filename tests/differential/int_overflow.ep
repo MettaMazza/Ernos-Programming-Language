@@ -1,0 +1,6 @@
+define main:
+    set x to 4611686018427387904
+    display x + x
+    set y to x * 4
+    display y
+    return 0

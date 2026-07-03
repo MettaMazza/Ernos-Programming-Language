@@ -1,0 +1,5 @@
+define halve with n as Int returning Int:
+    return "half"
+define main:
+    display halve(4)
+    return 0

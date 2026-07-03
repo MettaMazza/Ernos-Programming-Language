@@ -1,0 +1,5 @@
+define add with a as Int and b as Int returning Int:
+    return a + b
+define main:
+    display add(1)
+    return 0

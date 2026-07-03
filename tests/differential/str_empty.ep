@@ -1,0 +1,9 @@
+define main:
+    display string_length("")
+    display concat("" and "")
+    display string_length(concat("" and "x"))
+    display substring("abc" and 1 and 0)
+    display string_length(substring("abc" and 0 and 2))
+    set parts to string_split("" and ",")
+    display length_list(parts)
+    return 0

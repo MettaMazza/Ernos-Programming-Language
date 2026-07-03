@@ -1,0 +1,6 @@
+define main:
+    display "tab:\there"
+    display "line1\nline2"
+    display "quote:\"q\""
+    display "backslash:\\"
+    return 0

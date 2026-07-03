@@ -1,0 +1,5 @@
+define main:
+    set xs to create_list()
+    display pop_list(xs)
+    display length_list(xs)
+    return 0

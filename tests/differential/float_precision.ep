@@ -1,0 +1,11 @@
+define main:
+    set a to 0.1
+    set b to 0.2
+    display a + b
+    set c to 1.0
+    set d to 3.0
+    display c / d
+    set e to 2.5
+    set f to 2.5
+    display e * f
+    return 0

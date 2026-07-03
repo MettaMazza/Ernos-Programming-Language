@@ -60,10 +60,11 @@ cargo run -- epc.ep && ./epc tests/test_basic_math.ep && ./test_basic_math
 # Stronger gates (run after any epc-visible change):
 bash tests/run_fixpoint.sh      # 3-stage byte-identical self-compile
 bash tests/run_epc_parity.sh    # self-hosted coverage scoreboard (must not regress)
+bash tests/run_differential.sh  # both compilers must AGREE on 37 adversarial programs
 bash bootstrap/verify.sh        # clang-only, Rust-free 3-stage fixpoint + parity + freshness
 ```
 
-Current state of these gates: `run_tests.sh` **69/69**, `run_epc_parity.sh` **54/54 runnable + 9/9 compile-error rejections** (0 wrongly accepted), `run_fixpoint.sh` byte-identical, `bootstrap/verify.sh` green.
+Current state of these gates: `run_tests.sh` **71/71**, `run_epc_parity.sh` **53/53 runnable + 12/12 compile-error rejections** (0 wrongly accepted), `run_differential.sh` **37/37 agree**, `run_fixpoint.sh` byte-identical, `bootstrap/verify.sh` green.
 
 The self-hosted compiler is ~6,400 lines of real ErnosPlain — `ep_lexer.ep` (lexer), `ep_parser.ep` (parser), `ep_check.ep` (semantic checker), `ep_optimizer.ep` (constant folding + DCE), `ep_codegen.ep` (C codegen), `epc.ep` (driver) — that exercises the full type system, all builtin functions, list/string operations, struct creation, pattern matching, closures, floats, traits, `try`/Result, and coroutine async. If it doesn't compile, you broke something.
 

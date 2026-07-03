@@ -1,0 +1,10 @@
+define main:
+    set inner to [1, 2]
+    set outer to create_list()
+    set ok to append_list(outer and inner)
+    set ok2 to append_list(outer and inner)
+    set got to get_list(outer and 0)
+    set ok3 to set_list(got and 0 and 99)
+    set other to get_list(outer and 1)
+    display get_list(other and 0)
+    return 0

@@ -1,0 +1,14 @@
+define main:
+    set base to 100
+    set add_base to given x: return x + base
+    display add_base(1)
+    display add_base(2)
+    set fns to create_list()
+    set i to 0
+    repeat while i < 3:
+        set f to given y: return y * 10
+        set ok to append_list(fns and f)
+        set i to i + 1
+    set g to get_list(fns and 1)
+    display g(7)
+    return 0

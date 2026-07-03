@@ -1,0 +1,6 @@
+define main:
+    set s to "héllo wörld 世界"
+    display s
+    display string_length(s)
+    display string_upper("straße")
+    return 0

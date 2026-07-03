@@ -1,0 +1,7 @@
+define main:
+    set a to 10
+    set b to 0
+    if a > 100:
+        set b to 1
+    display a / b
+    return 0

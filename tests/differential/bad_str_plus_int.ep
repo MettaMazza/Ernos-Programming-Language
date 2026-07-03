@@ -1,0 +1,4 @@
+define main:
+    set s to "abc" + 5
+    display s
+    return 0

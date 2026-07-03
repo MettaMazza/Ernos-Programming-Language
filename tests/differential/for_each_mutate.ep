@@ -1,0 +1,11 @@
+define main:
+    set xs to [1, 2, 3]
+    set total to 0
+    for each x in xs:
+        set total to total + x
+        set ok to append_list(xs and x)
+        if length_list(xs) > 10:
+            break
+    display total
+    display length_list(xs)
+    return 0

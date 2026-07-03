@@ -1,0 +1,11 @@
+define main:
+    set fns to create_list()
+    set i to 0
+    repeat while i < 3:
+        set g to given y:
+            return y * 10
+        set ok to append_list(fns and g)
+        set i to i + 1
+    set h to get_list(fns and 1)
+    display h(7)
+    return 0

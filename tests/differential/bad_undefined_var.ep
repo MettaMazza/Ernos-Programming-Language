@@ -1,0 +1,3 @@
+define main:
+    display mystery_value
+    return 0

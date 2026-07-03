@@ -1,0 +1,17 @@
+define main:
+    set m to create_map()
+    set i to 0
+    repeat while i < 5000:
+        set key to concat("k" and int_to_string(i))
+        set ok to map_insert(m and key and i * 2)
+        set i to i + 1
+    display map_size(m)
+    display map_get_val(m and "k4999")
+    display map_contains(m and "missing")
+    set j to 0
+    repeat while j < 2500:
+        set dk to concat("k" and int_to_string(j))
+        set ok2 to map_delete(m and dk)
+        set j to j + 1
+    display map_size(m)
+    return 0

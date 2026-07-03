@@ -1,0 +1,8 @@
+define main:
+    set t to true
+    set f to false
+    if not f:
+        display "not-false"
+    if not t:
+        display "WRONG"
+    return 0

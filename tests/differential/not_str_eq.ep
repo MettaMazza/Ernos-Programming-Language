@@ -1,0 +1,6 @@
+define main:
+    set a to "x"
+    set b to "y"
+    if not (a equals b):
+        display "str-ne"
+    return 0

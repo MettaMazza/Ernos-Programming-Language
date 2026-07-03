@@ -1,0 +1,10 @@
+define main:
+    set a to 0 - 7
+    set b to 2
+    display a / b
+    display a % b
+    set c to 7
+    set d to 0 - 2
+    display c / d
+    display c % d
+    return 0

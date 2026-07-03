@@ -1,0 +1,24 @@
+define choice Color:
+    variant Red
+    variant Green
+    variant Blue
+
+define name_of with c as Color returning Int:
+    check c:
+        if Red:
+            display "red"
+            return 1
+        if Green:
+            display "green"
+            return 2
+        if Blue:
+            display "blue"
+            return 3
+    return 0
+
+define main:
+    set r to Red
+    set g to Green
+    display name_of(r)
+    display name_of(g)
+    return 0

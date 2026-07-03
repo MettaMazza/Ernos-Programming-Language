@@ -1,0 +1,7 @@
+define choice Color:
+    variant Red
+    variant Green
+define main:
+    set c to Purple
+    display 1
+    return 0

@@ -21,43 +21,23 @@ jobs:
       - name: Run unit tests
         run: cargo test --release
 
-      - name: Syntax check — test_core.ep
-        run: cargo run --release -- --check tests/test_core.ep
+      - name: Full test suite (run_tests.sh)
+        run: ./run_tests.sh
 
-      - name: Syntax check — test_strings.ep
-        run: cargo run --release -- --check tests/test_strings.ep
+      - name: Build the self-hosted compiler (epc)
+        run: ./target/release/ernos epc.ep
 
-      - name: Syntax check — test_math.ep
-        run: cargo run --release -- --check tests/test_math.ep
+      - name: Self-hosted parity + rejection suite
+        run: bash tests/run_epc_parity.sh
 
-      - name: Syntax check — test_data.ep
-        run: cargo run --release -- --check tests/test_data.ep
+      - name: Differential suite (ernos vs epc must agree)
+        run: bash tests/run_differential.sh
 
-      - name: Compile and run test_core.ep
-        run: |
-          cargo run --release -- tests/test_core.ep
-          ./tests/test_core
+      - name: 3-stage self-compilation fixpoint (gen2 == gen3)
+        run: bash tests/run_fixpoint.sh
 
-      - name: Compile and run test_strings.ep
-        run: |
-          cargo run --release -- tests/test_strings.ep
-          ./tests/test_strings
-
-      - name: Compile and run test_math.ep
-        run: |
-          cargo run --release -- tests/test_math.ep
-          ./tests/test_math
-
-      - name: Compile and run test_float_ffi.ep
-        run: |
-          cargo run --release -- tests/test_float_ffi.ep
-          ./tests/test_float_ffi
-
-      - name: Compile demo — creature_quest_demo5.ep
-        run: cargo run --release -- demos/creature_quest_demo5.ep
-
-      - name: Syntax check — epc.ep (self-hosted compiler)
-        run: cargo run --release -- --check epc.ep
+      - name: Clang-only bootstrap (no Rust) — build, fixpoint, freshness
+        run: bash bootstrap/verify.sh
 
       - name: Run conformance tests
         run: |
@@ -90,7 +70,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y gcc
+        run: sudo apt-get update && sudo apt-get install -y clang
 
       - name: Build (release)
         run: cargo build --release
@@ -98,31 +78,23 @@ jobs:
       - name: Run unit tests
         run: cargo test --release
 
-      - name: Syntax check — test_core.ep
-        run: cargo run --release -- --check tests/test_core.ep
+      - name: Full test suite (run_tests.sh)
+        run: ./run_tests.sh
 
-      - name: Compile and run test_core.ep
-        run: |
-          cargo run --release -- tests/test_core.ep
-          ./tests/test_core
+      - name: Build the self-hosted compiler (epc)
+        run: ./target/release/ernos epc.ep
 
-      - name: Compile and run test_strings.ep
-        run: |
-          cargo run --release -- tests/test_strings.ep
-          ./tests/test_strings
+      - name: Self-hosted parity + rejection suite
+        run: bash tests/run_epc_parity.sh
 
-      - name: Compile and run test_math.ep
-        run: |
-          cargo run --release -- tests/test_math.ep
-          ./tests/test_math
+      - name: Differential suite (ernos vs epc must agree)
+        run: bash tests/run_differential.sh
 
-      - name: Compile and run test_float_ffi.ep
-        run: |
-          cargo run --release -- tests/test_float_ffi.ep
-          ./tests/test_float_ffi
+      - name: 3-stage self-compilation fixpoint (gen2 == gen3)
+        run: bash tests/run_fixpoint.sh
 
-      - name: Syntax check — epc.ep (self-hosted compiler)
-        run: cargo run --release -- --check epc.ep
+      - name: Clang-only bootstrap (no Rust) — build, fixpoint, freshness
+        run: bash bootstrap/verify.sh
 
       - name: Run conformance tests
         run: |

@@ -1,0 +1,8 @@
+define main:
+    set s to ""
+    set i to 0
+    repeat while i < 5000:
+        set s to concat(s and "ab")
+        set i to i + 1
+    display string_length(s)
+    return 0
