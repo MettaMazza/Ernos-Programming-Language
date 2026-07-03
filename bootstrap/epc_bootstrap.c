@@ -1776,6 +1776,7 @@ long long channel_try_recv(long long chan_ptr, long long out_ptr);
 long long channel_has_data(long long chan_ptr);
 long long channel_select(long long channels_list, long long timeout_ms);
 long long ep_auto_to_string(long long val);
+long long ep_float_to_string(long long bits);
 
 typedef struct EpChannel_ {
     long long* data;
@@ -4493,6 +4494,19 @@ long long ep_auto_to_string(long long val) {
     // Otherwise, convert integer to string
     char* buf = (char*)malloc(32);
     snprintf(buf, 32, "%lld", val);
+    ep_gc_register(buf, EP_OBJ_STRING);
+    return (long long)buf;
+}
+
+/* Format a Float (double bits carried in a long long) as a string. F-string
+   interpolation routes Float-typed expressions here: ep_auto_to_string cannot
+   know the bits are a double and would print them as a huge integer. Uses the
+   same %.15g format as `display` so a float reads identically both ways. */
+long long ep_float_to_string(long long bits) {
+    double d;
+    memcpy(&d, &bits, sizeof(double));
+    char* buf = (char*)malloc(40);
+    snprintf(buf, 40, "%.15g", d);
     ep_gc_register(buf, EP_OBJ_STRING);
     return (long long)buf;
 }
@@ -11648,6 +11662,7 @@ long long analyze_return_types(long long state, long long program) {
     ok = map_put(keys, values, (long long)"ep_sleep_ms", 1LL);
     ok = map_put(keys, values, (long long)"concat", 3LL);
     ok = map_put(keys, values, (long long)"ep_auto_to_string", 3LL);
+    ok = map_put(keys, values, (long long)"ep_float_to_string", 3LL);
     ok = map_put(keys, values, (long long)"int_to_string", 3LL);
     ok = map_put(keys, values, (long long)"ep_int_to_str", 3LL);
     ok = map_put(keys, values, (long long)"string_upper", 3LL);
@@ -13194,6 +13209,7 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     long long is_string = 0;
     long long cmp_op = 0;
     long long args = 0;
+    long long fexpr = 0;
     long long args_len = 0;
     long long formatted_args = 0;
     long long idx = 0;
@@ -13310,6 +13326,7 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     ep_gc_push_root(&lu);
     ep_gc_push_root(&ru);
     ep_gc_push_root(&fr2);
+    ep_gc_push_root(&fexpr);
     ep_gc_push_root(&formatted_args);
     ep_gc_push_root(&arg_val);
     ep_gc_push_root(&casted);
@@ -13560,6 +13577,17 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     if (type == 6LL) {
     name = get_list(expr, 1LL);
     args = get_list(expr, 2LL);
+    if ((strcmp((char*)(long long)"ep_auto_to_string", (char*)name) == 0)) {
+    if (length_list(args) == 1LL) {
+    if (infer_type(state, get_list(args, 0LL), var_keys, var_values) == 8LL) {
+    fexpr = gen_expr(state, get_list(args, 0LL), var_keys, var_values);
+    fres = string_concat((long long)"ep_float_to_string(", fexpr);
+    fres = string_concat(fres, (long long)")");
+    ret_val = fres;
+    goto L_cleanup;
+    }
+    }
+    }
     args_len = length_list(args);
     formatted_args = create_list();
     idx = 0LL;
@@ -14018,7 +14046,7 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     ret_val = (long long)"";
     goto L_cleanup;
 L_cleanup:
-    ep_gc_pop_roots(38);
+    ep_gc_pop_roots(39);
     return ret_val;
 }
 
@@ -17504,6 +17532,7 @@ long long ep_rt_core_11() {
     ok = append_list(lines, (long long)"long long channel_has_data(long long chan_ptr);\n");
     ok = append_list(lines, (long long)"long long channel_select(long long channels_list, long long timeout_ms);\n");
     ok = append_list(lines, (long long)"long long ep_auto_to_string(long long val);\n");
+    ok = append_list(lines, (long long)"long long ep_float_to_string(long long bits);\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"typedef struct EpChannel_ {\n");
     ok = append_list(lines, (long long)"    long long* data;\n");
@@ -17525,7 +17554,6 @@ long long ep_rt_core_11() {
     ok = append_list(lines, (long long)"static int ep_channel_count = 0;\n");
     ok = append_list(lines, (long long)"static pthread_mutex_t ep_channel_registry_mutex = PTHREAD_MUTEX_INITIALIZER;\n");
     ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"static void ep_register_channel(EpChannel* chan) {\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -17542,6 +17570,7 @@ long long ep_rt_core_12() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"static void ep_register_channel(EpChannel* chan) {\n");
     ok = append_list(lines, (long long)"    pthread_mutex_lock(&ep_channel_registry_mutex);\n");
     ok = append_list(lines, (long long)"    if (ep_channel_count < EP_MAX_CHANNELS) {\n");
     ok = append_list(lines, (long long)"        ep_channel_registry[ep_channel_count++] = chan;\n");
@@ -17691,7 +17720,6 @@ long long ep_rt_core_12() {
     ok = append_list(lines, (long long)"    while (1) {\n");
     ok = append_list(lines, (long long)"        // Poll all channels\n");
     ok = append_list(lines, (long long)"        for (long long i = 0; i < list->length; i++) {\n");
-    ok = append_list(lines, (long long)"            EpChannel* chan = (EpChannel*)list->data[i];\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -17708,6 +17736,7 @@ long long ep_rt_core_13() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"            EpChannel* chan = (EpChannel*)list->data[i];\n");
     ok = append_list(lines, (long long)"            if (chan) {\n");
     ok = append_list(lines, (long long)"                ep_mutex_lock(&chan->mutex);\n");
     ok = append_list(lines, (long long)"                if (chan->size > 0) {\n");
@@ -17857,7 +17886,6 @@ long long ep_rt_core_13() {
     ok = append_list(lines, (long long)"    int opt = 1;\n");
     ok = append_list(lines, (long long)"    setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));\n");
     ok = append_list(lines, (long long)"    struct sockaddr_in serv_addr;\n");
-    ok = append_list(lines, (long long)"    memset(&serv_addr, 0, sizeof(serv_addr));\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -17874,6 +17902,7 @@ long long ep_rt_core_14() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"    memset(&serv_addr, 0, sizeof(serv_addr));\n");
     ok = append_list(lines, (long long)"    serv_addr.sin_family = AF_INET;\n");
     ok = append_list(lines, (long long)"    serv_addr.sin_addr.s_addr = INADDR_ANY;\n");
     ok = append_list(lines, (long long)"    serv_addr.sin_port = htons(port);\n");
@@ -18023,7 +18052,6 @@ long long ep_rt_core_14() {
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"long long ep_dlcall0(long long fptr) {\n");
     ok = append_list(lines, (long long)"    return ((ep_fn0)fptr)();\n");
-    ok = append_list(lines, (long long)"}\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -18040,6 +18068,7 @@ long long ep_rt_core_15() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"long long ep_dlcall1(long long fptr, long long a0) {\n");
     ok = append_list(lines, (long long)"    return ((ep_fn1)fptr)(a0);\n");
     ok = append_list(lines, (long long)"}\n");
@@ -18189,7 +18218,6 @@ long long ep_rt_core_15() {
     ok = append_list(lines, (long long)"            ep_gc_mark_object_minor((void*)map->entries[i].value);\n");
     ok = append_list(lines, (long long)"        }\n");
     ok = append_list(lines, (long long)"        if (map->entries[i].used && map->entries[i].key != NULL) {\n");
-    ok = append_list(lines, (long long)"            ep_gc_mark_object_minor((void*)map->entries[i].key);\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -18206,6 +18234,7 @@ long long ep_rt_core_16() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"            ep_gc_mark_object_minor((void*)map->entries[i].key);\n");
     ok = append_list(lines, (long long)"        }\n");
     ok = append_list(lines, (long long)"    }\n");
     ok = append_list(lines, (long long)"}\n");
@@ -18355,7 +18384,6 @@ long long ep_rt_core_16() {
     ok = append_list(lines, (long long)"            while (map->entries[next_h].used) {\n");
     ok = append_list(lines, (long long)"                char* k = map->entries[next_h].key;\n");
     ok = append_list(lines, (long long)"                long long v = map->entries[next_h].value;\n");
-    ok = append_list(lines, (long long)"                map->entries[next_h].key = NULL;\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -18372,6 +18400,7 @@ long long ep_rt_core_17() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"                map->entries[next_h].key = NULL;\n");
     ok = append_list(lines, (long long)"                map->entries[next_h].value = 0;\n");
     ok = append_list(lines, (long long)"                map->entries[next_h].used = 0;\n");
     ok = append_list(lines, (long long)"                map->size--;\n");
@@ -18521,7 +18550,6 @@ long long ep_rt_core_17() {
     ok = append_list(lines, (long long)"    if (!dq) return 0;\n");
     ok = append_list(lines, (long long)"    free(dq->data);\n");
     ok = append_list(lines, (long long)"    free(dq);\n");
-    ok = append_list(lines, (long long)"    return 0;\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -18538,6 +18566,7 @@ long long ep_rt_core_18() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"    return 0;\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"/* Filesystem Operations */\n");
@@ -18687,7 +18716,6 @@ long long ep_rt_core_18() {
     ok = append_list(lines, (long long)"        \"%s %s HTTP/1.1\\r\\n\"\n");
     ok = append_list(lines, (long long)"        \"Host: %s\\r\\n\"\n");
     ok = append_list(lines, (long long)"        \"Content-Length: %zu\\r\\n\"\n");
-    ok = append_list(lines, (long long)"        \"Connection: close\\r\\n\"\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -18704,6 +18732,7 @@ long long ep_rt_core_19() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"        \"Connection: close\\r\\n\"\n");
     ok = append_list(lines, (long long)"        \"%s%s\"\n");
     ok = append_list(lines, (long long)"        \"\\r\\n\",\n");
     ok = append_list(lines, (long long)"        method, path, host, body_len, headers ? headers : \"\", (headers && strlen(headers) > 0 && headers[strlen(headers)-1] != '\\n') ? \"\\r\\n\" : \"\");\n");
@@ -18853,7 +18882,6 @@ long long ep_rt_core_19() {
     ok = append_list(lines, (long long)"    ep_sha256_final(&ctx, hash);\n");
     ok = append_list(lines, (long long)"    char* result = malloc(65);\n");
     ok = append_list(lines, (long long)"    if (result) {\n");
-    ok = append_list(lines, (long long)"        for (int i = 0; i < 32; i++) {\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -18870,6 +18898,7 @@ long long ep_rt_core_20() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"        for (int i = 0; i < 32; i++) {\n");
     ok = append_list(lines, (long long)"            snprintf(result + (i * 2), 3, \"%02x\", hash[i]);\n");
     ok = append_list(lines, (long long)"        }\n");
     ok = append_list(lines, (long long)"        result[64] = '\\0';\n");
@@ -19019,7 +19048,6 @@ long long ep_rt_core_20() {
     ok = append_list(lines, (long long)"void ep_md5_final(EP_MD5_CTX *ctx, unsigned char digest[16]) {\n");
     ok = append_list(lines, (long long)"    unsigned char bits[8];\n");
     ok = append_list(lines, (long long)"    bits[0] = ctx->count[0]; bits[1] = ctx->count[0] >> 8; bits[2] = ctx->count[0] >> 16; bits[3] = ctx->count[0] >> 24;\n");
-    ok = append_list(lines, (long long)"    bits[4] = ctx->count[1]; bits[5] = ctx->count[1] >> 8; bits[6] = ctx->count[1] >> 16; bits[7] = ctx->count[1] >> 24;\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -19036,6 +19064,7 @@ long long ep_rt_core_21() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"    bits[4] = ctx->count[1]; bits[5] = ctx->count[1] >> 8; bits[6] = ctx->count[1] >> 16; bits[7] = ctx->count[1] >> 24;\n");
     ok = append_list(lines, (long long)"    unsigned int index = (ctx->count[0] >> 3) & 0x3F, pad_len = (index < 56) ? (56 - index) : (120 - index);\n");
     ok = append_list(lines, (long long)"    unsigned char padding[64];\n");
     ok = append_list(lines, (long long)"    memset(padding, 0, 64); padding[0] = 0x80;\n");
@@ -19185,7 +19214,6 @@ long long ep_rt_core_21() {
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"long long sqlite_get_callback_ptr(long long dummy) {\n");
     ok = append_list(lines, (long long)"    return (long long)sqlite_list_callback;\n");
-    ok = append_list(lines, (long long)"}\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -19202,6 +19230,7 @@ long long ep_rt_core_22() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"/* SQLite type-safe wrappers — marshal between int and long long */\n");
     ok = append_list(lines, (long long)"#ifdef EP_HAS_SQLITE\n");
@@ -19351,7 +19380,6 @@ long long ep_rt_core_22() {
     ok = append_list(lines, (long long)"    char* sub = malloc(len + 1);\n");
     ok = append_list(lines, (long long)"    if (!sub) {\n");
     ok = append_list(lines, (long long)"        char* empty = malloc(1);\n");
-    ok = append_list(lines, (long long)"        if (empty) empty[0] = '\\0';\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -19368,6 +19396,7 @@ long long ep_rt_core_23() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"        if (empty) empty[0] = '\\0';\n");
     ok = append_list(lines, (long long)"        ep_gc_register(empty, EP_OBJ_STRING);\n");
     ok = append_list(lines, (long long)"        return empty;\n");
     ok = append_list(lines, (long long)"    }\n");
@@ -19517,7 +19546,6 @@ long long ep_rt_core_23() {
     ok = append_list(lines, (long long)"    const char* path = (const char*)path_ptr;\n");
     ok = append_list(lines, (long long)"    const char* content = (const char*)content_ptr;\n");
     ok = append_list(lines, (long long)"    FILE* f = fopen(path, \"ab\");\n");
-    ok = append_list(lines, (long long)"    if (!f) return 0;\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -19534,6 +19562,7 @@ long long ep_rt_core_24() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"    if (!f) return 0;\n");
     ok = append_list(lines, (long long)"    fputs(content, f);\n");
     ok = append_list(lines, (long long)"    fclose(f);\n");
     ok = append_list(lines, (long long)"    return 1;\n");
@@ -19683,7 +19712,6 @@ long long ep_rt_core_24() {
     ok = append_list(lines, (long long)"    const char* val = getenv((const char*)name_ptr);\n");
     ok = append_list(lines, (long long)"    return val ? (long long)val : (long long)\"\";\n");
     ok = append_list(lines, (long long)"}\n");
-    ok = append_list(lines, (long long)"\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -19700,6 +19728,7 @@ long long ep_rt_core_25() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"long long ep_setenv(long long name_ptr, long long val_ptr) {\n");
     ok = append_list(lines, (long long)"    return setenv((const char*)name_ptr, (const char*)val_ptr, 1) == 0 ? 1 : 0;\n");
     ok = append_list(lines, (long long)"}\n");
@@ -19849,7 +19878,6 @@ long long ep_rt_core_25() {
     ok = append_list(lines, (long long)"long long ep_rwlock_create(void) {\n");
     ok = append_list(lines, (long long)"    SRWLOCK* rwl = (SRWLOCK*)malloc(sizeof(SRWLOCK));\n");
     ok = append_list(lines, (long long)"    InitializeSRWLock(rwl);\n");
-    ok = append_list(lines, (long long)"    return (long long)rwl;\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -19866,6 +19894,7 @@ long long ep_rt_core_26() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"    return (long long)rwl;\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"long long ep_rwlock_read_lock(long long rwl) {\n");
     ok = append_list(lines, (long long)"    AcquireSRWLockShared((SRWLOCK*)rwl);\n");
@@ -20015,7 +20044,6 @@ long long ep_rt_core_26() {
     ok = append_list(lines, (long long)"    return 0;\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"/* Semaphore via mutex+condvar (portable) */\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -20032,6 +20060,7 @@ long long ep_rt_core_27() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"/* Semaphore via mutex+condvar (portable) */\n");
     ok = append_list(lines, (long long)"typedef struct {\n");
     ok = append_list(lines, (long long)"    pthread_mutex_t mutex;\n");
     ok = append_list(lines, (long long)"    pthread_cond_t cond;\n");
@@ -20181,7 +20210,6 @@ long long ep_rt_core_27() {
     ok = append_list(lines, (long long)"    memcpy(result, text, match.rm_so);\n");
     ok = append_list(lines, (long long)"    memcpy(result + match.rm_so, repl, rlen);\n");
     ok = append_list(lines, (long long)"    memcpy(result + match.rm_so + rlen, text + match.rm_eo, tlen - match.rm_eo);\n");
-    ok = append_list(lines, (long long)"    result[new_len] = '\\0';\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -20198,6 +20226,7 @@ long long ep_rt_core_28() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"    result[new_len] = '\\0';\n");
     ok = append_list(lines, (long long)"    regfree(&regex);\n");
     ok = append_list(lines, (long long)"    return (long long)result;\n");
     ok = append_list(lines, (long long)"}\n");
@@ -20347,7 +20376,6 @@ long long ep_rt_core_28() {
     ok = append_list(lines, (long long)"    if (!result) return (long long)strdup(s);\n");
     ok = append_list(lines, (long long)"    char* dst = result;\n");
     ok = append_list(lines, (long long)"    p = s;\n");
-    ok = append_list(lines, (long long)"    while (*p) {\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -20364,6 +20392,7 @@ long long ep_rt_core_29() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"    while (*p) {\n");
     ok = append_list(lines, (long long)"        if (strncmp(p, old_str, old_len) == 0) {\n");
     ok = append_list(lines, (long long)"            memcpy(dst, new_str, new_len);\n");
     ok = append_list(lines, (long long)"            dst += new_len;\n");
@@ -20513,7 +20542,6 @@ long long ep_rt_core_29() {
     ok = append_list(lines, (long long)"    return (long long)buf;\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"long long ep_random_int(long long min, long long max) {\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -20530,6 +20558,20 @@ long long ep_rt_core_30() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"/* Format a Float (double bits carried in a long long) as a string. F-string\n");
+    ok = append_list(lines, (long long)"   interpolation routes Float-typed expressions here: ep_auto_to_string cannot\n");
+    ok = append_list(lines, (long long)"   know the bits are a double and would print them as a huge integer. Uses the\n");
+    ok = append_list(lines, (long long)"   same %.15g format as `display` so a float reads identically both ways. */\n");
+    ok = append_list(lines, (long long)"long long ep_float_to_string(long long bits) {\n");
+    ok = append_list(lines, (long long)"    double d;\n");
+    ok = append_list(lines, (long long)"    memcpy(&d, &bits, sizeof(double));\n");
+    ok = append_list(lines, (long long)"    char* buf = (char*)malloc(40);\n");
+    ok = append_list(lines, (long long)"    snprintf(buf, 40, \"%.15g\", d);\n");
+    ok = append_list(lines, (long long)"    ep_gc_register(buf, EP_OBJ_STRING);\n");
+    ok = append_list(lines, (long long)"    return (long long)buf;\n");
+    ok = append_list(lines, (long long)"}\n");
+    ok = append_list(lines, (long long)"\n");
+    ok = append_list(lines, (long long)"long long ep_random_int(long long min, long long max) {\n");
     ok = append_list(lines, (long long)"    if (max <= min) return min;\n");
     ok = append_list(lines, (long long)"    /* Draw from the OS CSPRNG with rejection sampling to avoid modulo bias. */\n");
     ok = append_list(lines, (long long)"    unsigned long long range = (unsigned long long)(max - min) + 1ULL;\n");
@@ -20666,20 +20708,6 @@ long long ep_rt_core_30() {
     ok = append_list(lines, (long long)"    size_t len = strlen((const char*)data);\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"    unsigned int h0 = 0x67452301, h1 = 0xEFCDAB89, h2 = 0x98BADCFE, h3 = 0x10325476, h4 = 0xC3D2E1F0;\n");
-    ok = append_list(lines, (long long)"    size_t new_len = len + 1;\n");
-    ok = append_list(lines, (long long)"    while (new_len % 64 != 56) new_len++;\n");
-    ok = append_list(lines, (long long)"    unsigned char* msg = (unsigned char*)calloc(new_len + 8, 1);\n");
-    ok = append_list(lines, (long long)"    memcpy(msg, data, len);\n");
-    ok = append_list(lines, (long long)"    msg[len] = 0x80;\n");
-    ok = append_list(lines, (long long)"    unsigned long long bits_len = (unsigned long long)len * 8;\n");
-    ok = append_list(lines, (long long)"    for (int i = 0; i < 8; i++) msg[new_len + 7 - i] = (unsigned char)(bits_len >> (i * 8));\n");
-    ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"    for (size_t offset = 0; offset < new_len + 8; offset += 64) {\n");
-    ok = append_list(lines, (long long)"        unsigned int w[80];\n");
-    ok = append_list(lines, (long long)"        for (int i = 0; i < 16; i++) {\n");
-    ok = append_list(lines, (long long)"            w[i] = ((unsigned int)msg[offset + i*4] << 24) | ((unsigned int)msg[offset + i*4+1] << 16) |\n");
-    ok = append_list(lines, (long long)"                    ((unsigned int)msg[offset + i*4+2] << 8) | (unsigned int)msg[offset + i*4+3];\n");
-    ok = append_list(lines, (long long)"        }\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -20696,6 +20724,20 @@ long long ep_rt_core_31() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"    size_t new_len = len + 1;\n");
+    ok = append_list(lines, (long long)"    while (new_len % 64 != 56) new_len++;\n");
+    ok = append_list(lines, (long long)"    unsigned char* msg = (unsigned char*)calloc(new_len + 8, 1);\n");
+    ok = append_list(lines, (long long)"    memcpy(msg, data, len);\n");
+    ok = append_list(lines, (long long)"    msg[len] = 0x80;\n");
+    ok = append_list(lines, (long long)"    unsigned long long bits_len = (unsigned long long)len * 8;\n");
+    ok = append_list(lines, (long long)"    for (int i = 0; i < 8; i++) msg[new_len + 7 - i] = (unsigned char)(bits_len >> (i * 8));\n");
+    ok = append_list(lines, (long long)"\n");
+    ok = append_list(lines, (long long)"    for (size_t offset = 0; offset < new_len + 8; offset += 64) {\n");
+    ok = append_list(lines, (long long)"        unsigned int w[80];\n");
+    ok = append_list(lines, (long long)"        for (int i = 0; i < 16; i++) {\n");
+    ok = append_list(lines, (long long)"            w[i] = ((unsigned int)msg[offset + i*4] << 24) | ((unsigned int)msg[offset + i*4+1] << 16) |\n");
+    ok = append_list(lines, (long long)"                    ((unsigned int)msg[offset + i*4+2] << 8) | (unsigned int)msg[offset + i*4+3];\n");
+    ok = append_list(lines, (long long)"        }\n");
     ok = append_list(lines, (long long)"        for (int i = 16; i < 80; i++) w[i] = sha1_left_rotate(w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16], 1);\n");
     ok = append_list(lines, (long long)"        unsigned int a = h0, b = h1, c = h2, d = h3, e = h4;\n");
     ok = append_list(lines, (long long)"        for (int i = 0; i < 80; i++) {\n");

@@ -1776,6 +1776,7 @@ long long channel_try_recv(long long chan_ptr, long long out_ptr);
 long long channel_has_data(long long chan_ptr);
 long long channel_select(long long channels_list, long long timeout_ms);
 long long ep_auto_to_string(long long val);
+long long ep_float_to_string(long long bits);
 
 typedef struct EpChannel_ {
     long long* data;
@@ -4493,6 +4494,19 @@ long long ep_auto_to_string(long long val) {
     // Otherwise, convert integer to string
     char* buf = (char*)malloc(32);
     snprintf(buf, 32, "%lld", val);
+    ep_gc_register(buf, EP_OBJ_STRING);
+    return (long long)buf;
+}
+
+/* Format a Float (double bits carried in a long long) as a string. F-string
+   interpolation routes Float-typed expressions here: ep_auto_to_string cannot
+   know the bits are a double and would print them as a huge integer. Uses the
+   same %.15g format as `display` so a float reads identically both ways. */
+long long ep_float_to_string(long long bits) {
+    double d;
+    memcpy(&d, &bits, sizeof(double));
+    char* buf = (char*)malloc(40);
+    snprintf(buf, 40, "%.15g", d);
     ep_gc_register(buf, EP_OBJ_STRING);
     return (long long)buf;
 }

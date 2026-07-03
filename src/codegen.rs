@@ -537,6 +537,7 @@ impl Codegen {
         self.func_return_types.insert("channel_has_data".to_string(), Type::Int);
         self.func_return_types.insert("channel_select".to_string(), Type::Int);
         self.func_return_types.insert("ep_auto_to_string".to_string(), Type::DynStr);
+        self.func_return_types.insert("ep_float_to_string".to_string(), Type::DynStr);
         self.func_return_types.insert("string_upper".to_string(), Type::DynStr);
         self.func_return_types.insert("string_lower".to_string(), Type::DynStr);
         self.func_return_types.insert("string_trim".to_string(), Type::DynStr);
@@ -2072,6 +2073,16 @@ impl Codegen {
                 Ok(format!("({} {} {})", left_str, op_str, right_str))
             }
             ExprNode::Call(name, args) => {
+                // F-string interpolation of a Float: ep_auto_to_string would print
+                // the double's raw bits as an integer, so route to the float
+                // formatter (same %.15g as `display`).
+                if name == "ep_auto_to_string" && args.len() == 1
+                    && self.infer_type(&args[0], var_types) == Type::Float
+                {
+                    let inner = self.gen_expr(&args[0], var_types)?;
+                    return Ok(format!("ep_float_to_string({})", inner));
+                }
+
                 let mut args_str = Vec::new();
                 for arg in args {
                     args_str.push(self.gen_expr(arg, var_types)?);

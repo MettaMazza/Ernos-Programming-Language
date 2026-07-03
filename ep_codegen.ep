@@ -601,6 +601,7 @@ define analyze_return_types with state and program:
     # String builtins from the shared runtime (TYPE_DYNSTR = 3 unless noted)
     set ok to map_put(keys and values and "concat" and 3)
     set ok to map_put(keys and values and "ep_auto_to_string" and 3)
+    set ok to map_put(keys and values and "ep_float_to_string" and 3)
     set ok to map_put(keys and values and "int_to_string" and 3)
     set ok to map_put(keys and values and "ep_int_to_str" and 3)
     set ok to map_put(keys and values and "string_upper" and 3)
@@ -1888,7 +1889,18 @@ define gen_expr with state and expr and var_keys and var_values:
     if type == 6: # NODE_CALL
         set name to get_list(expr and 1)
         set args to get_list(expr and 2)
-        
+
+        # F-string interpolation of a Float: ep_auto_to_string would print the
+        # double's raw bits as an integer, so route to the float formatter
+        # (same %.15g as display). Mirrors the reference compiler.
+        if "ep_auto_to_string" equals name:
+            if length_list(args) == 1:
+                if infer_type(state and get_list(args and 0) and var_keys and var_values) == 8:
+                    set fexpr to gen_expr(state and get_list(args and 0) and var_keys and var_values)
+                    set fres to string_concat("ep_float_to_string(" and fexpr)
+                    set fres to string_concat(fres and ")")
+                    return fres
+
         set args_len to length_list(args)
         set formatted_args to create_list()
         

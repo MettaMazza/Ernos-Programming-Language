@@ -1,0 +1,300 @@
+# ═══════════════════════════════════════════════════════════════════
+#  The Plainville Bakery — the Ernos flagship demo
+#
+#  One ordinary morning at a bakery, written in plain English and
+#  exercising the whole language:
+#
+#    structs + methods          traits + implement       enums + check
+#    try / Result errors        closures + HOF           custom iterators
+#    async ovens (event loop)   spawned workers/channels floats + ints
+#    f-strings                  lists + maps             file I/O
+#    sha256 receipts            recursion                break / continue
+#    English aliases: equals, is not equal to, and also, or else, not
+#
+#  Compile and run (either compiler — the output is identical):
+#      ernos examples/bakery.ep && ./examples/bakery
+#      ./epc  examples/bakery.ep && ./bakery
+# ═══════════════════════════════════════════════════════════════════
+
+import "collections"
+
+# ───────────────────────── The goods ─────────────────────────
+
+define structure Pastry:
+    field name as Str
+    field price_cents as Int
+    field stock as Int
+
+define trait Describable:
+    define describe returning Str
+
+implement Describable for Pastry:
+    define describe returning Str:
+        return f"{self.name} ({self.price_cents} cents, {self.stock} left)"
+
+# A sale either succeeds with a total, or tells you plainly why not.
+define choice Outcome:
+    variant Sold with total as Int
+    variant Refused with reason as Str
+
+define sell on Pastry with qty as Int returning Outcome:
+    if qty < 1:
+        return Refused with "you have to buy at least one"
+    if qty > self.stock:
+        return Refused with "not enough in the case"
+    set self.stock to self.stock - qty
+    return Sold with self.price_cents * qty
+
+# ───────────────────────── Payments ─────────────────────────
+
+define choice Payment:
+    variant Cash
+    variant Card with last_digits as Int
+
+define payment_label with p as Payment returning Str:
+    check p:
+        if Cash:
+            return "cash"
+        if Card with digits:
+            return f"card ending {digits}"
+    return "unknown"
+
+# ─────────────────── Errors, the honest way ───────────────────
+
+define choice Result:
+    variant Ok with value as Int
+    variant Error with message as Str
+
+define parse_quantity with wanted as Int returning Result:
+    if wanted < 0:
+        return Error with "quantity cannot be negative"
+    if wanted > 12:
+        return Error with "a dozen is the most one basket holds"
+    return Ok with wanted
+
+# `try` unwraps an Ok or passes the Error straight up to the caller.
+define checked_quantity with wanted as Int returning Result:
+    set qty to try parse_quantity(wanted)
+    return Ok with qty
+
+# ────────────────── Loyalty points (recursion) ──────────────────
+# Visit points grow like fibonacci — old customers are treasured.
+# Declared-Int params make this run at C speed: no GC bookkeeping.
+
+define loyalty_points with visits as Int returning Int:
+    if visits < 2:
+        return visits
+    return loyalty_points(visits - 1) + loyalty_points(visits - 2)
+
+# ─────────────── Discounts are just closures ───────────────
+
+define apply_discount with rule and cents as Int returning Int:
+    return rule(cents)
+
+# ─────────────── A queue that knows how to count ───────────────
+
+define structure TicketRoll:
+    field current as Int
+    field last as Int
+
+implement Iterator for TicketRoll:
+    define next returning IterResult:
+        if self.current > self.last:
+            return Done
+        set val to self.current
+        set self.current to self.current + 1
+        return Next with val
+
+# ─────────────────── The ovens run async ───────────────────
+# Each bake yields to the event loop while it waits, so all three
+# trays share one thread and still come out in delay order.
+
+async define bake with item as Str and minutes as Int returning Str:
+    display f"   oven: {item} goes in"
+    set dummy to await sleep_ms(minutes)
+    display f"   oven: {item} comes out golden"
+    return item
+
+# ──────────────── The accountants work in parallel ────────────────
+
+define add_up with a as Int and b as Int and ch:
+    send a + b to ch
+    return 0
+
+# ──────────────── Plain-English insertion sort ────────────────
+
+define sort_ascending with values:
+    set i to 1
+    repeat while i < length_list(values):
+        set key to get_list(values and i)
+        set j to i - 1
+        repeat while j >= 0:
+            if get_list(values and j) > key:
+                set ok to set_list(values and j + 1 and get_list(values and j))
+                set j to j - 1
+            else:
+                break
+        set ok to set_list(values and j + 1 and key)
+        set i to i + 1
+    return 0
+
+# ═══════════════════════ Opening time ═══════════════════════
+
+define main:
+    display "═══ The Plainville Bakery ═══"
+    display ""
+
+    # ---- the morning case (structs in a list) ----
+    set croissant to create Pastry:
+        name is "Croissant"
+        price_cents is 350
+        stock is 6
+    set scone to create Pastry:
+        name is "Scone"
+        price_cents is 275
+        stock is 4
+    set cinnamon_roll to create Pastry:
+        name is "Cinnamon Roll"
+        price_cents is 425
+        stock is 3
+
+    display "In the case this morning:"
+    display concat("  " and croissant.describe())
+    display concat("  " and scone.describe())
+    display concat("  " and cinnamon_roll.describe())
+    display ""
+
+    # ---- ticket numbers via the custom iterator ----
+    display "Tickets torn off the roll:"
+    set roll to create TicketRoll:
+        current is 101
+        last is 104
+    for each ticket in roll:
+        display f"  ticket {ticket}"
+    display ""
+
+    # ---- orders: enums, check, try/Result, English aliases ----
+    display "Orders:"
+
+    set order_qty to checked_quantity(2)
+    check order_qty:
+        if Ok with qty:
+            set sale to croissant.sell(qty)
+            check sale:
+                if Sold with total:
+                    display f"  2 croissants sold for {total} cents"
+                if Refused with reason:
+                    display concat("  refused: " and reason)
+        if Error with message:
+            display concat("  bad order: " and message)
+
+    set too_many to checked_quantity(15)
+    check too_many:
+        if Ok with qty:
+            display "  this should not happen"
+        if Error with message:
+            display concat("  bad order: " and message)
+
+    set greedy to scone.sell(9)
+    check greedy:
+        if Sold with total:
+            display "  this should not happen either"
+        if Refused with reason:
+            display concat("  refused: " and reason)
+
+    if not (croissant.stock equals 6):
+        display f"  the case shows {croissant.stock} croissants now"
+    display ""
+
+    # ---- payments ----
+    set first_payment to Card with 4242
+    set second_payment to Cash
+    display concat("First customer paid by " and payment_label(first_payment))
+    display concat("Second customer paid by " and payment_label(second_payment))
+    display ""
+
+    # ---- discounts as closures (single-line and block form) ----
+    set regulars_discount to given cents: return cents - cents / 10
+    set staff_discount to given cents:
+        set half to cents / 2
+        return half
+    set full_price to 700
+    display f"Regulars pay {apply_discount(regulars_discount and full_price)} of {full_price} cents"
+    display f"Staff pay {apply_discount(staff_discount and full_price)} of {full_price} cents"
+    display ""
+
+    # ---- loyalty points (recursion at C speed) ----
+    set visits to 20
+    display f"A customer on visit {visits} has {loyalty_points(visits)} loyalty points"
+    display ""
+
+    # ---- floats: the day's temperatures ----
+    set morning_temp to 219.5
+    set afternoon_temp to 221.5
+    set average_temp to (morning_temp + afternoon_temp) / 2.0
+    display f"Average oven temperature: {average_temp}"
+    display ""
+
+    # ---- async baking: three trays, one thread ----
+    display "Afternoon bake (async event loop):"
+    set tray1 to bake("sourdough" and 30)
+    set tray2 to bake("baguettes" and 10)
+    set tray3 to bake("focaccia" and 20)
+    set done1 to await tray1
+    set done2 to await tray2
+    set done3 to await tray3
+    display f"   racks filled: {done1}, {done2}, {done3}"
+    display ""
+
+    # ---- the accountants: spawned threads and channels ----
+    set morning_ch to channel
+    set afternoon_ch to channel
+    spawn add_up(700 and 550 and morning_ch)
+    spawn add_up(425 and 350 and afternoon_ch)
+    set morning_total to receive from morning_ch
+    set afternoon_total to receive from afternoon_ch
+    set day_total to morning_total + afternoon_total
+    display f"Morning till: {morning_total} cents"
+    display f"Afternoon till: {afternoon_total} cents"
+    display ""
+
+    # ---- sort the day's sale amounts, plain-English algorithm ----
+    set sales to [550, 350, 700, 425]
+    set ok to sort_ascending(sales)
+    display "Today's sales, smallest to largest:"
+    set idx to 0
+    repeat while idx < length_list(sales):
+        set amount to get_list(sales and idx)
+        if amount equals 425:
+            set idx to idx + 1
+            continue
+        display f"  {amount} cents"
+        set idx to idx + 1
+    display "  (the 425 stays between us — it was the owner's snack)"
+    display ""
+
+    # ---- the ledger: a map of category totals ----
+    set ledger to create_map()
+    set ok to map_insert(ledger and "bread" and morning_total)
+    set ok to map_insert(ledger and "pastry" and afternoon_total)
+    set bread_cents to map_get_val(ledger and "bread")
+    set pastry_cents to map_get_val(ledger and "pastry")
+    display f"Ledger holds {map_size(ledger)} categories"
+    display f"  bread: {bread_cents} cents"
+    display f"  pastry: {pastry_cents} cents"
+    display ""
+
+    # ---- the daily report: written to disk, read back ----
+    set report to f"Plainville Bakery daily report\ntotal: {day_total} cents\n"
+    set ok to file_write("bakery_report.txt" and report)
+    set read_back to file_read("bakery_report.txt")
+    display "Report on file:"
+    display read_back
+
+    # ---- a tamper-evident receipt: sha256 ----
+    set receipt_stamp to ep_sha256(report)
+    display concat("Receipt stamp: " and substring(receipt_stamp and 0 and 16))
+    display ""
+
+    display f"Day's total: {day_total} cents. The ovens rest."
+    return 0

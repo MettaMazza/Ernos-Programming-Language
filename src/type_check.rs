@@ -931,6 +931,7 @@ impl TypeChecker {
         self.func_types.insert("display".into(), (vec![MonoType::Int], MonoType::Unit));
         self.func_types.insert("display_string".into(), (vec![MonoType::Str], MonoType::Unit));
         self.func_types.insert("ep_auto_to_string".into(), (vec![MonoType::Int], MonoType::DynStr));
+        self.func_types.insert("ep_float_to_string".into(), (vec![MonoType::Any], MonoType::DynStr));
 
         // Memory management
         let v12 = self.fresh_var();

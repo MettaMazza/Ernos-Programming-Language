@@ -111,3 +111,5 @@ tests/*
 # Debug bundles under tests/ (the !tests/*/ negation would otherwise re-include them)
 tests/**/*.dSYM/
 /epc_stage1
+bakery_report.txt
+examples/bakery

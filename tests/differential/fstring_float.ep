@@ -1,0 +1,7 @@
+define main:
+    set a to 219.5
+    set b to 221.5
+    set avg to (a + b) / 2.0
+    display f"average: {avg}"
+    display avg
+    return 0

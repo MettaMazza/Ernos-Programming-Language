@@ -39,6 +39,15 @@ jobs:
       - name: Clang-only bootstrap (no Rust) — build, fixpoint, freshness
         run: bash bootstrap/verify.sh
 
+      - name: Flagship demo — both compilers, identical output
+        run: |
+          ./target/release/ernos examples/bakery.ep
+          ./examples/bakery > /tmp/bakery_rust.out
+          ./epc examples/bakery.ep
+          ./examples/bakery > /tmp/bakery_epc.out
+          diff /tmp/bakery_rust.out /tmp/bakery_epc.out
+          echo "flagship output identical across compilers"
+
       - name: Run conformance tests
         run: |
           for f in conformance/test_*.ep; do
@@ -95,6 +104,15 @@ jobs:
 
       - name: Clang-only bootstrap (no Rust) — build, fixpoint, freshness
         run: bash bootstrap/verify.sh
+
+      - name: Flagship demo — both compilers, identical output
+        run: |
+          ./target/release/ernos examples/bakery.ep
+          ./examples/bakery > /tmp/bakery_rust.out
+          ./epc examples/bakery.ep
+          ./examples/bakery > /tmp/bakery_epc.out
+          diff /tmp/bakery_rust.out /tmp/bakery_epc.out
+          echo "flagship output identical across compilers"
 
       - name: Run conformance tests
         run: |

@@ -5,6 +5,7 @@
 
 <p align="center">
   <a href="#"><img src="https://img.shields.io/badge/Version-1.0.0-blue.svg" alt="Version"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
   <a href="#the-test-matrix"><img src="https://img.shields.io/badge/Rust_suite-71%2F71-brightgreen.svg" alt="Rust suite 71/71"></a>
   <a href="#self-hosting--the-bootstrap"><img src="https://img.shields.io/badge/Self--hosted_parity-53%2F53-brightgreen.svg" alt="Self-hosted parity 53/53"></a>
   <a href="#self-hosting--the-bootstrap"><img src="https://img.shields.io/badge/Compile--error_gate-12%2F12-brightgreen.svg" alt="Rejection gate 12/12"></a>
@@ -43,6 +44,27 @@ Ernos ships **two** complete compilers for the same language:
 `epc` compiles **every one of the 53 runnable test programs**, rejects **all 12** compile-error tests through its own semantic checker, and — compiling its own source — reaches a **byte-identical fixpoint** (`gen2 == gen3`). A frozen C snapshot (`bootstrap/epc_bootstrap.c`) means the whole toolchain rebuilds from **clang alone** — no Rust, no `cargo`, no bootstrap chicken-and-egg. This is verified end-to-end on every change, **with zero disclosed caveats**.
 
 > `clang bootstrap/epc_bootstrap.c -o epc && ./epc epc.ep` → a working compiler that recompiles itself and passes the full suite.
+
+### See the whole language in one program
+
+[`examples/bakery.ep`](examples/bakery.ep) — **The Plainville Bakery** — is a day-in-the-life simulation that exercises every major feature in ~300 lines of plain English: structs + methods, traits, enums + pattern matching, `try`/Result error handling, closures, a custom iterator, async ovens on the event loop, spawned worker threads with channels, floats, f-strings, maps, file I/O, SHA-256 receipts, and a plain-English insertion sort.
+
+```bash
+./target/release/ernos examples/bakery.ep && ./examples/bakery   # reference compiler
+./epc examples/bakery.ep && ./examples/bakery                    # self-hosted compiler
+```
+
+Both compilers produce **byte-identical output** for it — CI proves that on every push.
+
+```ernos
+define sell on Pastry with qty as Int returning Outcome:
+    if qty < 1:
+        return Refused with "you have to buy at least one"
+    if qty > self.stock:
+        return Refused with "not enough in the case"
+    set self.stock to self.stock - qty
+    return Sold with self.price_cents * qty
+```
 
 ---
 
@@ -472,6 +494,12 @@ Conformance tests are in the [`conformance/`](conformance/) directory.
 cp -R ernosplain-syntax ~/.vscode/extensions/
 # Restart VS Code — all .ep files will have syntax highlighting
 ```
+
+---
+
+## License
+
+MIT — free for anyone, for any purpose. See [LICENSE](LICENSE).
 
 ---
 
