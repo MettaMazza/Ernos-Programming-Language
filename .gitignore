@@ -113,3 +113,4 @@ tests/**/*.dSYM/
 /epc_stage1
 bakery_report.txt
 examples/bakery
+tools/gen_runtime_ep
