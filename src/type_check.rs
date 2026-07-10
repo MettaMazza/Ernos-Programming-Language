@@ -933,6 +933,7 @@ impl TypeChecker {
         self.func_types.insert("ep_bits_to_double".into(), (vec![MonoType::Int], MonoType::Float));
         self.func_types.insert("display".into(), (vec![MonoType::Int], MonoType::Unit));
         self.func_types.insert("display_string".into(), (vec![MonoType::Str], MonoType::Unit));
+        self.func_types.insert("screen_write".into(), (vec![MonoType::Str], MonoType::Int));
         self.func_types.insert("ep_auto_to_string".into(), (vec![MonoType::Int], MonoType::DynStr));
         self.func_types.insert("ep_float_to_string".into(), (vec![MonoType::Any], MonoType::DynStr));
 
@@ -1668,7 +1669,7 @@ impl TypeChecker {
                         "ep_auto_to_string" | "display" |
                         // Self-hosted compiler utility functions that handle mixed Int/Str
                         // args (string pointers stored as integers in lists).
-                        "display_string" | "string_concat" | "dec_borrow_count" |
+                        "display_string" | "screen_write" | "string_concat" | "dec_borrow_count" |
                         "inc_borrow_count" | "map_get" | "map_put" | "create_token"
                     ) || name.starts_with("ep_dlcall");
                     // Check argument count (some builtins like concat are variadic)

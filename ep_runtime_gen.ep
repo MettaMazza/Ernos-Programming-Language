@@ -1826,6 +1826,7 @@ define ep_rt_core_11:
     set ok to append_list(lines and "long long string_to_list(const char* s);\n")
     set ok to append_list(lines and "long long string_length(const char* s);\n")
     set ok to append_list(lines and "long long display_string(const char* s);\n")
+    set ok to append_list(lines and "long long screen_write(const char* s);\n")
     set ok to append_list(lines and "long long file_read(long long path_val);\n")
     set ok to append_list(lines and "long long file_write(long long path_val, long long content_val);\n")
     set ok to append_list(lines and "long long file_append(long long path_val, long long content_val);\n")
@@ -1847,11 +1848,11 @@ define ep_rt_core_11:
     set ok to append_list(lines and "long long ep_net_recv_bytes(long long fd, long long count);\n")
     set ok to append_list(lines and "long long channel_try_recv(long long chan_ptr, long long out_ptr);\n")
     set ok to append_list(lines and "long long channel_has_data(long long chan_ptr);\n")
-    set ok to append_list(lines and "long long channel_select(long long channels_list, long long timeout_ms);\n")
     return join_strings(lines)
 
 define ep_rt_core_12:
     set lines to create_list()
+    set ok to append_list(lines and "long long channel_select(long long channels_list, long long timeout_ms);\n")
     set ok to append_list(lines and "long long ep_auto_to_string(long long val);\n")
     set ok to append_list(lines and "long long ep_float_to_string(long long bits);\n")
     set ok to append_list(lines and "\n")
@@ -2001,11 +2002,11 @@ define ep_rt_core_12:
     set ok to append_list(lines and "// Check if channel has data without consuming it\n")
     set ok to append_list(lines and "long long channel_has_data(long long chan_ptr) {\n")
     set ok to append_list(lines and "    EpChannel* chan = (EpChannel*)chan_ptr;\n")
-    set ok to append_list(lines and "    if (!chan) return 0;\n")
     return join_strings(lines)
 
 define ep_rt_core_13:
     set lines to create_list()
+    set ok to append_list(lines and "    if (!chan) return 0;\n")
     set ok to append_list(lines and "    ep_mutex_lock(&chan->mutex);\n")
     set ok to append_list(lines and "    int has = (chan->size > 0) ? 1 : 0;\n")
     set ok to append_list(lines and "    ep_mutex_unlock(&chan->mutex);\n")
@@ -2155,11 +2156,11 @@ define ep_rt_core_13:
     set ok to append_list(lines and "    return -1;\n")
     set ok to append_list(lines and "}\n")
     set ok to append_list(lines and "\n")
-    set ok to append_list(lines and "long long ep_dlopen(long long path) {\n")
     return join_strings(lines)
 
 define ep_rt_core_14:
     set lines to create_list()
+    set ok to append_list(lines and "long long ep_dlopen(long long path) {\n")
     set ok to append_list(lines and "    (void)path;\n")
     set ok to append_list(lines and "    return 0;\n")
     set ok to append_list(lines and "}\n")
@@ -2309,11 +2310,11 @@ define ep_rt_core_14:
     set ok to append_list(lines and "#ifdef _WIN32\n")
     set ok to append_list(lines and "    Sleep((DWORD)ms);\n")
     set ok to append_list(lines and "#else\n")
-    set ok to append_list(lines and "    usleep((useconds_t)(ms * 1000));\n")
     return join_strings(lines)
 
 define ep_rt_core_15:
     set lines to create_list()
+    set ok to append_list(lines and "    usleep((useconds_t)(ms * 1000));\n")
     set ok to append_list(lines and "#endif\n")
     set ok to append_list(lines and "    return 0;\n")
     set ok to append_list(lines and "}\n")
@@ -2463,11 +2464,11 @@ define ep_rt_core_15:
     set ok to append_list(lines and "}\n")
     set ok to append_list(lines and "long long ep_dlcall_f5(long long fptr, long long a0, long long a1, long long a2, long long a3, long long a4) {\n")
     set ok to append_list(lines and "    return ep_double_to_ll(((ep_ff5)fptr)(ep_ll_to_double(a0), ep_ll_to_double(a1), ep_ll_to_double(a2), ep_ll_to_double(a3), ep_ll_to_double(a4)));\n")
-    set ok to append_list(lines and "}\n")
     return join_strings(lines)
 
 define ep_rt_core_16:
     set lines to create_list()
+    set ok to append_list(lines and "}\n")
     set ok to append_list(lines and "long long ep_dlcall_f6(long long fptr, long long a0, long long a1, long long a2, long long a3, long long a4, long long a5) {\n")
     set ok to append_list(lines and "    return ep_double_to_ll(((ep_ff6)fptr)(ep_ll_to_double(a0), ep_ll_to_double(a1), ep_ll_to_double(a2), ep_ll_to_double(a3), ep_ll_to_double(a4), ep_ll_to_double(a5)));\n")
     set ok to append_list(lines and "}\n")
@@ -2617,11 +2618,11 @@ define ep_rt_core_16:
     set ok to append_list(lines and "    return value;\n")
     set ok to append_list(lines and "}\n")
     set ok to append_list(lines and "\n")
-    set ok to append_list(lines and "long long map_get_val(long long map_ptr, long long key_val) {\n")
     return join_strings(lines)
 
 define ep_rt_core_17:
     set lines to create_list()
+    set ok to append_list(lines and "long long map_get_val(long long map_ptr, long long key_val) {\n")
     set ok to append_list(lines and "    if (EP_BADPTR(map_ptr)) return 0;\n")
     set ok to append_list(lines and "    EpMap* map = (EpMap*)map_ptr;\n")
     set ok to append_list(lines and "    char keybuf[32];\n")
@@ -2771,11 +2772,11 @@ define ep_rt_core_17:
     set ok to append_list(lines and "        return 0;\n")
     set ok to append_list(lines and "    }\n")
     set ok to append_list(lines and "    return (long long)dq;\n")
-    set ok to append_list(lines and "}\n")
     return join_strings(lines)
 
 define ep_rt_core_18:
     set lines to create_list()
+    set ok to append_list(lines and "}\n")
     set ok to append_list(lines and "\n")
     set ok to append_list(lines and "static void deque_resize(EpDeque* dq, long long new_capacity) {\n")
     set ok to append_list(lines and "    long long* new_data = malloc(new_capacity * sizeof(long long));\n")
@@ -2925,11 +2926,11 @@ define ep_rt_core_18:
     set ok to append_list(lines and "}\n")
     set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long fs_get_size(long long path_val) {\n")
-    set ok to append_list(lines and "    const char* path = (const char*)path_val;\n")
     return join_strings(lines)
 
 define ep_rt_core_19:
     set lines to create_list()
+    set ok to append_list(lines and "    const char* path = (const char*)path_val;\n")
     set ok to append_list(lines and "    if (!path) return 0;\n")
     set ok to append_list(lines and "    struct stat st;\n")
     set ok to append_list(lines and "    if (stat(path, &st) != 0) return 0;\n")
@@ -3079,11 +3080,11 @@ define ep_rt_core_19:
     set ok to append_list(lines and "        m[i] = (data[j] << 24) | (data[j + 1] << 16) | (data[j + 2] << 8) | (data[j + 3]);\n")
     set ok to append_list(lines and "    for ( ; i < 64; ++i)\n")
     set ok to append_list(lines and "        m[i] = SIG1(m[i - 2]) + m[i - 7] + SIG0(m[i - 15]) + m[i - 16];\n")
-    set ok to append_list(lines and "    a = ctx->state[0]; b = ctx->state[1]; c = ctx->state[2]; d = ctx->state[3];\n")
     return join_strings(lines)
 
 define ep_rt_core_20:
     set lines to create_list()
+    set ok to append_list(lines and "    a = ctx->state[0]; b = ctx->state[1]; c = ctx->state[2]; d = ctx->state[3];\n")
     set ok to append_list(lines and "    e = ctx->state[4]; f = ctx->state[5]; g = ctx->state[6]; h = ctx->state[7];\n")
     set ok to append_list(lines and "    for (i = 0; i < 64; ++i) {\n")
     set ok to append_list(lines and "        t1 = h + EP1(e) + CH(e,f,g) + sha256_k[i] + m[i];\n")
@@ -3233,11 +3234,11 @@ define ep_rt_core_20:
     set ok to append_list(lines and "#define GG(a,b,c,d,x,s,ac) { \\\n")
     set ok to append_list(lines and "    (a) += G((b),(c),(d)) + (x) + (ac); \\\n")
     set ok to append_list(lines and "    (a) = ROTATE_LEFT((a),(s)); \\\n")
-    set ok to append_list(lines and "    (a) += (b); \\\n")
     return join_strings(lines)
 
 define ep_rt_core_21:
     set lines to create_list()
+    set ok to append_list(lines and "    (a) += (b); \\\n")
     set ok to append_list(lines and "}\n")
     set ok to append_list(lines and "#define HH(a,b,c,d,x,s,ac) { \\\n")
     set ok to append_list(lines and "    (a) += H((b),(c),(d)) + (x) + (ac); \\\n")
@@ -3387,11 +3388,11 @@ define ep_rt_core_21:
     set ok to append_list(lines and "    return (long long)list;\n")
     set ok to append_list(lines and "}\n")
     set ok to append_list(lines and "\n")
-    set ok to append_list(lines and "long long get_list_data_ptr(long long list_ptr) {\n")
     return join_strings(lines)
 
 define ep_rt_core_22:
     set lines to create_list()
+    set ok to append_list(lines and "long long get_list_data_ptr(long long list_ptr) {\n")
     set ok to append_list(lines and "    if (EP_BADPTR(list_ptr)) return 0;\n")
     set ok to append_list(lines and "    EpList* list = (EpList*)list_ptr;\n")
     set ok to append_list(lines and "    if (!list) return 0;\n")
@@ -3541,11 +3542,11 @@ define ep_rt_core_22:
     set ok to append_list(lines and "    return (long long)sqlite3_finalize((sqlite3_stmt*)stmt);\n")
     set ok to append_list(lines and "}\n")
     set ok to append_list(lines and "#endif /* EP_HAS_SQLITE */\n")
-    set ok to append_list(lines and "\n")
     return join_strings(lines)
 
 define ep_rt_core_23:
     set lines to create_list()
+    set ok to append_list(lines and "\n")
     set ok to append_list(lines and "int ep_argc = 0;\n")
     set ok to append_list(lines and "char** ep_argv = NULL;\n")
     set ok to append_list(lines and "\n")
@@ -3694,12 +3695,24 @@ define ep_rt_core_23:
     set ok to append_list(lines and "    return 0;\n")
     set ok to append_list(lines and "}\n")
     set ok to append_list(lines and "\n")
-    set ok to append_list(lines and "/* ========== File System Runtime ========== */\n")
-    set ok to append_list(lines and "#include <sys/stat.h>\n")
+    set ok to append_list(lines and "/* Write text with NO trailing newline, and flush at once — for drawing to\n")
     return join_strings(lines)
 
 define ep_rt_core_24:
     set lines to create_list()
+    set ok to append_list(lines and "   the screen where every byte's position matters (cursor moves, escape\n")
+    set ok to append_list(lines and "   codes, a full-screen frame). puts()/display_string would append a\n")
+    set ok to append_list(lines and "   newline and scroll a full-height frame; this does not. */\n")
+    set ok to append_list(lines and "long long screen_write(const char* s) {\n")
+    set ok to append_list(lines and "    if (s) {\n")
+    set ok to append_list(lines and "        fputs(s, stdout);\n")
+    set ok to append_list(lines and "        fflush(stdout);\n")
+    set ok to append_list(lines and "    }\n")
+    set ok to append_list(lines and "    return 0;\n")
+    set ok to append_list(lines and "}\n")
+    set ok to append_list(lines and "\n")
+    set ok to append_list(lines and "/* ========== File System Runtime ========== */\n")
+    set ok to append_list(lines and "#include <sys/stat.h>\n")
     set ok to append_list(lines and "#ifdef _WIN32\n")
     set ok to append_list(lines and "  #include <io.h>\n")
     set ok to append_list(lines and "  #include <direct.h>\n")
@@ -3837,6 +3850,10 @@ define ep_rt_core_24:
     set ok to append_list(lines and "    char buf[8192];\n")
     set ok to append_list(lines and "    size_t n;\n")
     set ok to append_list(lines and "    while ((n = fread(buf, 1, sizeof(buf), fin)) > 0) {\n")
+    return join_strings(lines)
+
+define ep_rt_core_25:
+    set lines to create_list()
     set ok to append_list(lines and "        fwrite(buf, 1, n, fout);\n")
     set ok to append_list(lines and "    }\n")
     set ok to append_list(lines and "    fclose(fin);\n")
@@ -3850,10 +3867,6 @@ define ep_rt_core_24:
     set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long ep_time_now_ms(void) {\n")
     set ok to append_list(lines and "    struct timeval tv;\n")
-    return join_strings(lines)
-
-define ep_rt_core_25:
-    set lines to create_list()
     set ok to append_list(lines and "    gettimeofday(&tv, NULL);\n")
     set ok to append_list(lines and "    return (long long)tv.tv_sec * 1000LL + (long long)tv.tv_usec / 1000LL;\n")
     set ok to append_list(lines and "}\n")
@@ -3991,6 +4004,10 @@ define ep_rt_core_25:
     set ok to append_list(lines and "    result[total] = '\\0';\n")
     set ok to append_list(lines and "    pclose(fp);\n")
     set ok to append_list(lines and "    return (long long)result;\n")
+    return join_strings(lines)
+
+define ep_rt_core_26:
+    set lines to create_list()
     set ok to append_list(lines and "}\n")
     set ok to append_list(lines and "#endif\n")
     set ok to append_list(lines and "\n")
@@ -4004,10 +4021,6 @@ define ep_rt_core_25:
     set ok to append_list(lines and "    while ((c = *s++)) {\n")
     set ok to append_list(lines and "        hash = ((hash << 5) + hash) + c;\n")
     set ok to append_list(lines and "    }\n")
-    return join_strings(lines)
-
-define ep_rt_core_26:
-    set lines to create_list()
     set ok to append_list(lines and "    return (long long)hash;\n")
     set ok to append_list(lines and "}\n")
     set ok to append_list(lines and "\n")
@@ -4145,6 +4158,10 @@ define ep_rt_core_26:
     set ok to append_list(lines and "    return InterlockedExchangeAdd64((volatile long long*)a, -delta);\n")
     set ok to append_list(lines and "}\n")
     set ok to append_list(lines and "long long ep_atomic_cas(long long a, long long expected, long long desired) {\n")
+    return join_strings(lines)
+
+define ep_rt_core_27:
+    set lines to create_list()
     set ok to append_list(lines and "    long long old = InterlockedCompareExchange64((volatile long long*)a, desired, expected);\n")
     set ok to append_list(lines and "    return (old == expected) ? 1 : 0;\n")
     set ok to append_list(lines and "}\n")
@@ -4158,10 +4175,6 @@ define ep_rt_core_26:
     set ok to append_list(lines and "long long ep_atomic_load(long long a) {\n")
     set ok to append_list(lines and "    return __atomic_load_n((long long*)a, __ATOMIC_SEQ_CST);\n")
     set ok to append_list(lines and "}\n")
-    return join_strings(lines)
-
-define ep_rt_core_27:
-    set lines to create_list()
     set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long ep_atomic_store(long long a, long long value) {\n")
     set ok to append_list(lines and "    __atomic_store_n((long long*)a, value, __ATOMIC_SEQ_CST);\n")
@@ -4299,6 +4312,10 @@ define ep_rt_core_27:
     set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long ep_condvar_broadcast(long long cv) {\n")
     set ok to append_list(lines and "    return pthread_cond_broadcast((pthread_cond_t*)cv) == 0 ? 1 : 0;\n")
+    return join_strings(lines)
+
+define ep_rt_core_28:
+    set lines to create_list()
     set ok to append_list(lines and "}\n")
     set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long ep_condvar_destroy(long long cv) {\n")
@@ -4312,10 +4329,6 @@ define ep_rt_core_27:
     set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long ep_regex_match(long long pattern_ptr, long long text_ptr) {\n")
     set ok to append_list(lines and "    regex_t regex;\n")
-    return join_strings(lines)
-
-define ep_rt_core_28:
-    set lines to create_list()
     set ok to append_list(lines and "    const char* pattern = (const char*)pattern_ptr;\n")
     set ok to append_list(lines and "    const char* text = (const char*)text_ptr;\n")
     set ok to append_list(lines and "    int ret = regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB);\n")
@@ -4453,6 +4466,10 @@ define ep_rt_core_28:
     set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long file_read(long long path_val) {\n")
     set ok to append_list(lines and "    const char* path = (const char*)path_val;\n")
+    return join_strings(lines)
+
+define ep_rt_core_29:
+    set lines to create_list()
     set ok to append_list(lines and "    if (!path) return (long long)strdup(\"\");\n")
     set ok to append_list(lines and "    FILE* f = fopen(path, \"rb\");\n")
     set ok to append_list(lines and "    if (!f) return (long long)strdup(\"\");\n")
@@ -4466,10 +4483,6 @@ define ep_rt_core_28:
     set ok to append_list(lines and "    fclose(f);\n")
     set ok to append_list(lines and "    ep_gc_register(buf, EP_OBJ_STRING);\n")
     set ok to append_list(lines and "    return (long long)buf;\n")
-    return join_strings(lines)
-
-define ep_rt_core_29:
-    set lines to create_list()
     set ok to append_list(lines and "}\n")
     set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long file_write(long long path_val, long long content_val) {\n")
@@ -4607,6 +4620,10 @@ define ep_rt_core_29:
     set ok to append_list(lines and "        if (!found) break;\n")
     set ok to append_list(lines and "        p = found + dlen;\n")
     set ok to append_list(lines and "    }\n")
+    return join_strings(lines)
+
+define ep_rt_core_30:
+    set lines to create_list()
     set ok to append_list(lines and "    return list;\n")
     set ok to append_list(lines and "}\n")
     set ok to append_list(lines and "\n")
@@ -4620,10 +4637,6 @@ define ep_rt_core_29:
     set ok to append_list(lines and "    char* result = malloc(2);\n")
     set ok to append_list(lines and "    result[0] = (char)code;\n")
     set ok to append_list(lines and "    result[1] = '\\0';\n")
-    return join_strings(lines)
-
-define ep_rt_core_30:
-    set lines to create_list()
     set ok to append_list(lines and "    ep_gc_register(result, EP_OBJ_STRING);\n")
     set ok to append_list(lines and "    return (long long)result;\n")
     set ok to append_list(lines and "}\n")
@@ -4761,6 +4774,10 @@ define ep_rt_core_30:
     set ok to append_list(lines and "        const char* ks = p;\n")
     set ok to append_list(lines and "        while (*p && *p != '\"') { if (*p == '\\\\') p++; p++; }\n")
     set ok to append_list(lines and "        size_t klen = p - ks;\n")
+    return join_strings(lines)
+
+define ep_rt_core_31:
+    set lines to create_list()
     set ok to append_list(lines and "        if (*p == '\"') p++;\n")
     set ok to append_list(lines and "        p = json_skip_ws(p);\n")
     set ok to append_list(lines and "        if (*p == ':') p++;\n")
@@ -4774,10 +4791,6 @@ define ep_rt_core_30:
     set ok to append_list(lines and "    }\n")
     set ok to append_list(lines and "    return NULL;\n")
     set ok to append_list(lines and "}\n")
-    return join_strings(lines)
-
-define ep_rt_core_31:
-    set lines to create_list()
     set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long json_get_string(long long json_val, long long key_val) {\n")
     set ok to append_list(lines and "    const char* json = (const char*)json_val;\n")
@@ -4915,6 +4928,10 @@ define ep_rt_core_31:
     set ok to append_list(lines and "        int n = recv((int)fd, buf + total, (int)(count - total), 0);\n")
     set ok to append_list(lines and "        if (n <= 0) break;\n")
     set ok to append_list(lines and "        total += n;\n")
+    return join_strings(lines)
+
+define ep_rt_core_32:
+    set lines to create_list()
     set ok to append_list(lines and "    }\n")
     set ok to append_list(lines and "#else\n")
     set ok to append_list(lines and "    ssize_t total = 0;\n")
@@ -4928,10 +4945,6 @@ define ep_rt_core_31:
     set ok to append_list(lines and "    ep_gc_register(buf, EP_OBJ_STRING);\n")
     set ok to append_list(lines and "    return (long long)buf;\n")
     set ok to append_list(lines and "}\n")
-    return join_strings(lines)
-
-define ep_rt_core_32:
-    set lines to create_list()
     set ok to append_list(lines and "#endif\n")
     set ok to append_list(lines and "\n")
     set ok to append_list(lines and "long long ep_get_args(void) {\n")

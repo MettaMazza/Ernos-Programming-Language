@@ -436,6 +436,7 @@ impl Codegen {
         self.func_return_types.insert("string_length".to_string(), Type::Int);
         self.func_return_types.insert("get_character".to_string(), Type::Int);
         self.func_return_types.insert("display_string".to_string(), Type::Int);
+        self.func_return_types.insert("screen_write".to_string(), Type::Int);
         self.func_return_types.insert("get_argument_count".to_string(), Type::Int);
         self.func_return_types.insert("get_argument".to_string(), Type::Str);
         self.func_return_types.insert("write_file_content".to_string(), Type::Int);
@@ -2094,7 +2095,7 @@ impl Codegen {
                 let mut formatted_args = Vec::new();
                 for (i, arg_val) in args_str.iter().enumerate() {
                     let casted = match name.as_str() {
-                        "read_file_content" | "string_length" | "display_string" | "run_command" | "ep_md5" | "ep_sha256" | "ep_net_connect" if i == 0 => {
+                        "read_file_content" | "string_length" | "display_string" | "screen_write" | "run_command" | "ep_md5" | "ep_sha256" | "ep_net_connect" if i == 0 => {
                             format!("(char*){}", arg_val)
                         }
                         "get_character" | "substring" | "string_to_list" if i == 0 => {

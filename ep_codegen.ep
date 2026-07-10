@@ -1029,6 +1029,7 @@ define analyze_return_types with state and program:
     set ok to map_put(keys and values and "string_length" and 1)
     set ok to map_put(keys and values and "get_character" and 1)
     set ok to map_put(keys and values and "display_string" and 1)
+    set ok to map_put(keys and values and "screen_write" and 1)
     set ok to map_put(keys and values and "get_argument_count" and 1)
     set ok to map_put(keys and values and "get_argument" and 2)      # TYPE_STR = 2
     set ok to map_put(keys and values and "write_file_content" and 1)
@@ -2390,7 +2391,7 @@ define gen_expr with state and expr and var_keys and var_values:
             set arg_val to gen_expr(state and arg and var_keys and var_values)
             
             set needs_cast to 0
-            if "read_file_content" equals name || "string_length" equals name || "display_string" equals name || "run_command" equals name || "ep_md5" equals name || "ep_sha256" equals name || "ep_net_connect" equals name:
+            if "read_file_content" equals name || "string_length" equals name || "display_string" equals name || "screen_write" equals name || "run_command" equals name || "ep_md5" equals name || "ep_sha256" equals name || "ep_net_connect" equals name:
                 if idx == 0:
                     set needs_cast to 1
             else:

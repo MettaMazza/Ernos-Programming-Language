@@ -1776,6 +1776,7 @@ char* string_from_list(long long list_ptr);
 long long string_to_list(const char* s);
 long long string_length(const char* s);
 long long display_string(const char* s);
+long long screen_write(const char* s);
 long long file_read(long long path_val);
 long long file_write(long long path_val, long long content_val);
 long long file_append(long long path_val, long long content_val);
@@ -3593,6 +3594,18 @@ long long remove_list(long long list_ptr, long long index) {
 
 long long display_string(const char* s) {
     if (s) puts(s);
+    return 0;
+}
+
+/* Write text with NO trailing newline, and flush at once — for drawing to
+   the screen where every byte's position matters (cursor moves, escape
+   codes, a full-screen frame). puts()/display_string would append a
+   newline and scroll a full-height frame; this does not. */
+long long screen_write(const char* s) {
+    if (s) {
+        fputs(s, stdout);
+        fflush(stdout);
+    }
     return 0;
 }
 

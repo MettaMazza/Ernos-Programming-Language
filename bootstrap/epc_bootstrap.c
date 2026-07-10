@@ -1776,6 +1776,7 @@ char* string_from_list(long long list_ptr);
 long long string_to_list(const char* s);
 long long string_length(const char* s);
 long long display_string(const char* s);
+long long screen_write(const char* s);
 long long file_read(long long path_val);
 long long file_write(long long path_val, long long content_val);
 long long file_append(long long path_val, long long content_val);
@@ -3593,6 +3594,18 @@ long long remove_list(long long list_ptr, long long index) {
 
 long long display_string(const char* s) {
     if (s) puts(s);
+    return 0;
+}
+
+/* Write text with NO trailing newline, and flush at once — for drawing to
+   the screen where every byte's position matters (cursor moves, escape
+   codes, a full-screen frame). puts()/display_string would append a
+   newline and scroll a full-height frame; this does not. */
+long long screen_write(const char* s) {
+    if (s) {
+        fputs(s, stdout);
+        fflush(stdout);
+    }
     return 0;
 }
 
@@ -13499,6 +13512,7 @@ long long analyze_return_types(long long state, long long program) {
     ok = map_put(keys, values, (long long)"string_length", 1LL);
     ok = map_put(keys, values, (long long)"get_character", 1LL);
     ok = map_put(keys, values, (long long)"display_string", 1LL);
+    ok = map_put(keys, values, (long long)"screen_write", 1LL);
     ok = map_put(keys, values, (long long)"get_argument_count", 1LL);
     ok = map_put(keys, values, (long long)"get_argument", 2LL);
     ok = map_put(keys, values, (long long)"write_file_content", 1LL);
@@ -15689,7 +15703,7 @@ long long gen_expr(long long state, long long expr, long long var_keys, long lon
     arg = get_list(args, idx);
     arg_val = gen_expr(state, arg, var_keys, var_values);
     needs_cast = 0LL;
-    if ((((((((strcmp((char*)(long long)"read_file_content", (char*)name) == 0) || (strcmp((char*)(long long)"string_length", (char*)name) == 0)) || (strcmp((char*)(long long)"display_string", (char*)name) == 0)) || (strcmp((char*)(long long)"run_command", (char*)name) == 0)) || (strcmp((char*)(long long)"ep_md5", (char*)name) == 0)) || (strcmp((char*)(long long)"ep_sha256", (char*)name) == 0)) || (strcmp((char*)(long long)"ep_net_connect", (char*)name) == 0))) {
+    if (((((((((strcmp((char*)(long long)"read_file_content", (char*)name) == 0) || (strcmp((char*)(long long)"string_length", (char*)name) == 0)) || (strcmp((char*)(long long)"display_string", (char*)name) == 0)) || (strcmp((char*)(long long)"screen_write", (char*)name) == 0)) || (strcmp((char*)(long long)"run_command", (char*)name) == 0)) || (strcmp((char*)(long long)"ep_md5", (char*)name) == 0)) || (strcmp((char*)(long long)"ep_sha256", (char*)name) == 0)) || (strcmp((char*)(long long)"ep_net_connect", (char*)name) == 0))) {
     if (idx == 0LL) {
     needs_cast = 1LL;
     }
@@ -19820,6 +19834,7 @@ long long ep_rt_core_11() {
     ok = append_list(lines, (long long)"long long string_to_list(const char* s);\n");
     ok = append_list(lines, (long long)"long long string_length(const char* s);\n");
     ok = append_list(lines, (long long)"long long display_string(const char* s);\n");
+    ok = append_list(lines, (long long)"long long screen_write(const char* s);\n");
     ok = append_list(lines, (long long)"long long file_read(long long path_val);\n");
     ok = append_list(lines, (long long)"long long file_write(long long path_val, long long content_val);\n");
     ok = append_list(lines, (long long)"long long file_append(long long path_val, long long content_val);\n");
@@ -19841,7 +19856,6 @@ long long ep_rt_core_11() {
     ok = append_list(lines, (long long)"long long ep_net_recv_bytes(long long fd, long long count);\n");
     ok = append_list(lines, (long long)"long long channel_try_recv(long long chan_ptr, long long out_ptr);\n");
     ok = append_list(lines, (long long)"long long channel_has_data(long long chan_ptr);\n");
-    ok = append_list(lines, (long long)"long long channel_select(long long channels_list, long long timeout_ms);\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -19858,6 +19872,7 @@ long long ep_rt_core_12() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"long long channel_select(long long channels_list, long long timeout_ms);\n");
     ok = append_list(lines, (long long)"long long ep_auto_to_string(long long val);\n");
     ok = append_list(lines, (long long)"long long ep_float_to_string(long long bits);\n");
     ok = append_list(lines, (long long)"\n");
@@ -20007,7 +20022,6 @@ long long ep_rt_core_12() {
     ok = append_list(lines, (long long)"// Check if channel has data without consuming it\n");
     ok = append_list(lines, (long long)"long long channel_has_data(long long chan_ptr) {\n");
     ok = append_list(lines, (long long)"    EpChannel* chan = (EpChannel*)chan_ptr;\n");
-    ok = append_list(lines, (long long)"    if (!chan) return 0;\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -20024,6 +20038,7 @@ long long ep_rt_core_13() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"    if (!chan) return 0;\n");
     ok = append_list(lines, (long long)"    ep_mutex_lock(&chan->mutex);\n");
     ok = append_list(lines, (long long)"    int has = (chan->size > 0) ? 1 : 0;\n");
     ok = append_list(lines, (long long)"    ep_mutex_unlock(&chan->mutex);\n");
@@ -20173,7 +20188,6 @@ long long ep_rt_core_13() {
     ok = append_list(lines, (long long)"    return -1;\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"long long ep_dlopen(long long path) {\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -20190,6 +20204,7 @@ long long ep_rt_core_14() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"long long ep_dlopen(long long path) {\n");
     ok = append_list(lines, (long long)"    (void)path;\n");
     ok = append_list(lines, (long long)"    return 0;\n");
     ok = append_list(lines, (long long)"}\n");
@@ -20339,7 +20354,6 @@ long long ep_rt_core_14() {
     ok = append_list(lines, (long long)"#ifdef _WIN32\n");
     ok = append_list(lines, (long long)"    Sleep((DWORD)ms);\n");
     ok = append_list(lines, (long long)"#else\n");
-    ok = append_list(lines, (long long)"    usleep((useconds_t)(ms * 1000));\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -20356,6 +20370,7 @@ long long ep_rt_core_15() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"    usleep((useconds_t)(ms * 1000));\n");
     ok = append_list(lines, (long long)"#endif\n");
     ok = append_list(lines, (long long)"    return 0;\n");
     ok = append_list(lines, (long long)"}\n");
@@ -20505,7 +20520,6 @@ long long ep_rt_core_15() {
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"long long ep_dlcall_f5(long long fptr, long long a0, long long a1, long long a2, long long a3, long long a4) {\n");
     ok = append_list(lines, (long long)"    return ep_double_to_ll(((ep_ff5)fptr)(ep_ll_to_double(a0), ep_ll_to_double(a1), ep_ll_to_double(a2), ep_ll_to_double(a3), ep_ll_to_double(a4)));\n");
-    ok = append_list(lines, (long long)"}\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -20522,6 +20536,7 @@ long long ep_rt_core_16() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"long long ep_dlcall_f6(long long fptr, long long a0, long long a1, long long a2, long long a3, long long a4, long long a5) {\n");
     ok = append_list(lines, (long long)"    return ep_double_to_ll(((ep_ff6)fptr)(ep_ll_to_double(a0), ep_ll_to_double(a1), ep_ll_to_double(a2), ep_ll_to_double(a3), ep_ll_to_double(a4), ep_ll_to_double(a5)));\n");
     ok = append_list(lines, (long long)"}\n");
@@ -20671,7 +20686,6 @@ long long ep_rt_core_16() {
     ok = append_list(lines, (long long)"    return value;\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"long long map_get_val(long long map_ptr, long long key_val) {\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -20688,6 +20702,7 @@ long long ep_rt_core_17() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"long long map_get_val(long long map_ptr, long long key_val) {\n");
     ok = append_list(lines, (long long)"    if (EP_BADPTR(map_ptr)) return 0;\n");
     ok = append_list(lines, (long long)"    EpMap* map = (EpMap*)map_ptr;\n");
     ok = append_list(lines, (long long)"    char keybuf[32];\n");
@@ -20837,7 +20852,6 @@ long long ep_rt_core_17() {
     ok = append_list(lines, (long long)"        return 0;\n");
     ok = append_list(lines, (long long)"    }\n");
     ok = append_list(lines, (long long)"    return (long long)dq;\n");
-    ok = append_list(lines, (long long)"}\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -20854,6 +20868,7 @@ long long ep_rt_core_18() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"static void deque_resize(EpDeque* dq, long long new_capacity) {\n");
     ok = append_list(lines, (long long)"    long long* new_data = malloc(new_capacity * sizeof(long long));\n");
@@ -21003,7 +21018,6 @@ long long ep_rt_core_18() {
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"long long fs_get_size(long long path_val) {\n");
-    ok = append_list(lines, (long long)"    const char* path = (const char*)path_val;\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -21020,6 +21034,7 @@ long long ep_rt_core_19() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"    const char* path = (const char*)path_val;\n");
     ok = append_list(lines, (long long)"    if (!path) return 0;\n");
     ok = append_list(lines, (long long)"    struct stat st;\n");
     ok = append_list(lines, (long long)"    if (stat(path, &st) != 0) return 0;\n");
@@ -21169,7 +21184,6 @@ long long ep_rt_core_19() {
     ok = append_list(lines, (long long)"        m[i] = (data[j] << 24) | (data[j + 1] << 16) | (data[j + 2] << 8) | (data[j + 3]);\n");
     ok = append_list(lines, (long long)"    for ( ; i < 64; ++i)\n");
     ok = append_list(lines, (long long)"        m[i] = SIG1(m[i - 2]) + m[i - 7] + SIG0(m[i - 15]) + m[i - 16];\n");
-    ok = append_list(lines, (long long)"    a = ctx->state[0]; b = ctx->state[1]; c = ctx->state[2]; d = ctx->state[3];\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -21186,6 +21200,7 @@ long long ep_rt_core_20() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"    a = ctx->state[0]; b = ctx->state[1]; c = ctx->state[2]; d = ctx->state[3];\n");
     ok = append_list(lines, (long long)"    e = ctx->state[4]; f = ctx->state[5]; g = ctx->state[6]; h = ctx->state[7];\n");
     ok = append_list(lines, (long long)"    for (i = 0; i < 64; ++i) {\n");
     ok = append_list(lines, (long long)"        t1 = h + EP1(e) + CH(e,f,g) + sha256_k[i] + m[i];\n");
@@ -21335,7 +21350,6 @@ long long ep_rt_core_20() {
     ok = append_list(lines, (long long)"#define GG(a,b,c,d,x,s,ac) { \\\n");
     ok = append_list(lines, (long long)"    (a) += G((b),(c),(d)) + (x) + (ac); \\\n");
     ok = append_list(lines, (long long)"    (a) = ROTATE_LEFT((a),(s)); \\\n");
-    ok = append_list(lines, (long long)"    (a) += (b); \\\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -21352,6 +21366,7 @@ long long ep_rt_core_21() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"    (a) += (b); \\\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"#define HH(a,b,c,d,x,s,ac) { \\\n");
     ok = append_list(lines, (long long)"    (a) += H((b),(c),(d)) + (x) + (ac); \\\n");
@@ -21501,7 +21516,6 @@ long long ep_rt_core_21() {
     ok = append_list(lines, (long long)"    return (long long)list;\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"long long get_list_data_ptr(long long list_ptr) {\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -21518,6 +21532,7 @@ long long ep_rt_core_22() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"long long get_list_data_ptr(long long list_ptr) {\n");
     ok = append_list(lines, (long long)"    if (EP_BADPTR(list_ptr)) return 0;\n");
     ok = append_list(lines, (long long)"    EpList* list = (EpList*)list_ptr;\n");
     ok = append_list(lines, (long long)"    if (!list) return 0;\n");
@@ -21667,7 +21682,6 @@ long long ep_rt_core_22() {
     ok = append_list(lines, (long long)"    return (long long)sqlite3_finalize((sqlite3_stmt*)stmt);\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"#endif /* EP_HAS_SQLITE */\n");
-    ok = append_list(lines, (long long)"\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -21684,6 +21698,7 @@ long long ep_rt_core_23() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"int ep_argc = 0;\n");
     ok = append_list(lines, (long long)"char** ep_argv = NULL;\n");
     ok = append_list(lines, (long long)"\n");
@@ -21832,8 +21847,7 @@ long long ep_rt_core_23() {
     ok = append_list(lines, (long long)"    return 0;\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"/* ========== File System Runtime ========== */\n");
-    ok = append_list(lines, (long long)"#include <sys/stat.h>\n");
+    ok = append_list(lines, (long long)"/* Write text with NO trailing newline, and flush at once — for drawing to\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -21850,6 +21864,19 @@ long long ep_rt_core_24() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"   the screen where every byte's position matters (cursor moves, escape\n");
+    ok = append_list(lines, (long long)"   codes, a full-screen frame). puts()/display_string would append a\n");
+    ok = append_list(lines, (long long)"   newline and scroll a full-height frame; this does not. */\n");
+    ok = append_list(lines, (long long)"long long screen_write(const char* s) {\n");
+    ok = append_list(lines, (long long)"    if (s) {\n");
+    ok = append_list(lines, (long long)"        fputs(s, stdout);\n");
+    ok = append_list(lines, (long long)"        fflush(stdout);\n");
+    ok = append_list(lines, (long long)"    }\n");
+    ok = append_list(lines, (long long)"    return 0;\n");
+    ok = append_list(lines, (long long)"}\n");
+    ok = append_list(lines, (long long)"\n");
+    ok = append_list(lines, (long long)"/* ========== File System Runtime ========== */\n");
+    ok = append_list(lines, (long long)"#include <sys/stat.h>\n");
     ok = append_list(lines, (long long)"#ifdef _WIN32\n");
     ok = append_list(lines, (long long)"  #include <io.h>\n");
     ok = append_list(lines, (long long)"  #include <direct.h>\n");
@@ -21987,19 +22014,6 @@ long long ep_rt_core_24() {
     ok = append_list(lines, (long long)"    char buf[8192];\n");
     ok = append_list(lines, (long long)"    size_t n;\n");
     ok = append_list(lines, (long long)"    while ((n = fread(buf, 1, sizeof(buf), fin)) > 0) {\n");
-    ok = append_list(lines, (long long)"        fwrite(buf, 1, n, fout);\n");
-    ok = append_list(lines, (long long)"    }\n");
-    ok = append_list(lines, (long long)"    fclose(fin);\n");
-    ok = append_list(lines, (long long)"    fclose(fout);\n");
-    ok = append_list(lines, (long long)"    return 1;\n");
-    ok = append_list(lines, (long long)"}\n");
-    ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"/* ========== Date/Time Runtime ========== */\n");
-    ok = append_list(lines, (long long)"#include <time.h>\n");
-    ok = append_list(lines, (long long)"#include <sys/time.h>\n");
-    ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"long long ep_time_now_ms(void) {\n");
-    ok = append_list(lines, (long long)"    struct timeval tv;\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -22016,6 +22030,19 @@ long long ep_rt_core_25() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"        fwrite(buf, 1, n, fout);\n");
+    ok = append_list(lines, (long long)"    }\n");
+    ok = append_list(lines, (long long)"    fclose(fin);\n");
+    ok = append_list(lines, (long long)"    fclose(fout);\n");
+    ok = append_list(lines, (long long)"    return 1;\n");
+    ok = append_list(lines, (long long)"}\n");
+    ok = append_list(lines, (long long)"\n");
+    ok = append_list(lines, (long long)"/* ========== Date/Time Runtime ========== */\n");
+    ok = append_list(lines, (long long)"#include <time.h>\n");
+    ok = append_list(lines, (long long)"#include <sys/time.h>\n");
+    ok = append_list(lines, (long long)"\n");
+    ok = append_list(lines, (long long)"long long ep_time_now_ms(void) {\n");
+    ok = append_list(lines, (long long)"    struct timeval tv;\n");
     ok = append_list(lines, (long long)"    gettimeofday(&tv, NULL);\n");
     ok = append_list(lines, (long long)"    return (long long)tv.tv_sec * 1000LL + (long long)tv.tv_usec / 1000LL;\n");
     ok = append_list(lines, (long long)"}\n");
@@ -22153,19 +22180,6 @@ long long ep_rt_core_25() {
     ok = append_list(lines, (long long)"    result[total] = '\\0';\n");
     ok = append_list(lines, (long long)"    pclose(fp);\n");
     ok = append_list(lines, (long long)"    return (long long)result;\n");
-    ok = append_list(lines, (long long)"}\n");
-    ok = append_list(lines, (long long)"#endif\n");
-    ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"/* ========== HashMap helpers ========== */\n");
-    ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"long long ep_hash_string(long long s_ptr) {\n");
-    ok = append_list(lines, (long long)"    const char* s = (const char*)s_ptr;\n");
-    ok = append_list(lines, (long long)"    if (!s) return 0;\n");
-    ok = append_list(lines, (long long)"    unsigned long long hash = 5381;\n");
-    ok = append_list(lines, (long long)"    int c;\n");
-    ok = append_list(lines, (long long)"    while ((c = *s++)) {\n");
-    ok = append_list(lines, (long long)"        hash = ((hash << 5) + hash) + c;\n");
-    ok = append_list(lines, (long long)"    }\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -22182,6 +22196,19 @@ long long ep_rt_core_26() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"}\n");
+    ok = append_list(lines, (long long)"#endif\n");
+    ok = append_list(lines, (long long)"\n");
+    ok = append_list(lines, (long long)"/* ========== HashMap helpers ========== */\n");
+    ok = append_list(lines, (long long)"\n");
+    ok = append_list(lines, (long long)"long long ep_hash_string(long long s_ptr) {\n");
+    ok = append_list(lines, (long long)"    const char* s = (const char*)s_ptr;\n");
+    ok = append_list(lines, (long long)"    if (!s) return 0;\n");
+    ok = append_list(lines, (long long)"    unsigned long long hash = 5381;\n");
+    ok = append_list(lines, (long long)"    int c;\n");
+    ok = append_list(lines, (long long)"    while ((c = *s++)) {\n");
+    ok = append_list(lines, (long long)"        hash = ((hash << 5) + hash) + c;\n");
+    ok = append_list(lines, (long long)"    }\n");
     ok = append_list(lines, (long long)"    return (long long)hash;\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
@@ -22319,19 +22346,6 @@ long long ep_rt_core_26() {
     ok = append_list(lines, (long long)"    return InterlockedExchangeAdd64((volatile long long*)a, -delta);\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"long long ep_atomic_cas(long long a, long long expected, long long desired) {\n");
-    ok = append_list(lines, (long long)"    long long old = InterlockedCompareExchange64((volatile long long*)a, desired, expected);\n");
-    ok = append_list(lines, (long long)"    return (old == expected) ? 1 : 0;\n");
-    ok = append_list(lines, (long long)"}\n");
-    ok = append_list(lines, (long long)"#else\n");
-    ok = append_list(lines, (long long)"long long ep_atomic_create(long long initial) {\n");
-    ok = append_list(lines, (long long)"    long long* a = (long long*)malloc(sizeof(long long));\n");
-    ok = append_list(lines, (long long)"    __atomic_store_n(a, initial, __ATOMIC_SEQ_CST);\n");
-    ok = append_list(lines, (long long)"    return (long long)a;\n");
-    ok = append_list(lines, (long long)"}\n");
-    ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"long long ep_atomic_load(long long a) {\n");
-    ok = append_list(lines, (long long)"    return __atomic_load_n((long long*)a, __ATOMIC_SEQ_CST);\n");
-    ok = append_list(lines, (long long)"}\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -22348,6 +22362,19 @@ long long ep_rt_core_27() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"    long long old = InterlockedCompareExchange64((volatile long long*)a, desired, expected);\n");
+    ok = append_list(lines, (long long)"    return (old == expected) ? 1 : 0;\n");
+    ok = append_list(lines, (long long)"}\n");
+    ok = append_list(lines, (long long)"#else\n");
+    ok = append_list(lines, (long long)"long long ep_atomic_create(long long initial) {\n");
+    ok = append_list(lines, (long long)"    long long* a = (long long*)malloc(sizeof(long long));\n");
+    ok = append_list(lines, (long long)"    __atomic_store_n(a, initial, __ATOMIC_SEQ_CST);\n");
+    ok = append_list(lines, (long long)"    return (long long)a;\n");
+    ok = append_list(lines, (long long)"}\n");
+    ok = append_list(lines, (long long)"\n");
+    ok = append_list(lines, (long long)"long long ep_atomic_load(long long a) {\n");
+    ok = append_list(lines, (long long)"    return __atomic_load_n((long long*)a, __ATOMIC_SEQ_CST);\n");
+    ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"long long ep_atomic_store(long long a, long long value) {\n");
     ok = append_list(lines, (long long)"    __atomic_store_n((long long*)a, value, __ATOMIC_SEQ_CST);\n");
@@ -22485,19 +22512,6 @@ long long ep_rt_core_27() {
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"long long ep_condvar_broadcast(long long cv) {\n");
     ok = append_list(lines, (long long)"    return pthread_cond_broadcast((pthread_cond_t*)cv) == 0 ? 1 : 0;\n");
-    ok = append_list(lines, (long long)"}\n");
-    ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"long long ep_condvar_destroy(long long cv) {\n");
-    ok = append_list(lines, (long long)"    pthread_cond_destroy((pthread_cond_t*)cv);\n");
-    ok = append_list(lines, (long long)"    free((void*)cv);\n");
-    ok = append_list(lines, (long long)"    return 0;\n");
-    ok = append_list(lines, (long long)"}\n");
-    ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"/* ========== Regex (simple stub — delegates to POSIX regex) ========== */\n");
-    ok = append_list(lines, (long long)"#include <regex.h>\n");
-    ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"long long ep_regex_match(long long pattern_ptr, long long text_ptr) {\n");
-    ok = append_list(lines, (long long)"    regex_t regex;\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -22514,6 +22528,19 @@ long long ep_rt_core_28() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"}\n");
+    ok = append_list(lines, (long long)"\n");
+    ok = append_list(lines, (long long)"long long ep_condvar_destroy(long long cv) {\n");
+    ok = append_list(lines, (long long)"    pthread_cond_destroy((pthread_cond_t*)cv);\n");
+    ok = append_list(lines, (long long)"    free((void*)cv);\n");
+    ok = append_list(lines, (long long)"    return 0;\n");
+    ok = append_list(lines, (long long)"}\n");
+    ok = append_list(lines, (long long)"\n");
+    ok = append_list(lines, (long long)"/* ========== Regex (simple stub — delegates to POSIX regex) ========== */\n");
+    ok = append_list(lines, (long long)"#include <regex.h>\n");
+    ok = append_list(lines, (long long)"\n");
+    ok = append_list(lines, (long long)"long long ep_regex_match(long long pattern_ptr, long long text_ptr) {\n");
+    ok = append_list(lines, (long long)"    regex_t regex;\n");
     ok = append_list(lines, (long long)"    const char* pattern = (const char*)pattern_ptr;\n");
     ok = append_list(lines, (long long)"    const char* text = (const char*)text_ptr;\n");
     ok = append_list(lines, (long long)"    int ret = regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB);\n");
@@ -22651,19 +22678,6 @@ long long ep_rt_core_28() {
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"long long file_read(long long path_val) {\n");
     ok = append_list(lines, (long long)"    const char* path = (const char*)path_val;\n");
-    ok = append_list(lines, (long long)"    if (!path) return (long long)strdup(\"\");\n");
-    ok = append_list(lines, (long long)"    FILE* f = fopen(path, \"rb\");\n");
-    ok = append_list(lines, (long long)"    if (!f) return (long long)strdup(\"\");\n");
-    ok = append_list(lines, (long long)"    fseek(f, 0, SEEK_END);\n");
-    ok = append_list(lines, (long long)"    long size = ftell(f);\n");
-    ok = append_list(lines, (long long)"    fseek(f, 0, SEEK_SET);\n");
-    ok = append_list(lines, (long long)"    char* buf = malloc(size + 1);\n");
-    ok = append_list(lines, (long long)"    if (!buf) { fclose(f); return (long long)strdup(\"\"); }\n");
-    ok = append_list(lines, (long long)"    fread(buf, 1, size, f);\n");
-    ok = append_list(lines, (long long)"    buf[size] = '\\0';\n");
-    ok = append_list(lines, (long long)"    fclose(f);\n");
-    ok = append_list(lines, (long long)"    ep_gc_register(buf, EP_OBJ_STRING);\n");
-    ok = append_list(lines, (long long)"    return (long long)buf;\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -22680,6 +22694,19 @@ long long ep_rt_core_29() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"    if (!path) return (long long)strdup(\"\");\n");
+    ok = append_list(lines, (long long)"    FILE* f = fopen(path, \"rb\");\n");
+    ok = append_list(lines, (long long)"    if (!f) return (long long)strdup(\"\");\n");
+    ok = append_list(lines, (long long)"    fseek(f, 0, SEEK_END);\n");
+    ok = append_list(lines, (long long)"    long size = ftell(f);\n");
+    ok = append_list(lines, (long long)"    fseek(f, 0, SEEK_SET);\n");
+    ok = append_list(lines, (long long)"    char* buf = malloc(size + 1);\n");
+    ok = append_list(lines, (long long)"    if (!buf) { fclose(f); return (long long)strdup(\"\"); }\n");
+    ok = append_list(lines, (long long)"    fread(buf, 1, size, f);\n");
+    ok = append_list(lines, (long long)"    buf[size] = '\\0';\n");
+    ok = append_list(lines, (long long)"    fclose(f);\n");
+    ok = append_list(lines, (long long)"    ep_gc_register(buf, EP_OBJ_STRING);\n");
+    ok = append_list(lines, (long long)"    return (long long)buf;\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"long long file_write(long long path_val, long long content_val) {\n");
@@ -22817,19 +22844,6 @@ long long ep_rt_core_29() {
     ok = append_list(lines, (long long)"        if (!found) break;\n");
     ok = append_list(lines, (long long)"        p = found + dlen;\n");
     ok = append_list(lines, (long long)"    }\n");
-    ok = append_list(lines, (long long)"    return list;\n");
-    ok = append_list(lines, (long long)"}\n");
-    ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"long long char_at(long long s_val, long long index) {\n");
-    ok = append_list(lines, (long long)"    const char* s = (const char*)s_val;\n");
-    ok = append_list(lines, (long long)"    if (!s || index < 0 || index >= (long long)strlen(s)) return 0;\n");
-    ok = append_list(lines, (long long)"    return (unsigned char)s[index];\n");
-    ok = append_list(lines, (long long)"}\n");
-    ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"long long char_from_code(long long code) {\n");
-    ok = append_list(lines, (long long)"    char* result = malloc(2);\n");
-    ok = append_list(lines, (long long)"    result[0] = (char)code;\n");
-    ok = append_list(lines, (long long)"    result[1] = '\\0';\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -22846,6 +22860,19 @@ long long ep_rt_core_30() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"    return list;\n");
+    ok = append_list(lines, (long long)"}\n");
+    ok = append_list(lines, (long long)"\n");
+    ok = append_list(lines, (long long)"long long char_at(long long s_val, long long index) {\n");
+    ok = append_list(lines, (long long)"    const char* s = (const char*)s_val;\n");
+    ok = append_list(lines, (long long)"    if (!s || index < 0 || index >= (long long)strlen(s)) return 0;\n");
+    ok = append_list(lines, (long long)"    return (unsigned char)s[index];\n");
+    ok = append_list(lines, (long long)"}\n");
+    ok = append_list(lines, (long long)"\n");
+    ok = append_list(lines, (long long)"long long char_from_code(long long code) {\n");
+    ok = append_list(lines, (long long)"    char* result = malloc(2);\n");
+    ok = append_list(lines, (long long)"    result[0] = (char)code;\n");
+    ok = append_list(lines, (long long)"    result[1] = '\\0';\n");
     ok = append_list(lines, (long long)"    ep_gc_register(result, EP_OBJ_STRING);\n");
     ok = append_list(lines, (long long)"    return (long long)result;\n");
     ok = append_list(lines, (long long)"}\n");
@@ -22983,19 +23010,6 @@ long long ep_rt_core_30() {
     ok = append_list(lines, (long long)"        const char* ks = p;\n");
     ok = append_list(lines, (long long)"        while (*p && *p != '\"') { if (*p == '\\\\') p++; p++; }\n");
     ok = append_list(lines, (long long)"        size_t klen = p - ks;\n");
-    ok = append_list(lines, (long long)"        if (*p == '\"') p++;\n");
-    ok = append_list(lines, (long long)"        p = json_skip_ws(p);\n");
-    ok = append_list(lines, (long long)"        if (*p == ':') p++;\n");
-    ok = append_list(lines, (long long)"        p = json_skip_ws(p);\n");
-    ok = append_list(lines, (long long)"        if (klen == strlen(key) && strncmp(ks, key, klen) == 0) {\n");
-    ok = append_list(lines, (long long)"            return p;\n");
-    ok = append_list(lines, (long long)"        }\n");
-    ok = append_list(lines, (long long)"        p = json_skip_value(p);\n");
-    ok = append_list(lines, (long long)"        p = json_skip_ws(p);\n");
-    ok = append_list(lines, (long long)"        if (*p == ',') p++;\n");
-    ok = append_list(lines, (long long)"    }\n");
-    ok = append_list(lines, (long long)"    return NULL;\n");
-    ok = append_list(lines, (long long)"}\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -23012,6 +23026,19 @@ long long ep_rt_core_31() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"        if (*p == '\"') p++;\n");
+    ok = append_list(lines, (long long)"        p = json_skip_ws(p);\n");
+    ok = append_list(lines, (long long)"        if (*p == ':') p++;\n");
+    ok = append_list(lines, (long long)"        p = json_skip_ws(p);\n");
+    ok = append_list(lines, (long long)"        if (klen == strlen(key) && strncmp(ks, key, klen) == 0) {\n");
+    ok = append_list(lines, (long long)"            return p;\n");
+    ok = append_list(lines, (long long)"        }\n");
+    ok = append_list(lines, (long long)"        p = json_skip_value(p);\n");
+    ok = append_list(lines, (long long)"        p = json_skip_ws(p);\n");
+    ok = append_list(lines, (long long)"        if (*p == ',') p++;\n");
+    ok = append_list(lines, (long long)"    }\n");
+    ok = append_list(lines, (long long)"    return NULL;\n");
+    ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"long long json_get_string(long long json_val, long long key_val) {\n");
     ok = append_list(lines, (long long)"    const char* json = (const char*)json_val;\n");
@@ -23149,19 +23176,6 @@ long long ep_rt_core_31() {
     ok = append_list(lines, (long long)"        int n = recv((int)fd, buf + total, (int)(count - total), 0);\n");
     ok = append_list(lines, (long long)"        if (n <= 0) break;\n");
     ok = append_list(lines, (long long)"        total += n;\n");
-    ok = append_list(lines, (long long)"    }\n");
-    ok = append_list(lines, (long long)"#else\n");
-    ok = append_list(lines, (long long)"    ssize_t total = 0;\n");
-    ok = append_list(lines, (long long)"    while (total < count) {\n");
-    ok = append_list(lines, (long long)"        ssize_t n = recv((int)fd, buf + total, count - total, 0);\n");
-    ok = append_list(lines, (long long)"        if (n <= 0) break;\n");
-    ok = append_list(lines, (long long)"        total += n;\n");
-    ok = append_list(lines, (long long)"    }\n");
-    ok = append_list(lines, (long long)"#endif\n");
-    ok = append_list(lines, (long long)"    buf[total] = '\\0';\n");
-    ok = append_list(lines, (long long)"    ep_gc_register(buf, EP_OBJ_STRING);\n");
-    ok = append_list(lines, (long long)"    return (long long)buf;\n");
-    ok = append_list(lines, (long long)"}\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -23178,6 +23192,19 @@ long long ep_rt_core_32() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"    }\n");
+    ok = append_list(lines, (long long)"#else\n");
+    ok = append_list(lines, (long long)"    ssize_t total = 0;\n");
+    ok = append_list(lines, (long long)"    while (total < count) {\n");
+    ok = append_list(lines, (long long)"        ssize_t n = recv((int)fd, buf + total, count - total, 0);\n");
+    ok = append_list(lines, (long long)"        if (n <= 0) break;\n");
+    ok = append_list(lines, (long long)"        total += n;\n");
+    ok = append_list(lines, (long long)"    }\n");
+    ok = append_list(lines, (long long)"#endif\n");
+    ok = append_list(lines, (long long)"    buf[total] = '\\0';\n");
+    ok = append_list(lines, (long long)"    ep_gc_register(buf, EP_OBJ_STRING);\n");
+    ok = append_list(lines, (long long)"    return (long long)buf;\n");
+    ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"#endif\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"long long ep_get_args(void) {\n");
