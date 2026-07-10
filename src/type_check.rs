@@ -847,6 +847,9 @@ impl TypeChecker {
         self.func_types.insert("read_line".into(), (vec![], MonoType::DynStr));
         self.func_types.insert("read_int".into(), (vec![], MonoType::Int));
         self.func_types.insert("read_float".into(), (vec![], MonoType::Float));
+        self.func_types.insert("read_key".into(), (vec![], MonoType::Int));
+        self.func_types.insert("terminal_columns".into(), (vec![], MonoType::Int));
+        self.func_types.insert("terminal_rows".into(), (vec![], MonoType::Int));
 
         // Concurrency
         self.func_types.insert("create_channel".into(), (vec![], MonoType::Int));

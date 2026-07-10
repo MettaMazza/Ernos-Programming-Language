@@ -36,6 +36,9 @@ jobs:
       - name: Stdlib gate (no duplicate names, every module importable)
         run: bash tests/run_stdlib_gate.sh
 
+      - name: Key input gate (read_key + terminal size, piped)
+        run: bash tests/run_key_input_gate.sh
+
       - name: 3-stage self-compilation fixpoint (gen2 == gen3)
         run: bash tests/run_fixpoint.sh
 
@@ -104,6 +107,9 @@ jobs:
 
       - name: Stdlib gate (no duplicate names, every module importable)
         run: bash tests/run_stdlib_gate.sh
+
+      - name: Key input gate (read_key + terminal size, piped)
+        run: bash tests/run_key_input_gate.sh
 
       - name: 3-stage self-compilation fixpoint (gen2 == gen3)
         run: bash tests/run_fixpoint.sh

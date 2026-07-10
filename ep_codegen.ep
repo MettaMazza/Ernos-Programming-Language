@@ -1114,6 +1114,9 @@ define analyze_return_types with state and program:
     set ok to map_put(keys and values and "file_exists" and 1)
     set ok to map_put(keys and values and "read_line" and 3)
     set ok to map_put(keys and values and "read_int" and 1)
+    set ok to map_put(keys and values and "read_key" and 1)
+    set ok to map_put(keys and values and "terminal_columns" and 1)
+    set ok to map_put(keys and values and "terminal_rows" and 1)
     # FFI
     set ok to map_put(keys and values and "ep_dlopen" and 1)
     set ok to map_put(keys and values and "ep_dlsym" and 1)

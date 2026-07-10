@@ -519,6 +519,9 @@ impl Codegen {
         self.func_return_types.insert("read_line".to_string(), Type::DynStr);
         self.func_return_types.insert("read_int".to_string(), Type::Int);
         self.func_return_types.insert("read_float".to_string(), Type::Float);
+        self.func_return_types.insert("read_key".to_string(), Type::Int);
+        self.func_return_types.insert("terminal_columns".to_string(), Type::Int);
+        self.func_return_types.insert("terminal_rows".to_string(), Type::Int);
         self.func_return_types.insert("int_to_float".to_string(), Type::Float);
         self.func_return_types.insert("float_to_int".to_string(), Type::Int);
         self.func_return_types.insert("file_read".to_string(), Type::DynStr);

@@ -43,6 +43,15 @@ typedef int pthread_attr_t;
 #ifndef _WIN32
 #include <unistd.h>
 #endif
+/* Terminal control for read_key/terminal_columns/terminal_rows: raw keyboard
+   input and window size, each with a native path per platform. */
+#if defined(_WIN32)
+#include <conio.h>
+#include <io.h>
+#elif !defined(__wasm__)
+#include <termios.h>
+#include <sys/ioctl.h>
+#endif
 #if defined(__APPLE__)
 #include <mach/mach.h>
 #endif

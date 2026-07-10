@@ -140,6 +140,79 @@ long long read_int() {
     return val;
 }
 
+/* Read ONE key immediately: no echo, no waiting for Enter. Returns the key's
+   number code (one byte at a time — escape sequences such as arrow keys
+   arrive as successive codes), or -1 at end of input. When stdin is a pipe
+   or a file (scripted tests), it simply reads the next byte. */
+long long read_key() {
+#if defined(__wasm__)
+    return -1;
+#elif defined(_WIN32)
+    if (!_isatty(_fileno(stdin))) {
+        return (long long)fgetc(stdin);
+    }
+    return (long long)_getch();
+#else
+    if (!isatty(STDIN_FILENO)) {
+        return (long long)fgetc(stdin);
+    }
+    struct termios old_state, raw_state;
+    if (tcgetattr(STDIN_FILENO, &old_state) != 0) {
+        return (long long)fgetc(stdin);
+    }
+    raw_state = old_state;
+    raw_state.c_lflag &= ~(ICANON | ECHO);
+    raw_state.c_cc[VMIN] = 1;
+    raw_state.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSANOW, &raw_state);
+    unsigned char ch = 0;
+    long long got = (long long)read(STDIN_FILENO, &ch, 1);
+    tcsetattr(STDIN_FILENO, TCSANOW, &old_state);
+    if (got <= 0) return -1;
+    return (long long)ch;
+#endif
+}
+
+/* How wide the terminal window is, in characters. 80 when unknown. */
+long long terminal_columns() {
+#if defined(__wasm__)
+    return 80;
+#elif defined(_WIN32)
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &info)) {
+        long long cols = (long long)(info.srWindow.Right - info.srWindow.Left + 1);
+        if (cols > 0) return cols;
+    }
+    return 80;
+#else
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
+        return (long long)ws.ws_col;
+    }
+    return 80;
+#endif
+}
+
+/* How tall the terminal window is, in lines. 24 when unknown. */
+long long terminal_rows() {
+#if defined(__wasm__)
+    return 24;
+#elif defined(_WIN32)
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &info)) {
+        long long rows = (long long)(info.srWindow.Bottom - info.srWindow.Top + 1);
+        if (rows > 0) return rows;
+    }
+    return 24;
+#else
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0) {
+        return (long long)ws.ws_row;
+    }
+    return 24;
+#endif
+}
+
 long long read_float() {
     double val = 0.0;
     scanf("%lf", &val);
