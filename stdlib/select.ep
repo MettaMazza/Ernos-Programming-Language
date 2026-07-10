@@ -14,9 +14,9 @@ import "sync"
 #   set ok to append_list(channels and ch2)
 #   set ready to select(channels and 5000)    # 5 second timeout
 #   if ready == 0:
-#       receive val from ch1
+#       set val to receive from ch1
 #   else if ready == 1:
-#       receive val from ch2
+#       set val to receive from ch2
 #   else:
 #       display "Timeout!"
 
@@ -35,6 +35,6 @@ define channel_ready with ch:
 # Returns the value if available, or default_val if channel is empty
 define try_receive with ch and default_val:
     if channel_has_data(ch):
-        receive val from ch
+        set val to receive from ch
         return val
     return default_val

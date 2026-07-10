@@ -804,13 +804,27 @@ static long long ep_sleep_timer_step(void* r) {
 }
 
 static long long sleep_ms(long long ms) {
+    /* Outside the event loop (no task is being stepped) a registered timer
+       would never fire on its own, so the cooperative path used to sleep for
+       0 ms. Block for real instead, and hand back an already-completed
+       future so `await sleep_ms(...)` from synchronous code still works. */
+    if (!ep_current_task) {
+        if (ms > 0) ep_sleep_ms(ms);
+        EpFuture* done = (EpFuture*)malloc(sizeof(EpFuture));
+        done->completed = 1;
+        done->value = 0;
+        done->waiting_task = NULL;
+        done->chan = 0;
+        { EpGCObject* _go = ep_gc_register(done, EP_OBJ_STRUCT); if(_go) _go->num_fields = 3; }
+        return (long long)done;
+    }
     EpFuture* fut = (EpFuture*)malloc(sizeof(EpFuture));
     fut->completed = 0;
     fut->value = 0;
     fut->waiting_task = NULL;
     fut->chan = 0;
     { EpGCObject* _go = ep_gc_register(fut, EP_OBJ_STRUCT); if(_go) _go->num_fields = 3; }
-    
+
     EpSleepTimerArgs* args = (EpSleepTimerArgs*)malloc(sizeof(EpSleepTimerArgs));
     args->fut = fut;
     
@@ -1946,6 +1960,22 @@ long long channel_select(long long channels_list, long long timeout_ms) {
 #endif
     
     while (1) {
+        /* Cooperative safepoint (registered spawned threads only): if a
+           collector is stopping the world, park here until it finishes.
+           Without this, a thread sitting in a long select never reaches a
+           safepoint: the collector's stop-the-world gives up after its
+           bounded wait and conservatively scans this thread's live, mutating
+           stack against a stale published top — missing the channels list
+           when it is held only in a callee-saved register — then sweeps it,
+           and the next poll iteration dereferences freed memory (SIGSEGV).
+           send_channel/receive_channel sidestep the same class of bug by
+           suppressing GC while blocked; that is too blunt here, because a
+           select can wait for seconds and would keep GC off the whole time. */
+        if (ep_gc_stop_requested && ep_thread_slot >= 0) {
+            pthread_mutex_lock(&ep_gc_mutex);
+            ep_gc_park_if_stopped();
+            pthread_mutex_unlock(&ep_gc_mutex);
+        }
         // Poll all channels
         for (long long i = 0; i < list->length; i++) {
             EpChannel* chan = (EpChannel*)list->data[i];

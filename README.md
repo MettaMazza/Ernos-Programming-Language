@@ -6,8 +6,8 @@
 <p align="center">
   <a href="#"><img src="https://img.shields.io/badge/Version-1.0.0-blue.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
-  <a href="#the-test-matrix"><img src="https://img.shields.io/badge/Rust_suite-71%2F71-brightgreen.svg" alt="Rust suite 71/71"></a>
-  <a href="#self-hosting--the-bootstrap"><img src="https://img.shields.io/badge/Self--hosted_parity-53%2F53-brightgreen.svg" alt="Self-hosted parity 53/53"></a>
+  <a href="#the-test-matrix"><img src="https://img.shields.io/badge/Rust_suite-72%2F72-brightgreen.svg" alt="Rust suite 72/72"></a>
+  <a href="#self-hosting--the-bootstrap"><img src="https://img.shields.io/badge/Self--hosted_parity-54%2F54-brightgreen.svg" alt="Self-hosted parity 54/54"></a>
   <a href="#self-hosting--the-bootstrap"><img src="https://img.shields.io/badge/Compile--error_gate-12%2F12-brightgreen.svg" alt="Rejection gate 12/12"></a>
   <a href="#self-hosting--the-bootstrap"><img src="https://img.shields.io/badge/Bootstrap-clang--only-success.svg" alt="Clang-only bootstrap"></a>
   <a href="#self-hosting--the-bootstrap"><img src="https://img.shields.io/badge/Fixpoint-byte--identical-success.svg" alt="Byte-identical fixpoint"></a>
@@ -41,7 +41,7 @@ Ernos ships **two** complete compilers for the same language:
 - **`ernos`** — the reference compiler, written in Rust (~30k lines).
 - **`epc`** — the self-hosted compiler, **written entirely in Ernos** (`ep_lexer.ep`, `ep_parser.ep`, `ep_check.ep`, `ep_optimizer.ep`, `ep_codegen.ep`, `epc.ep`).
 
-`epc` compiles **every one of the 53 runnable test programs**, rejects **all 12** compile-error tests through its own semantic checker, and — compiling its own source — reaches a **byte-identical fixpoint** (`gen2 == gen3`). A frozen C snapshot (`bootstrap/epc_bootstrap.c`) means the whole toolchain rebuilds from **clang alone** — no Rust, no `cargo`, no bootstrap chicken-and-egg. This is verified end-to-end on every change, **with zero disclosed caveats**.
+`epc` compiles **every one of the 54 runnable test programs**, rejects **all 12** compile-error tests through its own semantic checker, and — compiling its own source — reaches a **byte-identical fixpoint** (`gen2 == gen3`). A frozen C snapshot (`bootstrap/epc_bootstrap.c`) means the whole toolchain rebuilds from **clang alone** — no Rust, no `cargo`, no bootstrap chicken-and-egg. This is verified end-to-end on every change, **with zero disclosed caveats**.
 
 > `clang bootstrap/epc_bootstrap.c -o epc && ./epc epc.ep` → a working compiler that recompiles itself and passes the full suite.
 
@@ -399,10 +399,10 @@ The self-hosted pipeline is a full `lex → parse → **check** → **optimize**
 
 | Gate | Result | Verified by |
 |------|--------|-------------|
-| Reference-compiler suite | **71 / 71** | `./run_tests.sh` |
-| Self-hosted parity (runnable programs `epc` compiles + runs correctly) | **53 / 53** | `bash tests/run_epc_parity.sh` |
+| Reference-compiler suite | **72 / 72** | `./run_tests.sh` |
+| Self-hosted parity (runnable programs `epc` compiles + runs correctly) | **54 / 54** | `bash tests/run_epc_parity.sh` |
 | Compile-error gate (programs `epc`'s checker must reject) | **12 / 12**, 0 wrongly accepted | `bash tests/run_epc_parity.sh` |
-| Differential suite (both compilers agree on 37 adversarial programs) | **37 / 37** | `bash tests/run_differential.sh` |
+| Differential suite (both compilers agree on 39 adversarial programs) | **39 / 39** | `bash tests/run_differential.sh` |
 | 3-stage self-compilation fixpoint (`gen2 == gen3`, byte-identical) | **OK** | `bash tests/run_fixpoint.sh` |
 | Rust-free, clang-only bootstrap → recompile → fixpoint → full suite | **OK** | `bash bootstrap/verify.sh` |
 | Cargo build warnings | **0** | `cargo build --release` |
@@ -432,14 +432,14 @@ The Rust compiler builds the same self-hosted compiler and remains the home of t
 ## The Test Matrix
 
 ```bash
-./run_tests.sh                 # reference (Rust) compiler:      71/71
-bash tests/run_epc_parity.sh   # self-hosted: 53/53 runnable + 12/12 rejections
-bash tests/run_differential.sh # both compilers agree on 37 adversarial programs
+./run_tests.sh                 # reference (Rust) compiler:      72/72
+bash tests/run_epc_parity.sh   # self-hosted: 54/54 runnable + 12/12 rejections
+bash tests/run_differential.sh # both compilers agree on 39 adversarial programs
 bash tests/run_fixpoint.sh     # 3-stage byte-identical fixpoint
 bash bootstrap/verify.sh       # clang-only, Rust-free end-to-end proof
 ```
 
-Every one of the 65 programs in `tests/` (53 runnable + 12 compile-error) is exercised by **both** compilers, and `tests/differential/` holds 37 adversarial programs (operator precedence, GC stress, closure corner cases, type-safety probes) on which the two compilers' compiled binaries must produce byte-identical output. Conformance tests live in [`conformance/`](conformance/); the formal grammar and type/memory/concurrency rules are in [`spec/ernos-spec.md`](spec/ernos-spec.md).
+Every one of the 66 programs in `tests/` (54 runnable + 12 compile-error) is exercised by **both** compilers, and `tests/differential/` holds 39 adversarial programs (operator precedence, GC stress, closure corner cases, type-safety probes) on which the two compilers' compiled binaries must produce byte-identical output. Conformance tests live in [`conformance/`](conformance/); the formal grammar and type/memory/concurrency rules are in [`spec/ernos-spec.md`](spec/ernos-spec.md).
 
 ---
 

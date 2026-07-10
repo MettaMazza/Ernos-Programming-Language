@@ -1,0 +1,19 @@
+# An f-string temporary (with a builtin-call interpolation) passed to an
+# UNTYPED parameter, then used as a string inside the callee. The callee must
+# GC-root the parameter: it defaults to Int, but the value is a freshly
+# allocated string that the callee's entry safepoint could otherwise collect
+# (epc used to skip the root -> use-after-free). The loop is long enough to
+# drive many minor+major collections while such temporaries are live.
+define render with text:
+    set r to concat(text and "!")
+    return string_length(r)
+
+define main:
+    set base to concat("abcdefghij" and "klmnop")
+    set total to 0
+    set i to 0
+    repeat while i < 20000:
+        set total to total + render(f"len {string_length(base)} iter {i}")
+        set i to i + 1
+    display total
+    return 0

@@ -1,0 +1,30 @@
+# Regression: a spawned thread parked in channel_select must survive heavy
+# GC pressure on the main thread (sha256 allocates ~65 objects per call).
+# Before the cooperative safepoint in channel_select's poll loop, the
+# collector's stop-the-world gave up waiting, scanned the selecting thread's
+# live stack against a stale top, missed the channels list, and swept it —
+# the thread then crashed dereferencing freed memory (signal 11, 3/3 runs).
+import "string"
+import "crypto"
+
+define sleeper with control:
+    set orders to create_list()
+    set ok to append_list(orders and control)
+    set stop to 0
+    repeat while stop == 0:
+        set ready to channel_select(orders and 1000)
+        if ready == 0:
+            set stop to 1
+    return 0
+
+define main:
+    set control to create_channel()
+    spawn sleeper(control)
+    set h to concat("seed" and "")
+    set i to 0
+    repeat while i < 100000:
+        set h to concat(crypto_sha256(h) and "")
+        set i to i + 1
+    display f"survived: {substring(h and 0 and 8)}"
+    send 1 to control
+    return 0

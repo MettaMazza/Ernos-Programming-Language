@@ -365,6 +365,8 @@ define create_codegen_state:
     set ok to append_list(state and 0)                 # is_async (19): 1 while emitting an async function's step body
     set ok to append_list(state and 0)                 # await_counter (20): running await index within the current async fn
     set ok to append_list(state and (create_list() + 0)) # async_locals (21): names rewritten to args-> in the step body
+    set ok to append_list(state and (create_list() + 0)) # prim_param_fn_names (22): user functions, for the GC-root analysis
+    set ok to append_list(state and (create_list() + 0)) # prim_param_flags (23): per-function list of per-param "declared Int/Float/Bool" flags
     return state
 
 # Count await expressions in a statement list / expression (each becomes a
@@ -471,6 +473,468 @@ define type_name_to_code with tname:
     if "Bool" equals t:
         return 7
     return 1
+
+# Map a parameter's `as Type` annotation to a type code; 0 when absent or
+# unknown (unknown annotations fall back to the untyped default, matching the
+# Rust compiler which only special-cases the primitive and container names).
+define param_ann_to_code with tname:
+    set t to string_concat(tname and "")
+    if t equals "Int":
+        return 1
+    if t equals "Str":
+        return 2
+    if t equals "List":
+        return 4
+    if t equals "Bool":
+        return 7
+    if t equals "Float":
+        return 8
+    return 0
+
+# Seed parameter types into var_types: the annotation wins, then `borrow`
+# gives REFLIST, otherwise the untyped default Int. Mirrors the param seeding
+# in the Rust compiler's gen_function and return-type prepass — previously the
+# annotation was ignored here, so `display text` on a `text as Str` parameter
+# printed the pointer as a number.
+define seed_param_types with params and var_keys and var_values:
+    set p_len to length_list(params)
+    set p_idx to 0
+    repeat while p_idx < p_len:
+        set p_node to get_list(params and p_idx)
+        set p_name to get_list(p_node and 0)
+        set is_borrow to get_list(p_node and 1)
+        set param_type to 1
+        if is_borrow == 1:
+            set param_type to 5
+        if length_list(p_node) > 2:
+            set ann_code to param_ann_to_code(get_list(p_node and 2))
+            if ann_code != 0:
+                set param_type to ann_code
+        set ok to map_put(var_keys and var_values and p_name and param_type)
+        set p_idx to p_idx + 1
+    return 0
+
+# Record every user function's per-param "declared Int/Float/Bool" flags
+# (state slots 22/23). The GC-root analysis treats passing a variable to such
+# a parameter as primitive usage, so numeric hot paths (fib) stay root-free.
+define collect_prim_param_flags with state and program:
+    set funcs to get_list(program and 3)
+    set names to get_list(state and 22)
+    set flaglists to get_list(state and 23)
+    set f_len to length_list(funcs)
+    set f_i to 0
+    repeat while f_i < f_len:
+        set func to get_list(funcs and f_i)
+        set params to get_list(func and 2)
+        set flags to create_list() + 0
+        set p_len to length_list(params)
+        set p_i to 0
+        repeat while p_i < p_len:
+            set p_node to get_list(params and p_i)
+            set fl to 0
+            if length_list(p_node) > 2:
+                set c to param_ann_to_code(get_list(p_node and 2))
+                if c == 1 || c == 7 || c == 8:
+                    set fl to 1
+            set okf to append_list(flags and fl)
+            set p_i to p_i + 1
+        set okn to append_list(names and get_list(func and 1))
+        set okl to append_list(flaglists and flags)
+        set f_i to f_i + 1
+    return 0
+
+# Look up a user function's prim-param flags list; 0 when unknown (builtins,
+# closures) — callers must treat 0 as "not a flagged user function".
+define get_prim_param_flags with state and name:
+    set n to string_concat(name and "")
+    set names to get_list(state and 22)
+    set len to length_list(names)
+    set idx to 0
+    repeat while idx < len:
+        if n equals get_list(names and idx):
+            return get_list(get_list(state and 23) and idx)
+        set idx to idx + 1
+    return 0
+
+# Does the expression mention the variable? (mirror of expr_contains_var)
+define cg_expr_has_var with expr and vname:
+    if expr == 0:
+        return 0
+    set t to get_list(expr and 0)
+    if t == 3: # IDENT
+        set n to string_concat(get_list(expr and 1) and "")
+        if n equals vname:
+            return 1
+        return 0
+    if t == 4 || t == 5 || t == 14: # BINARY / COMP / LOGICAL
+        if cg_expr_has_var(get_list(expr and 1) and vname) == 1:
+            return 1
+        return cg_expr_has_var(get_list(expr and 3) and vname)
+    if t == 6: # CALL — the callee may itself be a closure variable
+        set cn to string_concat(get_list(expr and 1) and "")
+        if cn equals vname:
+            return 1
+        set args to get_list(expr and 2)
+        set a_len to length_list(args)
+        set a_i to 0
+        repeat while a_i < a_len:
+            if cg_expr_has_var(get_list(args and a_i) and vname) == 1:
+                return 1
+            set a_i to a_i + 1
+        return 0
+    if t == 18 || t == 20 || t == 21 || t == 32 || t == 33: # RECEIVE/BORROW/AWAIT/NOT/TRY
+        return cg_expr_has_var(get_list(expr and 1) and vname)
+    if t == 22: # FIELD_ACCESS
+        return cg_expr_has_var(get_list(expr and 1) and vname)
+    if t == 24: # STRUCT_CREATE — fields are [name, expr] pairs
+        set fields to get_list(expr and 2)
+        set f_len to length_list(fields)
+        set f_i to 0
+        repeat while f_i < f_len:
+            if cg_expr_has_var(get_list(get_list(fields and f_i) and 1) and vname) == 1:
+                return 1
+            set f_i to f_i + 1
+        return 0
+    if t == 25: # METHOD_CALL
+        if cg_expr_has_var(get_list(expr and 1) and vname) == 1:
+            return 1
+        set margs to get_list(expr and 3)
+        set m_len to length_list(margs)
+        set m_i to 0
+        repeat while m_i < m_len:
+            if cg_expr_has_var(get_list(margs and m_i) and vname) == 1:
+                return 1
+            set m_i to m_i + 1
+        return 0
+    if t == 26: # ENUM_CREATE
+        set eargs to get_list(expr and 2)
+        set e_len to length_list(eargs)
+        set e_i to 0
+        repeat while e_i < e_len:
+            if cg_expr_has_var(get_list(eargs and e_i) and vname) == 1:
+                return 1
+            set e_i to e_i + 1
+        return 0
+    if t == 34: # CLOSURE — conservatively assume it captures the variable
+        return 1
+    if t == 35: # LIST_LIT
+        set elems to get_list(expr and 1)
+        set l_len to length_list(elems)
+        set l_i to 0
+        repeat while l_i < l_len:
+            if cg_expr_has_var(get_list(elems and l_i) and vname) == 1:
+                return 1
+            set l_i to l_i + 1
+        return 0
+    return 0
+
+# Is the expression "primitive" with respect to the variable — i.e. does it
+# only use the variable as a number? Mirror of is_primitive_op_expr in
+# src/codegen.rs: arithmetic/comparison/logic, calls whose arguments stay
+# primitive (a fixed builtin list, or user functions whose receiving parameter
+# is declared Int/Float/Bool), and expressions not mentioning it at all.
+define cg_is_prim_expr with state and expr and pname:
+    if expr == 0:
+        return 1
+    set t to get_list(expr and 0)
+    if t == 1 || t == 2 || t == 31 || t == 42: # literals
+        return 1
+    if t == 3: # bare identifier — fine in a primitive context
+        return 1
+    if t == 4 || t == 5 || t == 14: # BINARY / COMP / LOGICAL
+        if cg_is_prim_expr(state and get_list(expr and 1) and pname) == 0:
+            return 0
+        return cg_is_prim_expr(state and get_list(expr and 3) and pname)
+    if t == 32: # UNARY_NOT
+        return cg_is_prim_expr(state and get_list(expr and 1) and pname)
+    if t == 6: # CALL
+        set name to string_concat(get_list(expr and 1) and "")
+        set args to get_list(expr and 2)
+        set a_len to length_list(args)
+        set is_prim_builtin to 0
+        if name equals "int_to_string":
+            set is_prim_builtin to 1
+        if name equals "int_to_float":
+            set is_prim_builtin to 1
+        if name equals "float_to_int":
+            set is_prim_builtin to 1
+        if name equals "char_from_code":
+            set is_prim_builtin to 1
+        if name equals "ep_abs":
+            set is_prim_builtin to 1
+        if name equals "ep_sleep_ms":
+            set is_prim_builtin to 1
+        if name equals "sleep_ms":
+            set is_prim_builtin to 1
+        if name equals "ep_time_ms":
+            set is_prim_builtin to 1
+        if name equals "ep_random_int":
+            set is_prim_builtin to 1
+        if is_prim_builtin == 1:
+            set a_i to 0
+            repeat while a_i < a_len:
+                if cg_is_prim_expr(state and get_list(args and a_i) and pname) == 0:
+                    return 0
+                set a_i to a_i + 1
+            return 1
+        set flags to get_prim_param_flags(state and name)
+        if flags != 0:
+            # User-defined callee: passing the variable into a parameter that
+            # is DECLARED Int/Float/Bool keeps it primitive (e.g. fib(n - 1)).
+            set a_i to 0
+            repeat while a_i < a_len:
+                set arg to get_list(args and a_i)
+                if cg_expr_has_var(arg and pname) == 1:
+                    set fl to 0
+                    if a_i < length_list(flags):
+                        set fl to get_list(flags and a_i)
+                    if fl == 0:
+                        return 0
+                    if cg_is_prim_expr(state and arg and pname) == 0:
+                        return 0
+                set a_i to a_i + 1
+            return 1
+        if cg_expr_has_var(expr and pname) == 1:
+            return 0
+        return 1
+    if cg_expr_has_var(expr and pname) == 1:
+        return 0
+    return 1
+
+# Does any statement use the variable non-primitively (i.e. somewhere its
+# value could be a heap pointer that must survive a collection)? Mirror of
+# stmt_contains_non_primitive_usage in src/codegen.rs.
+define cg_stmts_have_nonprim with state and stmts and pname:
+    set len to length_list(stmts)
+    set idx to 0
+    repeat while idx < len:
+        set stmt to get_list(stmts and idx)
+        set t to get_list(stmt and 0)
+        if t == 7: # SET — only the right-hand side reads the variable
+            if cg_is_prim_expr(state and get_list(stmt and 2) and pname) == 0:
+                return 1
+        if t == 8 || t == 9 || t == 36: # RETURN / DISPLAY / EXPR_STMT
+            if cg_is_prim_expr(state and get_list(stmt and 1) and pname) == 0:
+                return 1
+        if t == 10: # IF
+            if cg_is_prim_expr(state and get_list(stmt and 1) and pname) == 0:
+                return 1
+            if cg_stmts_have_nonprim(state and get_list(stmt and 2) and pname) == 1:
+                return 1
+            set eb to get_list(stmt and 3)
+            if eb != 0:
+                if cg_stmts_have_nonprim(state and eb and pname) == 1:
+                    return 1
+        if t == 11: # REPEAT_WHILE
+            if cg_is_prim_expr(state and get_list(stmt and 1) and pname) == 0:
+                return 1
+            if cg_stmts_have_nonprim(state and get_list(stmt and 2) and pname) == 1:
+                return 1
+        if t == 28: # FOR_EACH
+            set lv to string_concat(get_list(stmt and 1) and "")
+            if lv equals pname:
+                return 1
+            if cg_is_prim_expr(state and get_list(stmt and 2) and pname) == 0:
+                return 1
+            if cg_stmts_have_nonprim(state and get_list(stmt and 3) and pname) == 1:
+                return 1
+        if t == 16: # SEND
+            if cg_expr_has_var(get_list(stmt and 1) and pname) == 1:
+                return 1
+            if cg_expr_has_var(get_list(stmt and 2) and pname) == 1:
+                return 1
+        if t == 23: # FIELD_SET
+            if cg_expr_has_var(get_list(stmt and 1) and pname) == 1:
+                return 1
+            if cg_expr_has_var(get_list(stmt and 3) and pname) == 1:
+                return 1
+        if t == 27: # MATCH — arm = [variant, bindings, body, pat_kind]
+            if cg_expr_has_var(get_list(stmt and 1) and pname) == 1:
+                return 1
+            set arms to get_list(stmt and 2)
+            set a_len to length_list(arms)
+            set a_i to 0
+            repeat while a_i < a_len:
+                set arm to get_list(arms and a_i)
+                if contains_string_val(get_list(arm and 1) and pname) == 1:
+                    return 1
+                if cg_stmts_have_nonprim(state and get_list(arm and 2) and pname) == 1:
+                    return 1
+                set a_i to a_i + 1
+        set idx to idx + 1
+    return 0
+
+# Usage-based type promotion (mirror of infer_param_types_from_usage): a
+# variable still typed Int that is the first argument of a list/map/string
+# builtin takes the container/string type, so display dispatch and GC rooting
+# see what it really holds. Annotated types are never overridden (Int-typed
+# only), matching the Rust compiler's `if *ty == Type::Int` guard.
+define usage_promote_call with name and args and var_keys and var_values:
+    if length_list(args) == 0:
+        return 0
+    set a0 to get_list(args and 0)
+    if get_list(a0 and 0) != 3: # first argument must be a bare identifier
+        return 0
+    set vname to get_list(a0 and 1)
+    set cur to map_get(var_keys and var_values and vname)
+    if cur != 1:
+        return 0
+    set n to string_concat(name and "")
+    set new_t to 0
+    if n equals "length_list":
+        set new_t to 4
+    if n equals "append_list":
+        set new_t to 4
+    if n equals "get_list":
+        set new_t to 4
+    if n equals "set_list":
+        set new_t to 4
+    if n equals "remove_list":
+        set new_t to 4
+    if n equals "pop_list":
+        set new_t to 4
+    if n equals "map_insert":
+        set new_t to 4
+    if n equals "map_get_val":
+        set new_t to 4
+    if n equals "map_contains":
+        set new_t to 4
+    if n equals "map_delete":
+        set new_t to 4
+    if n equals "map_keys":
+        set new_t to 4
+    if n equals "map_size":
+        set new_t to 4
+    if n equals "map_values":
+        set new_t to 4
+    if n equals "map_set_str":
+        set new_t to 4
+    if n equals "map_get_str":
+        set new_t to 4
+    if n equals "string_length":
+        set new_t to 2
+    if n equals "get_character":
+        set new_t to 2
+    if n equals "char_at":
+        set new_t to 2
+    if n equals "string_contains":
+        set new_t to 2
+    if n equals "string_index_of":
+        set new_t to 2
+    if n equals "string_replace":
+        set new_t to 2
+    if n equals "string_upper":
+        set new_t to 2
+    if n equals "string_lower":
+        set new_t to 2
+    if n equals "string_trim":
+        set new_t to 2
+    if n equals "string_split":
+        set new_t to 2
+    if n equals "string_to_list":
+        set new_t to 2
+    if n equals "json_get_string":
+        set new_t to 2
+    if n equals "json_get_int":
+        set new_t to 2
+    if n equals "json_get_bool":
+        set new_t to 2
+    if new_t != 0:
+        set ok to map_put(var_keys and var_values and vname and new_t)
+    return 0
+
+define infer_usage_types_expr with expr and var_keys and var_values:
+    if expr == 0:
+        return 0
+    set t to get_list(expr and 0)
+    if t == 6: # CALL
+        set ok to usage_promote_call(get_list(expr and 1) and get_list(expr and 2) and var_keys and var_values)
+        set args to get_list(expr and 2)
+        set a_len to length_list(args)
+        set a_i to 0
+        repeat while a_i < a_len:
+            set oka to infer_usage_types_expr(get_list(args and a_i) and var_keys and var_values)
+            set a_i to a_i + 1
+        return 0
+    if t == 4 || t == 5 || t == 14: # BINARY / COMP / LOGICAL
+        set okl to infer_usage_types_expr(get_list(expr and 1) and var_keys and var_values)
+        set okr to infer_usage_types_expr(get_list(expr and 3) and var_keys and var_values)
+        return 0
+    if t == 18 || t == 20 || t == 21 || t == 32 || t == 33: # RECEIVE/BORROW/AWAIT/NOT/TRY
+        return infer_usage_types_expr(get_list(expr and 1) and var_keys and var_values)
+    if t == 24: # STRUCT_CREATE
+        set fields to get_list(expr and 2)
+        set f_len to length_list(fields)
+        set f_i to 0
+        repeat while f_i < f_len:
+            set okf to infer_usage_types_expr(get_list(get_list(fields and f_i) and 1) and var_keys and var_values)
+            set f_i to f_i + 1
+        return 0
+    if t == 25: # METHOD_CALL
+        set oko to infer_usage_types_expr(get_list(expr and 1) and var_keys and var_values)
+        set margs to get_list(expr and 3)
+        set m_len to length_list(margs)
+        set m_i to 0
+        repeat while m_i < m_len:
+            set okm to infer_usage_types_expr(get_list(margs and m_i) and var_keys and var_values)
+            set m_i to m_i + 1
+        return 0
+    if t == 26: # ENUM_CREATE
+        set eargs to get_list(expr and 2)
+        set e_len to length_list(eargs)
+        set e_i to 0
+        repeat while e_i < e_len:
+            set oke to infer_usage_types_expr(get_list(eargs and e_i) and var_keys and var_values)
+            set e_i to e_i + 1
+        return 0
+    if t == 35: # LIST_LIT
+        set elems to get_list(expr and 1)
+        set l_len to length_list(elems)
+        set l_i to 0
+        repeat while l_i < l_len:
+            set okl2 to infer_usage_types_expr(get_list(elems and l_i) and var_keys and var_values)
+            set l_i to l_i + 1
+        return 0
+    return 0
+
+define infer_usage_types_stmts with stmts and var_keys and var_values:
+    set len to length_list(stmts)
+    set idx to 0
+    repeat while idx < len:
+        set stmt to get_list(stmts and idx)
+        set t to get_list(stmt and 0)
+        if t == 7: # SET
+            set ok7 to infer_usage_types_expr(get_list(stmt and 2) and var_keys and var_values)
+        if t == 8 || t == 9 || t == 36: # RETURN / DISPLAY / EXPR_STMT
+            set ok8 to infer_usage_types_expr(get_list(stmt and 1) and var_keys and var_values)
+        if t == 10: # IF
+            set okc to infer_usage_types_expr(get_list(stmt and 1) and var_keys and var_values)
+            set okt to infer_usage_types_stmts(get_list(stmt and 2) and var_keys and var_values)
+            set eb to get_list(stmt and 3)
+            if eb != 0:
+                set oke to infer_usage_types_stmts(eb and var_keys and var_values)
+        if t == 11: # REPEAT_WHILE
+            set okw to infer_usage_types_expr(get_list(stmt and 1) and var_keys and var_values)
+            set okb to infer_usage_types_stmts(get_list(stmt and 2) and var_keys and var_values)
+        if t == 16: # SEND
+            set okn1 to infer_usage_types_expr(get_list(stmt and 1) and var_keys and var_values)
+            set okn2 to infer_usage_types_expr(get_list(stmt and 2) and var_keys and var_values)
+        if t == 23: # FIELD_SET
+            set okf1 to infer_usage_types_expr(get_list(stmt and 1) and var_keys and var_values)
+            set okf2 to infer_usage_types_expr(get_list(stmt and 3) and var_keys and var_values)
+        if t == 27: # MATCH
+            set okm1 to infer_usage_types_expr(get_list(stmt and 1) and var_keys and var_values)
+            set arms to get_list(stmt and 2)
+            set ar_len to length_list(arms)
+            set ar_i to 0
+            repeat while ar_i < ar_len:
+                set okab to infer_usage_types_stmts(get_list(get_list(arms and ar_i) and 2) and var_keys and var_values)
+                set ar_i to ar_i + 1
+        if t == 28: # FOR_EACH
+            set okfe1 to infer_usage_types_expr(get_list(stmt and 2) and var_keys and var_values)
+            set okfe2 to infer_usage_types_stmts(get_list(stmt and 3) and var_keys and var_values)
+        set idx to idx + 1
+    return 0
 
 # A user/imported .ep function whose name matches a C-runtime builtin must NOT
 # be emitted — the C builtin wins (mirrors the Rust compiler's builtin_c_funcs
@@ -710,18 +1174,7 @@ define analyze_return_types with state and program:
             set var_keys to create_list() + 0
             set var_values to create_list() + 0
             
-            set p_len to length_list(params)
-            set p_idx to 0
-            repeat while p_idx < p_len:
-                set p_node to get_list(params and p_idx)
-                set p_name to get_list(p_node and 0)
-                set is_borrow to get_list(p_node and 1)
-                set param_type to 1
-                if is_borrow == 1:
-                    set param_type to 5
-                set ok to map_put(var_keys and var_values and p_name and param_type)
-                set p_idx to p_idx + 1
-                
+            set ok to seed_param_types(params and var_keys and var_values)
             set ok to collect_var_types(state and body and var_keys and var_values)
             
             set ret_t to determine_ret_type(state and body and var_keys and var_values)
@@ -1059,20 +1512,12 @@ define gen_function with state and func:
     set var_types_keys to create_list() + 0
     set var_types_values to create_list() + 0
     
-    # Initialize parameters in var_types
+    # Initialize parameters in var_types (annotations honored — `text as Str`
+    # dispatches display/equals as a string and gets a GC root)
     set p_len to length_list(params)
-    set p_idx to 0
-    repeat while p_idx < p_len:
-        set p_node to get_list(params and p_idx)
-        set p_name to get_list(p_node and 0)
-        set is_borrow to get_list(p_node and 1)
-        set param_type to 1
-        if is_borrow == 1:
-            set param_type to 5
-        set ok to map_put(var_types_keys and var_types_values and p_name and param_type)
-        set p_idx to p_idx + 1
-        
+    set ok to seed_param_types(params and var_types_keys and var_types_values)
     set ok to collect_var_types(state and body and var_types_keys and var_types_values)
+    set ok to infer_usage_types_stmts(body and var_types_keys and var_types_values)
     
     if is_async == 1:
         set cname to get_fn_c_name(func)
@@ -1150,7 +1595,7 @@ define gen_function with state and func:
         set pf to string_concat(pf and ") {\n")
         set pf to string_concat(pf and "    EpFuture* fut = (EpFuture*)malloc(sizeof(EpFuture));\n")
         set pf to string_concat(pf and "    fut->completed = 0; fut->value = 0; fut->waiting_task = NULL; fut->chan = 0;\n")
-        set pf to string_concat(pf and "    ep_gc_register(fut, EP_OBJ_STRUCT);\n")
+        set pf to string_concat(pf and "    { EpGCObject* _go = ep_gc_register(fut, EP_OBJ_STRUCT); if(_go) _go->num_fields = 3; }\n")
         set pf to string_concat(pf and "    ")
         set pf to string_concat(pf and cname)
         set pf to string_concat(pf and "_async_args* args = (")
@@ -1229,7 +1674,10 @@ define gen_function with state and func:
         
     set ok to emit(state and "    long long ret_val = 0;\n\n")
     
-    # Push GC roots
+    # Push GC roots — mirror of the Rust compiler's needs_gc_root analysis:
+    # root anything whose type can hold a heap pointer, and root Int/Float/Bool
+    # variables too when the body uses them non-primitively (their value may
+    # really be a pointer — e.g. a list returned through `returning Int`).
     set gc_root_count to 0
     set idx to 0
     repeat while idx < num_vars:
@@ -1246,13 +1694,35 @@ define gen_function with state and func:
             set is_global to is_global_var(var_name)
             if is_global == 0:
                 set t to map_get(var_types_keys and var_types_values and var_name)
-                if t == 3 || t == 4: # TYPE_DYNSTR or TYPE_LIST
+                set should_root to 1
+                if t == 1 || t == 7 || t == 8: # Int / Bool / Float
+                    set should_root to cg_stmts_have_nonprim(state and body and string_concat(var_name and ""))
+                if should_root == 1:
                     set root_line to "    ep_gc_push_root(&"
                     set root_line to string_concat(root_line and var_name)
                     set root_line to string_concat(root_line and ");\n")
                     set ok to emit(state and root_line)
                     set gc_root_count to gc_root_count + 1
         set idx to idx + 1
+
+    # Parameters too: an unannotated parameter defaults to Int but may receive
+    # any heap value (an f-string temporary, a list) — without a root the
+    # callee's entry safepoint could collect it while it is still live.
+    set p_i to 0
+    repeat while p_i < p_len:
+        set p_node to get_list(params and p_i)
+        set p_name to get_list(p_node and 0)
+        set t to map_get(var_types_keys and var_types_values and p_name)
+        set should_root to 1
+        if t == 1 || t == 7 || t == 8: # Int / Bool / Float
+            set should_root to cg_stmts_have_nonprim(state and body and string_concat(p_name and ""))
+        if should_root == 1:
+            set root_line to "    ep_gc_push_root(&"
+            set root_line to string_concat(root_line and p_name)
+            set root_line to string_concat(root_line and ");\n")
+            set ok to emit(state and root_line)
+            set gc_root_count to gc_root_count + 1
+        set p_i to p_i + 1
         
     set ok to emit(state and "    ep_gc_maybe_collect();\n\n")
     
@@ -1407,9 +1877,13 @@ define gen_statement with state and stmt and var_keys and var_values:
              set line to string_concat(line and ") ? \"true\" : \"false\");\n")
              set ok to emit(state and line)
            else:
-            set line to "    printf(\"%lld\\n\", "
+            # Smart display (mirror of the Rust compiler's fallback arm): the
+            # value may be a string pointer — an untyped parameter, an Any
+            # accessor — or a plain integer; ep_auto_to_string returns string
+            # pointers unchanged and formats everything else as an integer.
+            set line to "    printf(\"%s\\n\", (char*)ep_auto_to_string("
             set line to string_concat(line and expr_str)
-            set line to string_concat(line and ");\n")
+            set line to string_concat(line and "));\n")
             set ok to emit(state and line)
         return 0
         
@@ -1533,13 +2007,16 @@ define gen_statement with state and stmt and var_keys and var_values:
         set val to get_list(stmt and 3)
         set obj_str to gen_expr(state and obj and var_keys and var_values)
         set val_str to gen_expr(state and val and var_keys and var_values)
-        set line to "    ((long long*)"
+        # The write barrier keeps young values stored into old structs alive
+        # across minor collections (mirrors Rust FieldSet). Temps evaluate the
+        # object and value exactly once.
+        set line to "    { long long* _ep_fo = (long long*)("
         set line to string_concat(line and obj_str)
-        set line to string_concat(line and ")[EP_FIELD_")
-        set line to string_concat(line and field_name)
-        set line to string_concat(line and "] = ")
+        set line to string_concat(line and "); long long _ep_fv = ")
         set line to string_concat(line and val_str)
-        set line to string_concat(line and ";\n")
+        set line to string_concat(line and "; _ep_fo[EP_FIELD_")
+        set line to string_concat(line and field_name)
+        set line to string_concat(line and "] = _ep_fv; ep_gc_write_barrier((void*)_ep_fo, _ep_fv); }\n")
         set ok to emit(state and line)
         return 0
 
@@ -2045,7 +2522,9 @@ define gen_expr with state and expr and var_keys and var_values:
         set fields to get_list(expr and 2)
         set field_count to length_list(fields)
         # Allocate enough slots for any global field index (see EP_STRUCT_MAX_SLOTS).
-        set res to "({ long long* _s = (long long*)malloc(sizeof(long long) * EP_STRUCT_MAX_SLOTS); "
+        # calloc, not malloc: the GC scans all EP_STRUCT_MAX_SLOTS slots via
+        # num_fields, so unset slots must be zero, not heap garbage.
+        set res to "({ long long* _s = (long long*)calloc(EP_STRUCT_MAX_SLOTS, sizeof(long long)); "
         set f_idx to 0
         repeat while f_idx < field_count:
             set fpair to get_list(fields and f_idx)
@@ -2058,7 +2537,9 @@ define gen_expr with state and expr and var_keys and var_values:
             set res to string_concat(res and fval_str)
             set res to string_concat(res and "; ")
             set f_idx to f_idx + 1
-        set res to string_concat(res and "ep_gc_register(_s, EP_OBJ_STRUCT); (long long)_s; })")
+        # num_fields makes the GC trace field slots — without it, heap strings
+        # stored in fields are collected while still reachable (use-after-free).
+        set res to string_concat(res and "{ EpGCObject* _go = ep_gc_register(_s, EP_OBJ_STRUCT); if(_go) _go->num_fields = EP_STRUCT_MAX_SLOTS; } (long long)_s; })")
         return res
 
     if type == 25: # NODE_METHOD_CALL
@@ -2919,6 +3400,7 @@ define analyze_safety with state and program:
 define generate_c with program and is_test_mode:
     set state to create_codegen_state()
     set ok to analyze_return_types(state and program)
+    set ok to collect_prim_param_flags(state and program)
     # Record which struct types implement the Iterator trait, so `for each` over
     # such a value uses the iterator protocol (call next() until Done) instead
     # of the list protocol.
@@ -3225,9 +3707,17 @@ define generate_c with program and is_test_mode:
         set struct_decl to string_concat(struct_decl and ";\n\n")
         set ok to emit(state and struct_decl)
         
+        # The wrapper must register the new thread with the GC before running
+        # any Ernos code (and unregister after), exactly as the Rust compiler
+        # emits it. An unregistered thread has no GC slot: the collector never
+        # scans its stack or shadow roots, so anything only that thread holds
+        # gets swept while in use — a use-after-free the moment the main
+        # thread's allocation pressure triggers a major collection.
         set wrap_fn to "void* spawn_wrapper_"
         set wrap_fn to string_concat(wrap_fn and cg_int_to_str(idx))
         set wrap_fn to string_concat(wrap_fn and "(void* r) {\n")
+        set wrap_fn to string_concat(wrap_fn and "    int stack_dummy;\n")
+        set wrap_fn to string_concat(wrap_fn and "    ep_gc_register_thread(&stack_dummy);\n")
         set wrap_fn to string_concat(wrap_fn and "    spawn_args_")
         set wrap_fn to string_concat(wrap_fn and cg_int_to_str(idx))
         set wrap_fn to string_concat(wrap_fn and "* args = (spawn_args_")
@@ -3248,6 +3738,7 @@ define generate_c with program and is_test_mode:
             set j to j + 1
         set wrap_fn to string_concat(wrap_fn and ");\n")
         set wrap_fn to string_concat(wrap_fn and "    free(args);\n")
+        set wrap_fn to string_concat(wrap_fn and "    ep_gc_unregister_thread();\n")
         set wrap_fn to string_concat(wrap_fn and "    return NULL;\n")
         set wrap_fn to string_concat(wrap_fn and "}\n\n")
         set ok to emit(state and wrap_fn)

@@ -1,0 +1,36 @@
+# GC regression: a heap string stored in a struct field must survive garbage
+# churn. Before the fix, epc registered structs without num_fields (fields
+# never traced) and emitted no write barrier on field assignment, so the
+# DynStr assigned in wander() was collected during churn() — the third line
+# printed "/inner" instead of "home/maria/letters/inner".
+# Uses the concat builtin (no stdlib import) so the test
+# is self-contained for the differential runner's temp dir.
+define structure Box:
+    field v as Str
+define move_to on Box with text as Str:
+    set self.v to text
+    return 0
+define wander on Box with name as Str returning Int:
+    set here to concat(self.v and "")
+    set joined to concat(here and "/")
+    set path to concat(joined and name)
+    set ok to self.move_to(path)
+    return 1
+define churn:
+    set junk to ""
+    set i to 0
+    repeat while i < 3000:
+        set junk to concat("waste " and "memory")
+        set i to i + 1
+    return 0
+define main:
+    set b to create Box:
+        v is "home/maria"
+    set ok to b.wander("letters")
+    display concat(b.v and "")
+    set ok to churn()
+    display concat(b.v and "")
+    set ok to b.wander("inner")
+    set ok to churn()
+    display concat(b.v and "")
+    return 0

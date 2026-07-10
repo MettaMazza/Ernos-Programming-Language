@@ -1,0 +1,19 @@
+# display must honor parameter type annotations (`as Str` prints the string,
+# not the pointer-as-number) and dynamically detect strings arriving through
+# UNTYPED parameters (epc used to print both as %lld pointer values).
+define render_annotated with text as Str:
+    display text
+    return 0
+
+define render_untyped with value:
+    display value
+    return 0
+
+define main:
+    set ok1 to render_annotated("hello annotated")
+    set ok2 to render_untyped("hello untyped")
+    set ok3 to render_untyped(42)
+    set n to concat("dyn" and "amic")
+    set ok4 to render_untyped(n)
+    set ok5 to render_annotated(f"formatted {1 + 1}")
+    return 0

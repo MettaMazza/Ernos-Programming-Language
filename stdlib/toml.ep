@@ -130,7 +130,7 @@ define toml_parse_line with store and line and current_section:
     if val_len >= 2:
         set first to get_character(raw_val and 0)
         set last to get_character(raw_val and val_len - 1)
-        if first == 34 and last == 34:
+        if first == 34 and also last == 34:
             set raw_val to substring(raw_val and 1 and val_len - 2)
     
     # Strip inline comments (# after value)

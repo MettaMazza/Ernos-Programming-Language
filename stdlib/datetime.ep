@@ -3,7 +3,6 @@
 # ---- External C Runtime Functions ----
 external define ep_time_now_ms:
 external define ep_time_now_sec:
-external define ep_sleep_ms with ms:
 external define ep_time_year with timestamp:
 external define ep_time_month with timestamp:
 external define ep_time_day with timestamp:
@@ -21,8 +20,9 @@ define now_ms:
 define now_seconds:
     return ep_time_now_sec()
 
-define sleep_ms with ms:
-    return ep_sleep_ms(ms)
+# sleep_ms lives in the "os" module (sleeping is a process operation, not a
+# calendar one). Import "os" for the blocking version, or use the built-in
+# async sleep_ms with await — no import needed.
 
 # ---- Time Components ----
 

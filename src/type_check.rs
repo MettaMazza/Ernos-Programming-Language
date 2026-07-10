@@ -961,7 +961,7 @@ impl TypeChecker {
 
         self.func_types.insert("channel_has_data".into(), (vec![MonoType::Int], MonoType::Int));
         self.func_types.insert("channel_try_recv".into(), (vec![MonoType::Int], MonoType::Int));
-        self.func_types.insert("channel_select".into(), (vec![MonoType::Int], MonoType::Int));
+        self.func_types.insert("channel_select".into(), (vec![MonoType::Int, MonoType::Int], MonoType::Int));
 
         // Structured Concurrency
         self.func_types.insert("create_task_group".into(), (vec![], MonoType::Int));

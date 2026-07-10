@@ -33,6 +33,9 @@ jobs:
       - name: Differential suite (ernos vs epc must agree)
         run: bash tests/run_differential.sh
 
+      - name: Stdlib gate (no duplicate names, every module importable)
+        run: bash tests/run_stdlib_gate.sh
+
       - name: 3-stage self-compilation fixpoint (gen2 == gen3)
         run: bash tests/run_fixpoint.sh
 
@@ -98,6 +101,9 @@ jobs:
 
       - name: Differential suite (ernos vs epc must agree)
         run: bash tests/run_differential.sh
+
+      - name: Stdlib gate (no duplicate names, every module importable)
+        run: bash tests/run_stdlib_gate.sh
 
       - name: 3-stage self-compilation fixpoint (gen2 == gen3)
         run: bash tests/run_fixpoint.sh

@@ -14,7 +14,6 @@ external define ep_remove_file with path:
 external define ep_remove_directory with path:
 external define ep_rename_file with old_path and new_path:
 external define ep_copy_file with src and dst:
-external define ep_get_cwd:
 external define ep_realpath with path:
 
 # ---- File Reading ----
@@ -68,8 +67,8 @@ define copy_file with src and dst:
 
 # ---- Path Utilities ----
 
-define get_cwd:
-    return ep_get_cwd()
+# get_cwd lives in the "os" module (the current directory belongs to the
+# process, not the file system). Import "os" to use it.
 
 define path_join with base and child:
     return concat(concat(base and "/") and child)

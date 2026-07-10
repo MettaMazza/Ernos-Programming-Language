@@ -330,7 +330,7 @@ define main:
 - `s_wait_group(group)`: Waits until all tasks in the group complete. If any task returns a negative error code (e.g. `-1`), all other running tasks in the group are cancelled, and a list of results is returned.
 - `s_timeout(ms and fut)`: Returns the future's result if it finishes within `ms`, otherwise cancels the future and returns `-1`.
 - `s_cancel(fut)`: Aborts execution of the task corresponding to `fut`.
-- `sleep_ms(ms)`: A non-blocking cooperative async sleep function that yields back to the scheduler event loop for `ms` milliseconds.
+- `sleep_ms(ms)`: Sleep for `ms` milliseconds. Inside the event loop (an `async` task) it is a non-blocking cooperative sleep that yields back to the scheduler. Outside the event loop (ordinary synchronous code) it blocks the calling thread for the full duration and returns an already-completed future, so `set ok to sleep_ms(800)` really waits 800 ms.
 
 ---
 
