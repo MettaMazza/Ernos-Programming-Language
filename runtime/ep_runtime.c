@@ -1945,37 +1945,60 @@ long long channel_has_data(long long chan_ptr) {
     return has;
 }
 
+/* Leave a GC-safe blocking region (see channel_select). If a collection is
+   in progress, wait for it to finish before running mutator code again. */
+static void ep_gc_leave_blocking_region(void) {
+    if (ep_thread_slot < 0) return;
+    pthread_mutex_lock(&ep_gc_mutex);
+    while (ep_gc_stop_requested) {
+        pthread_cond_wait(&ep_gc_resume_cond, &ep_gc_mutex);
+    }
+    ep_gc_parked_count--;
+    pthread_mutex_unlock(&ep_gc_mutex);
+}
+
 // Select: wait for any of N channels to have data, with timeout in ms
 // channels_list is a list of channel pointers
 // Returns index (0-based) of first ready channel, or -1 on timeout
 long long channel_select(long long channels_list, long long timeout_ms) {
     EpList* list = (EpList*)channels_list;
     if (!list || list->length == 0) return -1;
-    
+
 #ifdef _WIN32
     ULONGLONG start_tick = GetTickCount64();
 #else
     struct timespec start, now;
     clock_gettime(CLOCK_MONOTONIC, &start);
 #endif
-    
+
+    /* A GC-safe blocking region. A thread sitting in a long select must not
+       stall every stop-the-world (waking it to park costs ~0.5ms per major
+       collection — allocation-heavy code on another thread pays that tens of
+       thousands of times). Instead, pin this frame's roots once — spill the
+       callee-saved registers into this frame and publish the frame as the
+       thread's stack top — and count the thread as already parked. The
+       collector then proceeds immediately and scans [this frame, stack
+       bottom], a range that is frozen for the whole select: the poll loop
+       below only grows the stack DOWNWARD from here (excluded from the scan)
+       and allocates nothing. On every way out, ep_gc_leave_blocking_region
+       waits for any in-flight collection before mutator code resumes.
+       (Without any of this, the collector scans a live, mutating stack
+       against a stale top, misses the channels list held in a callee-saved
+       register, sweeps it, and the next poll dereferences freed memory.) */
+    jmp_buf _pin_regs;
+    volatile char _pin_marker;
+    if (ep_thread_slot >= 0) {
+        memset(&_pin_regs, 0, sizeof(_pin_regs));
+        setjmp(_pin_regs);
+        pthread_mutex_lock(&ep_gc_mutex);
+        { char* _a = (char*)(void*)&_pin_marker; char* _b = (char*)(void*)&_pin_regs;
+          ep_thread_local_top = (void*)((uintptr_t)((_a < _b) ? _a : _b) & ~(uintptr_t)7); }
+        __sync_synchronize();
+        ep_gc_parked_count++;
+        pthread_mutex_unlock(&ep_gc_mutex);
+    }
+
     while (1) {
-        /* Cooperative safepoint (registered spawned threads only): if a
-           collector is stopping the world, park here until it finishes.
-           Without this, a thread sitting in a long select never reaches a
-           safepoint: the collector's stop-the-world gives up after its
-           bounded wait and conservatively scans this thread's live, mutating
-           stack against a stale published top — missing the channels list
-           when it is held only in a callee-saved register — then sweeps it,
-           and the next poll iteration dereferences freed memory (SIGSEGV).
-           send_channel/receive_channel sidestep the same class of bug by
-           suppressing GC while blocked; that is too blunt here, because a
-           select can wait for seconds and would keep GC off the whole time. */
-        if (ep_gc_stop_requested && ep_thread_slot >= 0) {
-            pthread_mutex_lock(&ep_gc_mutex);
-            ep_gc_park_if_stopped();
-            pthread_mutex_unlock(&ep_gc_mutex);
-        }
         // Poll all channels
         for (long long i = 0; i < list->length; i++) {
             EpChannel* chan = (EpChannel*)list->data[i];
@@ -1983,12 +2006,13 @@ long long channel_select(long long channels_list, long long timeout_ms) {
                 ep_mutex_lock(&chan->mutex);
                 if (chan->size > 0) {
                     ep_mutex_unlock(&chan->mutex);
+                    ep_gc_leave_blocking_region();
                     return i;
                 }
                 ep_mutex_unlock(&chan->mutex);
             }
         }
-        
+
         // Check timeout
         if (timeout_ms >= 0) {
 #ifdef _WIN32
@@ -1998,7 +2022,10 @@ long long channel_select(long long channels_list, long long timeout_ms) {
             clock_gettime(CLOCK_MONOTONIC, &now);
             long long elapsed = (now.tv_sec - start.tv_sec) * 1000 + (now.tv_nsec - start.tv_nsec) / 1000000;
 #endif
-            if (elapsed >= timeout_ms) return -1;
+            if (elapsed >= timeout_ms) {
+                ep_gc_leave_blocking_region();
+                return -1;
+            }
         }
         
         // Brief sleep to avoid busy-wait
