@@ -350,7 +350,27 @@ define create_parser_state with tokens:
     set ok to append_list(state and tokens)
     set ok to append_list(state and 0)
     set ok to append_list(state and 0)   # error flag (slot 2): set when a parse error occurs
+    set ok to append_list(state and 0)   # in_condition (slot 3): parsing an if/while test
+    set ok to append_list(state and 0)   # call_depth   (slot 4): inside function-call arguments
     return state
+
+# Context for the word "and". It separates function-call arguments, but inside
+# an if/while test (and not inside a call there) it means logical AND — exactly
+# as the Rust compiler decides it. These two counters carry that context.
+define get_in_condition with state:
+    return get_list(state and 3)
+
+define set_in_condition with state and value:
+    return set_list(state and 3 and value)
+
+define get_call_depth with state:
+    return get_list(state and 4)
+
+define enter_call_args with state:
+    return set_list(state and 4 and get_list(state and 4) + 1)
+
+define leave_call_args with state:
+    return set_list(state and 4 and get_list(state and 4) - 1)
 
 # Records that a parse error occurred. Parser functions return placeholder
 # values and continue, but this flag lets the driver abort compilation instead
@@ -932,8 +952,11 @@ define parse_statement with state:
                 set dummy to advance_token(state)
                 if t == 8:
                     set ok to expect_token_type(state and 9) # while
-                
+
+                set was_cond to get_in_condition(state)
+                set ok to set_in_condition(state and 1)
                 set cond to parse_expr(state and 0) + 0
+                set ok to set_in_condition(state and was_cond)
                 set ok to expect_token_type(state and 22) # :
                 set ok to skip_newlines(state)
                 set body to parse_block(state) + 0
@@ -1005,7 +1028,10 @@ define parse_statement with state:
 
 define parse_if_statement with state:
     set dummy to advance_token(state) # consume 'if'
+    set was_cond to get_in_condition(state)
+    set ok to set_in_condition(state and 1)
     set cond to parse_expr(state and 0) + 0
+    set ok to set_in_condition(state and was_cond)
     set ok to expect_token_type(state and 22) # :
     set ok to skip_newlines(state)
     set then_branch to parse_block(state) + 0
@@ -1107,7 +1133,11 @@ define parse_expr with state and precedence:
         set next_tok to peek_token(state)
         set next_t to get_token_type(next_tok)
         set next_prec to get_token_precedence(next_tok)
-        
+        # In an if/while test, a bare "and" between comparisons is logical AND
+        # (same precedence as &&) — but only when not separating call arguments.
+        if next_t == 11 && get_in_condition(state) == 1 && get_call_depth(state) == 0:
+            set next_prec to 2
+
         # Handle dot (field access / method call) as highest-precedence infix
         if next_t == 40 && precedence < 7: # . (dot)
             set dummy to advance_token(state) # consume dot
@@ -1117,6 +1147,7 @@ define parse_expr with state and precedence:
             set next2 to peek_token(state)
             if get_token_type(next2) == 23: # (
                 set dummy to advance_token(state) # consume (
+                set entered to enter_call_args(state)
                 set args to create_list() + 0
                 set next3 to peek_token(state)
                 if get_token_type(next3) != 24: # not )
@@ -1136,6 +1167,7 @@ define parse_expr with state and precedence:
                                 set ok to append_list(args and arg)
                             else:
                                 set arg_loop to 0
+                set left_call to leave_call_args(state)
                 set ok to expect_token_type(state and 24) # )
                 set left to make_node_method_call(left and member_name and args) + 0
             else:
@@ -1183,21 +1215,26 @@ define parse_expr with state and precedence:
                         set right to parse_expr(state and right_prec) + 0
                         set left to make_node_comp(left and op and right) + 0
                     else:
-                        set is_logical to op_type == 20 || op_type == 21
+                        set is_logical to op_type == 20 || op_type == 21 || op_type == 11
                         if is_logical == 1:
                             set op to 0
                             if op_type == 20:
                                 set op to 1 # LOGICAL_AND
                             if op_type == 21:
                                 set op to 2 # LOGICAL_OR
-                                
-                            set right_prec to get_token_precedence(op_tok)
+                            if op_type == 11:
+                                set op to 1 # bare "and" in a condition = LOGICAL_AND
+
+                            set right_prec to 2
+                            if op_type == 21:
+                                set right_prec to 1
                             set right to parse_expr(state and right_prec) + 0
                             set left to make_node_logical(left and op and right) + 0
                         else:
                             # Function call via ( in infix position
                             if op_type == 23: # (
                                 # left must be identifier for function call
+                                set entered to enter_call_args(state)
                                 set args to create_list() + 0
                                 set next3 to peek_token(state)
                                 if get_token_type(next3) != 24:
@@ -1212,6 +1249,7 @@ define parse_expr with state and precedence:
                                             set ok to append_list(args and arg)
                                         else:
                                             set a_loop to 0
+                                set left_call to leave_call_args(state)
                                 set ok to expect_token_type(state and 24) # )
                                 # Extract name from left node (must be ident)
                                 set left_type to get_list(left and 0)
@@ -1297,6 +1335,7 @@ define parse_prefix with state:
         set next_tok to peek_token(state)
         if get_token_type(next_tok) == 23: # (
             set dummy to advance_token(state) # consume (
+            set entered to enter_call_args(state)
             set args to create_list() + 0
             set next_tok2 to peek_token(state)
             if get_token_type(next_tok2) != 24: # not ")"
@@ -1312,6 +1351,7 @@ define parse_prefix with state:
                         set ok to append_list(args and arg)
                     else:
                         set loop_args to 0
+            set left_call to leave_call_args(state)
             set ok to expect_token_type(state and 24) # )
             return make_node_call(name and args) + 0
         else:
@@ -1321,6 +1361,7 @@ define parse_prefix with state:
                 set nt2 to get_token_type(next2)
                 if nt2 == 10: # with
                     set dummy to advance_token(state)
+                    set entered to enter_call_args(state)
                     set vargs to create_list() + 0
                     set varg to parse_expr(state and 0) + 0
                     set ok to append_list(vargs and varg)
@@ -1333,6 +1374,7 @@ define parse_prefix with state:
                             set ok to append_list(vargs and varg)
                         else:
                             set va_loop to 0
+                    set left_enum to leave_call_args(state)
                     return make_node_enum_create(name and vargs) + 0
             return make_node_ident(name) + 0
     
@@ -1432,6 +1474,7 @@ define parse_struct_create with state:
 
 # [expr, expr, ...]
 define parse_list_literal with state:
+    set entered to enter_call_args(state)
     set elements to create_list() + 0
     set next to peek_token(state)
     if get_token_type(next) != 70: # not ]
@@ -1452,5 +1495,6 @@ define parse_list_literal with state:
                     set ok to append_list(elements and elem)
                 else:
                     set el_loop to 0
+    set left_list to leave_call_args(state)
     set ok to expect_token_type(state and 70) # ]
     return make_node_list_lit(elements)

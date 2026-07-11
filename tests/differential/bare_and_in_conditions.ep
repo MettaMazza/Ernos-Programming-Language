@@ -1,0 +1,26 @@
+# Regression: bare "and" is logical AND inside an if/while test, but still
+# separates function-call arguments there (context-sensitive, matching the
+# Rust reference). epc used to reject "if a > 0 and b > 0:" outright.
+import "string"
+
+define both with a as Int and b as Int returning Int:
+    if a > 0 and b > 0:
+        return 1
+    return 0
+
+define main:
+    display both(3 and 4)
+    display both(3 and 0)
+    set x to 5
+    # three-way AND, and a call (min) whose own "and" stays a separator
+    if x > 0 and x < 10 and min(x and 9) == 5:
+        display 111
+    # a call in the condition with logical and after it
+    if string_contains("hello world" and "world") == 1 and x > 0:
+        display 222
+    # while with bare and
+    set n to 0
+    repeat while n < 3 and x == 5:
+        set n to n + 1
+    display n
+    return 0

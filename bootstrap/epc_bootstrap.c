@@ -5129,6 +5129,11 @@ long long make_node_method_def(long long, long long, long long, long long);
 long long make_node_trait_def(long long, long long);
 long long make_node_trait_impl(long long, long long, long long);
 long long create_parser_state(long long);
+long long get_in_condition(long long);
+long long set_in_condition(long long, long long);
+long long get_call_depth(long long);
+long long enter_call_args(long long);
+long long leave_call_args(long long);
 long long set_parser_error(long long);
 long long get_parser_error(long long);
 long long get_state_tokens(long long);
@@ -8150,11 +8155,79 @@ long long create_parser_state(long long tokens) {
     ok = append_list(state, tokens);
     ok = append_list(state, 0LL);
     ok = append_list(state, 0LL);
+    ok = append_list(state, 0LL);
+    ok = append_list(state, 0LL);
     ret_val = state;
     state = 0;
     goto L_cleanup;
 L_cleanup:
     ep_gc_pop_roots(2);
+    return ret_val;
+}
+
+long long get_in_condition(long long state) {
+    long long ret_val = 0;
+
+    ep_gc_push_root(&state);
+    ep_gc_maybe_collect();
+
+    ret_val = get_list(state, 3LL);
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long set_in_condition(long long state, long long value) {
+    long long ret_val = 0;
+
+    ep_gc_push_root(&state);
+    ep_gc_push_root(&value);
+    ep_gc_maybe_collect();
+
+    ret_val = set_list(state, 3LL, value);
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(2);
+    return ret_val;
+}
+
+long long get_call_depth(long long state) {
+    long long ret_val = 0;
+
+    ep_gc_push_root(&state);
+    ep_gc_maybe_collect();
+
+    ret_val = get_list(state, 4LL);
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long enter_call_args(long long state) {
+    long long ret_val = 0;
+
+    ep_gc_push_root(&state);
+    ep_gc_maybe_collect();
+
+    ret_val = set_list(state, 4LL, (get_list(state, 4LL) + 1LL));
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long leave_call_args(long long state) {
+    long long ret_val = 0;
+
+    ep_gc_push_root(&state);
+    ep_gc_maybe_collect();
+
+    ret_val = set_list(state, 4LL, (get_list(state, 4LL) - 1LL));
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
     return ret_val;
 }
 
@@ -9279,6 +9352,7 @@ long long parse_statement(long long state) {
     long long obj = 0;
     long long expr = 0;
     long long next_as = 0;
+    long long was_cond = 0;
     long long cond = 0;
     long long body = 0;
     long long tok_func = 0;
@@ -9301,6 +9375,7 @@ long long parse_statement(long long state) {
     ep_gc_push_root(&obj);
     ep_gc_push_root(&expr);
     ep_gc_push_root(&next_as);
+    ep_gc_push_root(&was_cond);
     ep_gc_push_root(&cond);
     ep_gc_push_root(&body);
     ep_gc_push_root(&tok_func);
@@ -9352,7 +9427,10 @@ long long parse_statement(long long state) {
     if (t == 8LL) {
     ok = expect_token_type(state, 9LL);
     }
+    was_cond = get_in_condition(state);
+    ok = set_in_condition(state, 1LL);
     cond = (parse_expr(state, 0LL) + 0LL);
+    ok = set_in_condition(state, was_cond);
     ok = expect_token_type(state, 22LL);
     ok = skip_newlines(state);
     body = (parse_block(state) + 0LL);
@@ -9445,14 +9523,15 @@ long long parse_statement(long long state) {
     }
     }
 L_cleanup:
-    ep_gc_pop_roots(20);
+    ep_gc_pop_roots(21);
     return ret_val;
 }
 
 long long parse_if_statement(long long state) {
     long long dummy = 0;
-    long long cond = 0;
+    long long was_cond = 0;
     long long ok = 0;
+    long long cond = 0;
     long long then_branch = 0;
     long long else_branch = 0;
     long long next = 0;
@@ -9460,6 +9539,7 @@ long long parse_if_statement(long long state) {
     long long chained_if = 0;
     long long ret_val = 0;
 
+    ep_gc_push_root(&was_cond);
     ep_gc_push_root(&cond);
     ep_gc_push_root(&then_branch);
     ep_gc_push_root(&else_branch);
@@ -9470,7 +9550,10 @@ long long parse_if_statement(long long state) {
     ep_gc_maybe_collect();
 
     dummy = advance_token(state);
+    was_cond = get_in_condition(state);
+    ok = set_in_condition(state, 1LL);
     cond = (parse_expr(state, 0LL) + 0LL);
+    ok = set_in_condition(state, was_cond);
     ok = expect_token_type(state, 22LL);
     ok = skip_newlines(state);
     then_branch = (parse_block(state) + 0LL);
@@ -9492,7 +9575,7 @@ long long parse_if_statement(long long state) {
     ret_val = make_node_if(cond, then_branch, else_branch);
     goto L_cleanup;
 L_cleanup:
-    ep_gc_pop_roots(7);
+    ep_gc_pop_roots(8);
     return ret_val;
 }
 
@@ -9640,12 +9723,14 @@ long long parse_expr(long long state, long long precedence) {
     long long member_tok = 0;
     long long member_name = 0;
     long long next2 = 0;
+    long long entered = 0;
     long long args = 0;
     long long next3 = 0;
     long long arg = 0;
     long long ok = 0;
     long long arg_loop = 0;
     long long next4 = 0;
+    long long left_call = 0;
     long long op_tok = 0;
     long long op_type = 0;
     long long is_math = 0;
@@ -9682,6 +9767,9 @@ long long parse_expr(long long state, long long precedence) {
     next_tok = peek_token(state);
     next_t = get_token_type(next_tok);
     next_prec = get_token_precedence(next_tok);
+    if (((next_t == 11LL && get_in_condition(state) == 1LL) && get_call_depth(state) == 0LL)) {
+    next_prec = 2LL;
+    }
     if ((next_t == 40LL && precedence < 7LL)) {
     dummy = advance_token(state);
     member_tok = advance_token(state);
@@ -9689,6 +9777,7 @@ long long parse_expr(long long state, long long precedence) {
     next2 = peek_token(state);
     if (get_token_type(next2) == 23LL) {
     dummy = advance_token(state);
+    entered = enter_call_args(state);
     args = (create_list() + 0LL);
     next3 = peek_token(state);
     if (get_token_type(next3) != 24LL) {
@@ -9712,6 +9801,7 @@ long long parse_expr(long long state, long long precedence) {
     }
     }
     }
+    left_call = leave_call_args(state);
     ok = expect_token_type(state, 24LL);
     left = (make_node_method_call(left, member_name, args) + 0LL);
     } else {
@@ -9768,7 +9858,7 @@ long long parse_expr(long long state, long long precedence) {
     right = (parse_expr(state, right_prec) + 0LL);
     left = (make_node_comp(left, op, right) + 0LL);
     } else {
-    is_logical = (op_type == 20LL || op_type == 21LL);
+    is_logical = ((op_type == 20LL || op_type == 21LL) || op_type == 11LL);
     if (is_logical == 1LL) {
     op = 0LL;
     if (op_type == 20LL) {
@@ -9777,11 +9867,18 @@ long long parse_expr(long long state, long long precedence) {
     if (op_type == 21LL) {
     op = 2LL;
     }
-    right_prec = get_token_precedence(op_tok);
+    if (op_type == 11LL) {
+    op = 1LL;
+    }
+    right_prec = 2LL;
+    if (op_type == 21LL) {
+    right_prec = 1LL;
+    }
     right = (parse_expr(state, right_prec) + 0LL);
     left = (make_node_logical(left, op, right) + 0LL);
     } else {
     if (op_type == 23LL) {
+    entered = enter_call_args(state);
     args = (create_list() + 0LL);
     next3 = peek_token(state);
     if (get_token_type(next3) != 24LL) {
@@ -9799,6 +9896,7 @@ long long parse_expr(long long state, long long precedence) {
     }
     }
     }
+    left_call = leave_call_args(state);
     ok = expect_token_type(state, 24LL);
     left_type = get_list(left, 0LL);
     if (left_type == 3LL) {
@@ -9837,18 +9935,21 @@ long long parse_prefix(long long state) {
     long long name = 0;
     long long next_tok = 0;
     long long dummy = 0;
+    long long entered = 0;
     long long args = 0;
     long long next_tok2 = 0;
     long long arg = 0;
     long long loop_args = 0;
     long long next_tok3 = 0;
     long long nt3_type = 0;
+    long long left_call = 0;
     long long next2 = 0;
     long long nt2 = 0;
     long long vargs = 0;
     long long varg = 0;
     long long va_loop = 0;
     long long next3 = 0;
+    long long left_enum = 0;
     long long expr = 0;
     long long start_expr = 0;
     long long end_expr = 0;
@@ -9959,6 +10060,7 @@ long long parse_prefix(long long state) {
     next_tok = peek_token(state);
     if (get_token_type(next_tok) == 23LL) {
     dummy = advance_token(state);
+    entered = enter_call_args(state);
     args = (create_list() + 0LL);
     next_tok2 = peek_token(state);
     if (get_token_type(next_tok2) != 24LL) {
@@ -9977,6 +10079,7 @@ long long parse_prefix(long long state) {
     }
     }
     }
+    left_call = leave_call_args(state);
     ok = expect_token_type(state, 24LL);
     ret_val = (make_node_call(name, args) + 0LL);
     goto L_cleanup;
@@ -9986,6 +10089,7 @@ long long parse_prefix(long long state) {
     nt2 = get_token_type(next2);
     if (nt2 == 10LL) {
     dummy = advance_token(state);
+    entered = enter_call_args(state);
     vargs = (create_list() + 0LL);
     varg = (parse_expr(state, 0LL) + 0LL);
     ok = append_list(vargs, varg);
@@ -10000,6 +10104,7 @@ long long parse_prefix(long long state) {
     va_loop = 0LL;
     }
     }
+    left_enum = leave_call_args(state);
     ret_val = (make_node_enum_create(name, vargs) + 0LL);
     goto L_cleanup;
     }
@@ -10175,6 +10280,7 @@ L_cleanup:
 }
 
 long long parse_list_literal(long long state) {
+    long long entered = 0;
     long long elements = 0;
     long long next = 0;
     long long elem = 0;
@@ -10182,6 +10288,7 @@ long long parse_list_literal(long long state) {
     long long el_loop = 0;
     long long nt = 0;
     long long dummy = 0;
+    long long left_list = 0;
     long long ret_val = 0;
 
     ep_gc_push_root(&elements);
@@ -10190,6 +10297,7 @@ long long parse_list_literal(long long state) {
     ep_gc_push_root(&state);
     ep_gc_maybe_collect();
 
+    entered = enter_call_args(state);
     elements = (create_list() + 0LL);
     next = peek_token(state);
     if (get_token_type(next) != 70LL) {
@@ -10214,6 +10322,7 @@ long long parse_list_literal(long long state) {
     }
     }
     }
+    left_list = leave_call_args(state);
     ok = expect_token_type(state, 70LL);
     ret_val = make_node_list_lit(elements);
     goto L_cleanup;
