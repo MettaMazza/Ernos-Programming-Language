@@ -2,17 +2,14 @@ import "../stdlib/structured" as s
 
 async define worker_success with id as Int and val as Int returning Int:
     set dummy to await sleep_ms(50)
-    display f"Worker {id} done with {val}"
     return val
 
 async define worker_failure with id as Int returning Int:
     set dummy to await sleep_ms(10)
-    display f"Worker {id} failing"
     return -1
 
 async define worker_sleeps with id as Int and ms as Int returning Int:
     set dummy to await sleep_ms(ms)
-    display f"Worker {id} woke up"
     return id
 
 define main:

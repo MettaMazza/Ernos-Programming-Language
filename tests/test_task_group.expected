@@ -1,0 +1,11 @@
+=== Task Group Success ===
+Results count: 2
+Result 1: 100
+Result 2: 200
+=== Task Group Cancel/Failure ===
+Result 3: -1
+Result 4: -1
+=== Timeout Failure ===
+Timeout result: -1
+=== Timeout Success ===
+Timeout success result: 6

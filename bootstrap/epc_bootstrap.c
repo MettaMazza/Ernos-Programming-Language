@@ -37,6 +37,7 @@ typedef int pthread_attr_t;
 #define pthread_detach(t) ((void)(t), 0)
 #else
 #include <setjmp.h>
+#include <limits.h>
 #endif
 #include <signal.h>
 #include <time.h>
@@ -1796,6 +1797,7 @@ long long json_get_int(long long json_val, long long key_val);
 long long json_get_bool(long long json_val, long long key_val);
 long long ep_sha1(long long data_val);
 long long ep_net_recv_bytes(long long fd, long long count);
+long long ep_net_send_raw(long long fd, long long data_ptr, long long count);
 long long channel_try_recv(long long chan_ptr, long long out_ptr);
 long long channel_has_data(long long chan_ptr);
 long long channel_select(long long channels_list, long long timeout_ms);
@@ -2068,6 +2070,11 @@ long long ep_net_send(long long fd, const char* data) {
     return 0;
 }
 
+long long ep_net_send_raw(long long fd, long long data_ptr, long long count) {
+    (void)fd; (void)data_ptr; (void)count;
+    return 0;
+}
+
 char* ep_net_recv(long long fd, long long max_len) {
     (void)fd; (void)max_len;
     char* empty = malloc(1);
@@ -2206,17 +2213,29 @@ long long ep_net_accept(long long server_fd) {
 
 long long ep_net_send(long long fd, const char* data) {
     if (!data) return 0;
-    /* send() may write fewer bytes than requested (partial write under load/
-       backpressure). A single send() therefore silently truncated large IPC
-       responses, cutting agent replies mid-stream. Loop until all bytes are sent. */
-    size_t total = strlen(data);
-    size_t off = 0;
-    while (off < total) {
-        ssize_t n = send((int)fd, data + off, total - off, 0);
+    return ep_net_send_raw(fd, (long long)data, (long long)strlen(data));
+}
+
+long long ep_net_send_raw(long long fd, long long data_ptr, long long count) {
+    if (data_ptr == 0 || count <= 0) return 0;
+
+    /* send() may write fewer bytes than requested. Keep sending until the
+       explicit byte count is exhausted, including bytes after embedded NULs. */
+    const char* data = (const char*)data_ptr;
+    long long off = 0;
+    while (off < count) {
+#ifdef _WIN32
+        int chunk = count - off > INT_MAX ? INT_MAX : (int)(count - off);
+        int n = send((int)fd, data + off, chunk, 0);
+        if (n < 0 && WSAGetLastError() == WSAEINTR) continue;
+#else
+        ssize_t n = send((int)fd, data + off, (size_t)(count - off), 0);
+        if (n < 0 && errno == EINTR) continue;
+#endif
         if (n <= 0) break;
-        off += (size_t)n;
+        off += (long long)n;
     }
-    return (long long)off;
+    return off;
 }
 
 char* ep_net_recv(long long fd, long long max_len) {
@@ -4823,7 +4842,6 @@ long long ep_get_args(void) {
     return list_ptr;
 }
 
-
 /* Built-in: string concatenation */
 long long concat(long long a, long long b) {
     const char* sa = (const char*)a;
@@ -5246,6 +5264,7 @@ long long dec_borrow_count(long long, long long, long long);
 long long inc_borrow_count(long long, long long, long long);
 long long check_safety_stmts(long long, long long, long long, long long, long long, long long, long long, long long, long long, long long);
 long long analyze_safety(long long, long long);
+long long validate_program_safety(long long);
 long long generate_c(long long, long long);
 long long ep_rt_core_0();
 long long ep_rt_core_1();
@@ -5765,9 +5784,11 @@ long long _main() {
     long long empty_imports = 0;
     long long program_ast = 0;
     long long check_ok = 0;
+    long long safety_ok = 0;
     long long opt_ok = 0;
     long long c_code = 0;
     long long c_path = 0;
+    long long c_compiler = 0;
     long long compile_cmd = 0;
     long long pf_len = 0;
     long long pf_idx = 0;
@@ -5801,6 +5822,7 @@ long long _main() {
     ep_gc_push_root(&program_ast);
     ep_gc_push_root(&c_code);
     ep_gc_push_root(&c_path);
+    ep_gc_push_root(&c_compiler);
     ep_gc_push_root(&compile_cmd);
     ep_gc_push_root(&pf_idx);
     ep_gc_push_root(&pf);
@@ -5895,6 +5917,12 @@ long long _main() {
     goto L_cleanup;
     }
     if (check_only == 1LL) {
+    safety_ok = validate_program_safety(program_ast);
+    if (safety_ok == 0LL) {
+    printf("%s\n", (char*)(long long)"Compilation failed: ownership/safety errors.");
+    ret_val = 1LL;
+    goto L_cleanup;
+    }
     printf("%s\n", (char*)(long long)"Check passed: no errors.");
     ret_val = 0LL;
     goto L_cleanup;
@@ -5909,8 +5937,12 @@ long long _main() {
     }
     c_path = string_concat(stem, (long long)"_compiled.c");
     ok = write_file_content((char*)c_path, (char*)c_code);
-    printf("%s\n", (char*)(long long)"[3/3] Compiling and Linking via Clang...");
-    compile_cmd = (long long)"clang ";
+    c_compiler = (long long)"clang";
+    if (ep_system((long long)"command -v clang >/dev/null 2>&1") != 0LL) {
+    c_compiler = (long long)"gcc";
+    }
+    printf("%s\n", (char*)concat((long long)"[3/3] Compiling and Linking via ", concat(ep_auto_to_string(c_compiler), (long long)"...")));
+    compile_cmd = string_concat(c_compiler, (long long)" ");
     compile_cmd = string_concat(compile_cmd, c_path);
     compile_cmd = string_concat(compile_cmd, (long long)" -o ");
     compile_cmd = string_concat(compile_cmd, stem);
@@ -5958,7 +5990,7 @@ long long _main() {
     goto L_cleanup;
     }
 L_cleanup:
-    ep_gc_pop_roots(30);
+    ep_gc_pop_roots(31);
     return ret_val;
 }
 
@@ -13612,6 +13644,7 @@ long long analyze_return_types(long long state, long long program) {
     ok = map_put(keys, values, (long long)"ep_net_listen", 1LL);
     ok = map_put(keys, values, (long long)"ep_net_accept", 1LL);
     ok = map_put(keys, values, (long long)"ep_net_send", 1LL);
+    ok = map_put(keys, values, (long long)"ep_net_send_raw", 1LL);
     ok = map_put(keys, values, (long long)"ep_net_recv", 3LL);
     ok = map_put(keys, values, (long long)"ep_net_close", 1LL);
     ok = map_put(keys, values, (long long)"append_list", 1LL);
@@ -14030,6 +14063,10 @@ long long infer_type(long long state, long long expr, long long var_keys, long l
     if (type == 21LL) {
     inner = get_list(expr, 1LL);
     ret_val = infer_type(state, inner, var_keys, var_values);
+    goto L_cleanup;
+    }
+    if (((type == 24LL || type == 26LL) || type == 35LL)) {
+    ret_val = 4LL;
     goto L_cleanup;
     }
     ret_val = 1LL;
@@ -17302,6 +17339,25 @@ L_cleanup:
     return ret_val;
 }
 
+long long validate_program_safety(long long program) {
+    long long state = 0;
+    long long ok = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&state);
+    ep_gc_push_root(&program);
+    ep_gc_maybe_collect();
+
+    state = create_codegen_state();
+    ok = analyze_return_types(state, program);
+    ok = collect_prim_param_flags(state, program);
+    ret_val = analyze_safety(state, program);
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(2);
+    return ret_val;
+}
+
 long long generate_c(long long program, long long is_test_mode) {
     long long state = 0;
     long long ok = 0;
@@ -18028,6 +18084,7 @@ long long ep_rt_core_0() {
     ok = append_list(lines, (long long)"#define pthread_detach(t) ((void)(t), 0)\n");
     ok = append_list(lines, (long long)"#else\n");
     ok = append_list(lines, (long long)"#include <setjmp.h>\n");
+    ok = append_list(lines, (long long)"#include <limits.h>\n");
     ok = append_list(lines, (long long)"#endif\n");
     ok = append_list(lines, (long long)"#include <signal.h>\n");
     ok = append_list(lines, (long long)"#include <time.h>\n");
@@ -18138,7 +18195,6 @@ long long ep_rt_core_0() {
     ok = append_list(lines, (long long)"#endif\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"#if defined(__wasm__)\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -18155,6 +18211,7 @@ long long ep_rt_core_1() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"#if defined(__wasm__)\n");
     ok = append_list(lines, (long long)"  typedef int ep_thread_t;\n");
     ok = append_list(lines, (long long)"  typedef int ep_mutex_t;\n");
     ok = append_list(lines, (long long)"  typedef int ep_cond_t;\n");
@@ -18304,7 +18361,6 @@ long long ep_rt_core_1() {
     ok = append_list(lines, (long long)"    long long expiry = ep_time_now_ms() + timeout_ms;\n");
     ok = append_list(lines, (long long)"    EpTimer* timer = (EpTimer*)malloc(sizeof(EpTimer));\n");
     ok = append_list(lines, (long long)"    timer->expiry_ms = expiry;\n");
-    ok = append_list(lines, (long long)"    timer->task = task;\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -18321,6 +18377,7 @@ long long ep_rt_core_2() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"    timer->task = task;\n");
     ok = append_list(lines, (long long)"    timer->next = NULL;\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"    /* Insert sorted */\n");
@@ -18470,7 +18527,6 @@ long long ep_rt_core_2() {
     ok = append_list(lines, (long long)"            if (task) {\n");
     ok = append_list(lines, (long long)"                if (task->is_cancelled) {\n");
     ok = append_list(lines, (long long)"                    if (task->fut) {\n");
-    ok = append_list(lines, (long long)"                        task->fut->completed = 1;\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -18487,6 +18543,7 @@ long long ep_rt_core_3() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"                        task->fut->completed = 1;\n");
     ok = append_list(lines, (long long)"                        task->fut->value = -1;\n");
     ok = append_list(lines, (long long)"                    }\n");
     ok = append_list(lines, (long long)"                    free(task->args);\n");
@@ -18636,7 +18693,6 @@ long long ep_rt_core_3() {
     ok = append_list(lines, (long long)"                    free(task->args);\n");
     ok = append_list(lines, (long long)"                    free(task);\n");
     ok = append_list(lines, (long long)"                } else {\n");
-    ok = append_list(lines, (long long)"                    EpTask* saved_current = ep_current_task;\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -18653,6 +18709,7 @@ long long ep_rt_core_4() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"                    EpTask* saved_current = ep_current_task;\n");
     ok = append_list(lines, (long long)"                    ep_current_task = task;\n");
     ok = append_list(lines, (long long)"                    long long res = task->step(task->args);\n");
     ok = append_list(lines, (long long)"                    ep_current_task = saved_current;\n");
@@ -18802,7 +18859,6 @@ long long ep_rt_core_4() {
     ok = append_list(lines, (long long)"            } else {\n");
     ok = append_list(lines, (long long)"                ep_async_wait_step(timeout);\n");
     ok = append_list(lines, (long long)"            }\n");
-    ok = append_list(lines, (long long)"        }\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -18819,6 +18875,7 @@ long long ep_rt_core_5() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"        }\n");
     ok = append_list(lines, (long long)"    }\n");
     ok = append_list(lines, (long long)"    \n");
     ok = append_list(lines, (long long)"    return fut->value;\n");
@@ -18968,7 +19025,6 @@ long long ep_rt_core_5() {
     ok = append_list(lines, (long long)"/* Stop-the-world coordination. The collector sets ep_gc_stop_requested and, in\n");
     ok = append_list(lines, (long long)"   ep_gc_stop_the_world(), waits until every *other* registered thread has parked\n");
     ok = append_list(lines, (long long)"   at a safepoint (ep_gc_park_if_stopped). This guarantees mark/sweep never runs\n");
-    ok = append_list(lines, (long long)"   concurrently with a mutator changing its roots or an object's fields — the\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -18985,6 +19041,7 @@ long long ep_rt_core_6() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"   concurrently with a mutator changing its roots or an object's fields — the\n");
     ok = append_list(lines, (long long)"   \"marking races with running mutators\" hazard. All three fields are touched\n");
     ok = append_list(lines, (long long)"   only while holding ep_gc_mutex (the lock-free reads of ep_gc_stop_requested at\n");
     ok = append_list(lines, (long long)"   safepoints are a benign optimization: a missed set just defers parking to the\n");
@@ -19134,7 +19191,6 @@ long long ep_rt_core_6() {
     ok = append_list(lines, (long long)"            slot = i;\n");
     ok = append_list(lines, (long long)"            break;\n");
     ok = append_list(lines, (long long)"        }\n");
-    ok = append_list(lines, (long long)"    }\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -19151,6 +19207,7 @@ long long ep_rt_core_7() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"    }\n");
     ok = append_list(lines, (long long)"    if (slot == -1 && ep_num_threads < EP_MAX_THREADS) {\n");
     ok = append_list(lines, (long long)"        slot = ep_num_threads++;\n");
     ok = append_list(lines, (long long)"    }\n");
@@ -19300,7 +19357,6 @@ long long ep_rt_core_7() {
     ok = append_list(lines, (long long)"        pthread_mutex_unlock(&ep_gc_mutex);\n");
     ok = append_list(lines, (long long)"        return NULL;\n");
     ok = append_list(lines, (long long)"    }\n");
-    ok = append_list(lines, (long long)"    obj->kind = kind;\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -19317,6 +19373,7 @@ long long ep_rt_core_8() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"    obj->kind = kind;\n");
     ok = append_list(lines, (long long)"    obj->marked = 0;\n");
     ok = append_list(lines, (long long)"    obj->ptr = ptr;\n");
     ok = append_list(lines, (long long)"    obj->size = 0;\n");
@@ -19466,7 +19523,6 @@ long long ep_rt_core_8() {
     ok = append_list(lines, (long long)"   cross-thread stack read on the frequent minor path either. The expensive\n");
     ok = append_list(lines, (long long)"   full-stack scan is paid only on the rarer major collection, where it pins\n");
     ok = append_list(lines, (long long)"   any long-lived object reachable only via a register across many GCs.\n");
-    ok = append_list(lines, (long long)"\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -19483,6 +19539,7 @@ long long ep_rt_core_9() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"   Marked no_sanitize_address: a conservative scan deliberately reads whole stack\n");
     ok = append_list(lines, (long long)"   ranges (including ASAN redzones and out-of-frame slots), which is not a bug. */\n");
     ok = append_list(lines, (long long)"#if defined(__SANITIZE_ADDRESS__)\n");
@@ -19632,7 +19689,6 @@ long long ep_rt_core_9() {
     ok = append_list(lines, (long long)"static void ep_gc_mark_minor(void) {\n");
     ok = append_list(lines, (long long)"    /* Conservatively scan our OWN live C stack first, to catch freshly-allocated argument\n");
     ok = append_list(lines, (long long)"       temporaries (only on the stack / in registers, not yet on the shadow stack) that a\n");
-    ok = append_list(lines, (long long)"       minor collection mid-expression would otherwise free. Own-thread only, so race-free. */\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -19649,6 +19705,7 @@ long long ep_rt_core_10() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"       minor collection mid-expression would otherwise free. Own-thread only, so race-free. */\n");
     ok = append_list(lines, (long long)"    ep_gc_scan_own_stack_minor();\n");
     ok = append_list(lines, (long long)"    for (int t = 0; t < ep_num_threads; t++) {\n");
     ok = append_list(lines, (long long)"        if (!ep_thread_active[t]) continue;\n");
@@ -19798,7 +19855,6 @@ long long ep_rt_core_10() {
     ok = append_list(lines, (long long)"    }\n");
     ok = append_list(lines, (long long)"    ep_gc_remembered_size = 0;\n");
     ok = append_list(lines, (long long)"}\n");
-    ok = append_list(lines, (long long)"\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -19815,6 +19871,7 @@ long long ep_rt_core_11() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"static void ep_gc_collect_minor(void) {\n");
     ok = append_list(lines, (long long)"    if (!ep_gc_enabled) return;\n");
     ok = append_list(lines, (long long)"    ep_gc_minor_count++;\n");
@@ -19963,8 +20020,7 @@ long long ep_rt_core_11() {
     ok = append_list(lines, (long long)"long long json_get_bool(long long json_val, long long key_val);\n");
     ok = append_list(lines, (long long)"long long ep_sha1(long long data_val);\n");
     ok = append_list(lines, (long long)"long long ep_net_recv_bytes(long long fd, long long count);\n");
-    ok = append_list(lines, (long long)"long long channel_try_recv(long long chan_ptr, long long out_ptr);\n");
-    ok = append_list(lines, (long long)"long long channel_has_data(long long chan_ptr);\n");
+    ok = append_list(lines, (long long)"long long ep_net_send_raw(long long fd, long long data_ptr, long long count);\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -19981,6 +20037,8 @@ long long ep_rt_core_12() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"long long channel_try_recv(long long chan_ptr, long long out_ptr);\n");
+    ok = append_list(lines, (long long)"long long channel_has_data(long long chan_ptr);\n");
     ok = append_list(lines, (long long)"long long channel_select(long long channels_list, long long timeout_ms);\n");
     ok = append_list(lines, (long long)"long long ep_auto_to_string(long long val);\n");
     ok = append_list(lines, (long long)"long long ep_float_to_string(long long bits);\n");
@@ -20129,8 +20187,6 @@ long long ep_rt_core_12() {
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"// Check if channel has data without consuming it\n");
-    ok = append_list(lines, (long long)"long long channel_has_data(long long chan_ptr) {\n");
-    ok = append_list(lines, (long long)"    EpChannel* chan = (EpChannel*)chan_ptr;\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -20147,6 +20203,8 @@ long long ep_rt_core_13() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"long long channel_has_data(long long chan_ptr) {\n");
+    ok = append_list(lines, (long long)"    EpChannel* chan = (EpChannel*)chan_ptr;\n");
     ok = append_list(lines, (long long)"    if (!chan) return 0;\n");
     ok = append_list(lines, (long long)"    ep_mutex_lock(&chan->mutex);\n");
     ok = append_list(lines, (long long)"    int has = (chan->size > 0) ? 1 : 0;\n");
@@ -20267,6 +20325,11 @@ long long ep_rt_core_13() {
     ok = append_list(lines, (long long)"    return 0;\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
+    ok = append_list(lines, (long long)"long long ep_net_send_raw(long long fd, long long data_ptr, long long count) {\n");
+    ok = append_list(lines, (long long)"    (void)fd; (void)data_ptr; (void)count;\n");
+    ok = append_list(lines, (long long)"    return 0;\n");
+    ok = append_list(lines, (long long)"}\n");
+    ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"char* ep_net_recv(long long fd, long long max_len) {\n");
     ok = append_list(lines, (long long)"    (void)fd; (void)max_len;\n");
     ok = append_list(lines, (long long)"    char* empty = malloc(1);\n");
@@ -20290,13 +20353,6 @@ long long ep_rt_core_13() {
     ok = append_list(lines, (long long)"long long ep_system(long long cmd) {\n");
     ok = append_list(lines, (long long)"    (void)cmd;\n");
     ok = append_list(lines, (long long)"    return -1;\n");
-    ok = append_list(lines, (long long)"}\n");
-    ok = append_list(lines, (long long)"\n");
-    ok = append_list(lines, (long long)"long long ep_play_sound(long long path) {\n");
-    ok = append_list(lines, (long long)"    (void)path;\n");
-    ok = append_list(lines, (long long)"    return -1;\n");
-    ok = append_list(lines, (long long)"}\n");
-    ok = append_list(lines, (long long)"\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:
@@ -20313,6 +20369,13 @@ long long ep_rt_core_14() {
     ep_gc_maybe_collect();
 
     lines = create_list();
+    ok = append_list(lines, (long long)"}\n");
+    ok = append_list(lines, (long long)"\n");
+    ok = append_list(lines, (long long)"long long ep_play_sound(long long path) {\n");
+    ok = append_list(lines, (long long)"    (void)path;\n");
+    ok = append_list(lines, (long long)"    return -1;\n");
+    ok = append_list(lines, (long long)"}\n");
+    ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"long long ep_dlopen(long long path) {\n");
     ok = append_list(lines, (long long)"    (void)path;\n");
     ok = append_list(lines, (long long)"    return 0;\n");
@@ -20421,17 +20484,29 @@ long long ep_rt_core_14() {
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"long long ep_net_send(long long fd, const char* data) {\n");
     ok = append_list(lines, (long long)"    if (!data) return 0;\n");
-    ok = append_list(lines, (long long)"    /* send() may write fewer bytes than requested (partial write under load/\n");
-    ok = append_list(lines, (long long)"       backpressure). A single send() therefore silently truncated large IPC\n");
-    ok = append_list(lines, (long long)"       responses, cutting agent replies mid-stream. Loop until all bytes are sent. */\n");
-    ok = append_list(lines, (long long)"    size_t total = strlen(data);\n");
-    ok = append_list(lines, (long long)"    size_t off = 0;\n");
-    ok = append_list(lines, (long long)"    while (off < total) {\n");
-    ok = append_list(lines, (long long)"        ssize_t n = send((int)fd, data + off, total - off, 0);\n");
+    ok = append_list(lines, (long long)"    return ep_net_send_raw(fd, (long long)data, (long long)strlen(data));\n");
+    ok = append_list(lines, (long long)"}\n");
+    ok = append_list(lines, (long long)"\n");
+    ok = append_list(lines, (long long)"long long ep_net_send_raw(long long fd, long long data_ptr, long long count) {\n");
+    ok = append_list(lines, (long long)"    if (data_ptr == 0 || count <= 0) return 0;\n");
+    ok = append_list(lines, (long long)"\n");
+    ok = append_list(lines, (long long)"    /* send() may write fewer bytes than requested. Keep sending until the\n");
+    ok = append_list(lines, (long long)"       explicit byte count is exhausted, including bytes after embedded NULs. */\n");
+    ok = append_list(lines, (long long)"    const char* data = (const char*)data_ptr;\n");
+    ok = append_list(lines, (long long)"    long long off = 0;\n");
+    ok = append_list(lines, (long long)"    while (off < count) {\n");
+    ok = append_list(lines, (long long)"#ifdef _WIN32\n");
+    ok = append_list(lines, (long long)"        int chunk = count - off > INT_MAX ? INT_MAX : (int)(count - off);\n");
+    ok = append_list(lines, (long long)"        int n = send((int)fd, data + off, chunk, 0);\n");
+    ok = append_list(lines, (long long)"        if (n < 0 && WSAGetLastError() == WSAEINTR) continue;\n");
+    ok = append_list(lines, (long long)"#else\n");
+    ok = append_list(lines, (long long)"        ssize_t n = send((int)fd, data + off, (size_t)(count - off), 0);\n");
+    ok = append_list(lines, (long long)"        if (n < 0 && errno == EINTR) continue;\n");
+    ok = append_list(lines, (long long)"#endif\n");
     ok = append_list(lines, (long long)"        if (n <= 0) break;\n");
-    ok = append_list(lines, (long long)"        off += (size_t)n;\n");
+    ok = append_list(lines, (long long)"        off += (long long)n;\n");
     ok = append_list(lines, (long long)"    }\n");
-    ok = append_list(lines, (long long)"    return (long long)off;\n");
+    ok = append_list(lines, (long long)"    return off;\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"char* ep_net_recv(long long fd, long long max_len) {\n");
@@ -20444,6 +20519,22 @@ long long ep_rt_core_14() {
     ok = append_list(lines, (long long)"#ifdef _WIN32\n");
     ok = append_list(lines, (long long)"    int n = recv((int)fd, buf, (int)max_len, 0);\n");
     ok = append_list(lines, (long long)"#else\n");
+    ret_val = join_strings(lines);
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long ep_rt_core_15() {
+    long long lines = 0;
+    long long ok = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&lines);
+    ep_gc_maybe_collect();
+
+    lines = create_list();
     ok = append_list(lines, (long long)"    ssize_t n = recv((int)fd, buf, max_len, 0);\n");
     ok = append_list(lines, (long long)"#endif\n");
     ok = append_list(lines, (long long)"    if (n < 0) n = 0;\n");
@@ -20463,22 +20554,6 @@ long long ep_rt_core_14() {
     ok = append_list(lines, (long long)"#ifdef _WIN32\n");
     ok = append_list(lines, (long long)"    Sleep((DWORD)ms);\n");
     ok = append_list(lines, (long long)"#else\n");
-    ret_val = join_strings(lines);
-    goto L_cleanup;
-L_cleanup:
-    ep_gc_pop_roots(1);
-    return ret_val;
-}
-
-long long ep_rt_core_15() {
-    long long lines = 0;
-    long long ok = 0;
-    long long ret_val = 0;
-
-    ep_gc_push_root(&lines);
-    ep_gc_maybe_collect();
-
-    lines = create_list();
     ok = append_list(lines, (long long)"    usleep((useconds_t)(ms * 1000));\n");
     ok = append_list(lines, (long long)"#endif\n");
     ok = append_list(lines, (long long)"    return 0;\n");
@@ -20610,6 +20685,22 @@ long long ep_rt_core_15() {
     ok = append_list(lines, (long long)"typedef double (*ep_ff4)(double, double, double, double);\n");
     ok = append_list(lines, (long long)"typedef double (*ep_ff5)(double, double, double, double, double);\n");
     ok = append_list(lines, (long long)"typedef double (*ep_ff6)(double, double, double, double, double, double);\n");
+    ret_val = join_strings(lines);
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long ep_rt_core_16() {
+    long long lines = 0;
+    long long ok = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&lines);
+    ep_gc_maybe_collect();
+
+    lines = create_list();
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"/* Call functions that take doubles and return double */\n");
     ok = append_list(lines, (long long)"long long ep_dlcall_f0(long long fptr) {\n");
@@ -20629,22 +20720,6 @@ long long ep_rt_core_15() {
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"long long ep_dlcall_f5(long long fptr, long long a0, long long a1, long long a2, long long a3, long long a4) {\n");
     ok = append_list(lines, (long long)"    return ep_double_to_ll(((ep_ff5)fptr)(ep_ll_to_double(a0), ep_ll_to_double(a1), ep_ll_to_double(a2), ep_ll_to_double(a3), ep_ll_to_double(a4)));\n");
-    ret_val = join_strings(lines);
-    goto L_cleanup;
-L_cleanup:
-    ep_gc_pop_roots(1);
-    return ret_val;
-}
-
-long long ep_rt_core_16() {
-    long long lines = 0;
-    long long ok = 0;
-    long long ret_val = 0;
-
-    ep_gc_push_root(&lines);
-    ep_gc_maybe_collect();
-
-    lines = create_list();
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"long long ep_dlcall_f6(long long fptr, long long a0, long long a1, long long a2, long long a3, long long a4, long long a5) {\n");
     ok = append_list(lines, (long long)"    return ep_double_to_ll(((ep_ff6)fptr)(ep_ll_to_double(a0), ep_ll_to_double(a1), ep_ll_to_double(a2), ep_ll_to_double(a3), ep_ll_to_double(a4), ep_ll_to_double(a5)));\n");
@@ -20776,6 +20851,22 @@ long long ep_rt_core_16() {
     ok = append_list(lines, (long long)"    const char* key = ep_map_key_str(key_val, keybuf, sizeof(keybuf));\n");
     ok = append_list(lines, (long long)"    if (!map) return 0;\n");
     ok = append_list(lines, (long long)"    if (map->size * 2 >= map->capacity) {\n");
+    ret_val = join_strings(lines);
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long ep_rt_core_17() {
+    long long lines = 0;
+    long long ok = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&lines);
+    ep_gc_maybe_collect();
+
+    lines = create_list();
     ok = append_list(lines, (long long)"        map_resize(map, map->capacity * 2);\n");
     ok = append_list(lines, (long long)"    }\n");
     ok = append_list(lines, (long long)"    unsigned long h = hash_string(key) % map->capacity;\n");
@@ -20795,22 +20886,6 @@ long long ep_rt_core_16() {
     ok = append_list(lines, (long long)"    return value;\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
-    ret_val = join_strings(lines);
-    goto L_cleanup;
-L_cleanup:
-    ep_gc_pop_roots(1);
-    return ret_val;
-}
-
-long long ep_rt_core_17() {
-    long long lines = 0;
-    long long ok = 0;
-    long long ret_val = 0;
-
-    ep_gc_push_root(&lines);
-    ep_gc_maybe_collect();
-
-    lines = create_list();
     ok = append_list(lines, (long long)"long long map_get_val(long long map_ptr, long long key_val) {\n");
     ok = append_list(lines, (long long)"    if (EP_BADPTR(map_ptr)) return 0;\n");
     ok = append_list(lines, (long long)"    EpMap* map = (EpMap*)map_ptr;\n");
@@ -20942,6 +21017,22 @@ long long ep_rt_core_17() {
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"typedef struct {\n");
     ok = append_list(lines, (long long)"    long long* data;\n");
+    ret_val = join_strings(lines);
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long ep_rt_core_18() {
+    long long lines = 0;
+    long long ok = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&lines);
+    ep_gc_maybe_collect();
+
+    lines = create_list();
     ok = append_list(lines, (long long)"    long long capacity;\n");
     ok = append_list(lines, (long long)"    long long head;\n");
     ok = append_list(lines, (long long)"    long long tail;\n");
@@ -20961,22 +21052,6 @@ long long ep_rt_core_17() {
     ok = append_list(lines, (long long)"        return 0;\n");
     ok = append_list(lines, (long long)"    }\n");
     ok = append_list(lines, (long long)"    return (long long)dq;\n");
-    ret_val = join_strings(lines);
-    goto L_cleanup;
-L_cleanup:
-    ep_gc_pop_roots(1);
-    return ret_val;
-}
-
-long long ep_rt_core_18() {
-    long long lines = 0;
-    long long ok = 0;
-    long long ret_val = 0;
-
-    ep_gc_push_root(&lines);
-    ep_gc_maybe_collect();
-
-    lines = create_list();
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"static void deque_resize(EpDeque* dq, long long new_capacity) {\n");
@@ -21108,6 +21183,22 @@ long long ep_rt_core_18() {
     ok = append_list(lines, (long long)"    if (!path) return 0;\n");
     ok = append_list(lines, (long long)"    struct stat st;\n");
     ok = append_list(lines, (long long)"    return stat(path, &st) == 0 ? 1 : 0;\n");
+    ret_val = join_strings(lines);
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long ep_rt_core_19() {
+    long long lines = 0;
+    long long ok = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&lines);
+    ep_gc_maybe_collect();
+
+    lines = create_list();
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"long long fs_is_dir(long long path_val) {\n");
@@ -21127,22 +21218,6 @@ long long ep_rt_core_18() {
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"long long fs_get_size(long long path_val) {\n");
-    ret_val = join_strings(lines);
-    goto L_cleanup;
-L_cleanup:
-    ep_gc_pop_roots(1);
-    return ret_val;
-}
-
-long long ep_rt_core_19() {
-    long long lines = 0;
-    long long ok = 0;
-    long long ret_val = 0;
-
-    ep_gc_push_root(&lines);
-    ep_gc_maybe_collect();
-
-    lines = create_list();
     ok = append_list(lines, (long long)"    const char* path = (const char*)path_val;\n");
     ok = append_list(lines, (long long)"    if (!path) return 0;\n");
     ok = append_list(lines, (long long)"    struct stat st;\n");
@@ -21274,6 +21349,22 @@ long long ep_rt_core_19() {
     ok = append_list(lines, (long long)"    unsigned int datalen;\n");
     ok = append_list(lines, (long long)"    unsigned long long bitlen;\n");
     ok = append_list(lines, (long long)"    unsigned int state[8];\n");
+    ret_val = join_strings(lines);
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long ep_rt_core_20() {
+    long long lines = 0;
+    long long ok = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&lines);
+    ep_gc_maybe_collect();
+
+    lines = create_list();
     ok = append_list(lines, (long long)"} EP_SHA256_CTX;\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"static const unsigned int sha256_k[64] = {\n");
@@ -21293,22 +21384,6 @@ long long ep_rt_core_19() {
     ok = append_list(lines, (long long)"        m[i] = (data[j] << 24) | (data[j + 1] << 16) | (data[j + 2] << 8) | (data[j + 3]);\n");
     ok = append_list(lines, (long long)"    for ( ; i < 64; ++i)\n");
     ok = append_list(lines, (long long)"        m[i] = SIG1(m[i - 2]) + m[i - 7] + SIG0(m[i - 15]) + m[i - 16];\n");
-    ret_val = join_strings(lines);
-    goto L_cleanup;
-L_cleanup:
-    ep_gc_pop_roots(1);
-    return ret_val;
-}
-
-long long ep_rt_core_20() {
-    long long lines = 0;
-    long long ok = 0;
-    long long ret_val = 0;
-
-    ep_gc_push_root(&lines);
-    ep_gc_maybe_collect();
-
-    lines = create_list();
     ok = append_list(lines, (long long)"    a = ctx->state[0]; b = ctx->state[1]; c = ctx->state[2]; d = ctx->state[3];\n");
     ok = append_list(lines, (long long)"    e = ctx->state[4]; f = ctx->state[5]; g = ctx->state[6]; h = ctx->state[7];\n");
     ok = append_list(lines, (long long)"    for (i = 0; i < 64; ++i) {\n");
@@ -21440,6 +21515,22 @@ long long ep_rt_core_20() {
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"typedef struct {\n");
+    ret_val = join_strings(lines);
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long ep_rt_core_21() {
+    long long lines = 0;
+    long long ok = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&lines);
+    ep_gc_maybe_collect();
+
+    lines = create_list();
     ok = append_list(lines, (long long)"    unsigned int count[2];\n");
     ok = append_list(lines, (long long)"    unsigned int state[4];\n");
     ok = append_list(lines, (long long)"    unsigned char buffer[64];\n");
@@ -21459,22 +21550,6 @@ long long ep_rt_core_20() {
     ok = append_list(lines, (long long)"#define GG(a,b,c,d,x,s,ac) { \\\n");
     ok = append_list(lines, (long long)"    (a) += G((b),(c),(d)) + (x) + (ac); \\\n");
     ok = append_list(lines, (long long)"    (a) = ROTATE_LEFT((a),(s)); \\\n");
-    ret_val = join_strings(lines);
-    goto L_cleanup;
-L_cleanup:
-    ep_gc_pop_roots(1);
-    return ret_val;
-}
-
-long long ep_rt_core_21() {
-    long long lines = 0;
-    long long ok = 0;
-    long long ret_val = 0;
-
-    ep_gc_push_root(&lines);
-    ep_gc_maybe_collect();
-
-    lines = create_list();
     ok = append_list(lines, (long long)"    (a) += (b); \\\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"#define HH(a,b,c,d,x,s,ac) { \\\n");
@@ -21606,6 +21681,22 @@ long long ep_rt_core_21() {
     ok = append_list(lines, (long long)"long long string_length(const char* s) {\n");
     ok = append_list(lines, (long long)"    if (!s) return 0;\n");
     ok = append_list(lines, (long long)"    return strlen(s);\n");
+    ret_val = join_strings(lines);
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long ep_rt_core_22() {
+    long long lines = 0;
+    long long ok = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&lines);
+    ep_gc_maybe_collect();
+
+    lines = create_list();
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"long long get_character(const char* s, long long index) {\n");
@@ -21625,22 +21716,6 @@ long long ep_rt_core_21() {
     ok = append_list(lines, (long long)"    return (long long)list;\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
-    ret_val = join_strings(lines);
-    goto L_cleanup;
-L_cleanup:
-    ep_gc_pop_roots(1);
-    return ret_val;
-}
-
-long long ep_rt_core_22() {
-    long long lines = 0;
-    long long ok = 0;
-    long long ret_val = 0;
-
-    ep_gc_push_root(&lines);
-    ep_gc_maybe_collect();
-
-    lines = create_list();
     ok = append_list(lines, (long long)"long long get_list_data_ptr(long long list_ptr) {\n");
     ok = append_list(lines, (long long)"    if (EP_BADPTR(list_ptr)) return 0;\n");
     ok = append_list(lines, (long long)"    EpList* list = (EpList*)list_ptr;\n");
@@ -21772,6 +21847,22 @@ long long ep_rt_core_22() {
     ok = append_list(lines, (long long)"long long ep_sqlite3_column_count(long long stmt) {\n");
     ok = append_list(lines, (long long)"    return (long long)sqlite3_column_count((sqlite3_stmt*)stmt);\n");
     ok = append_list(lines, (long long)"}\n");
+    ret_val = join_strings(lines);
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long ep_rt_core_23() {
+    long long lines = 0;
+    long long ok = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&lines);
+    ep_gc_maybe_collect();
+
+    lines = create_list();
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"long long ep_sqlite3_column_text(long long stmt, long long col) {\n");
     ok = append_list(lines, (long long)"    const unsigned char* t = sqlite3_column_text((sqlite3_stmt*)stmt, (int)col);\n");
@@ -21791,22 +21882,6 @@ long long ep_rt_core_22() {
     ok = append_list(lines, (long long)"    return (long long)sqlite3_finalize((sqlite3_stmt*)stmt);\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"#endif /* EP_HAS_SQLITE */\n");
-    ret_val = join_strings(lines);
-    goto L_cleanup;
-L_cleanup:
-    ep_gc_pop_roots(1);
-    return ret_val;
-}
-
-long long ep_rt_core_23() {
-    long long lines = 0;
-    long long ok = 0;
-    long long ret_val = 0;
-
-    ep_gc_push_root(&lines);
-    ep_gc_maybe_collect();
-
-    lines = create_list();
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"int ep_argc = 0;\n");
     ok = append_list(lines, (long long)"char** ep_argv = NULL;\n");
@@ -21938,6 +22013,22 @@ long long ep_rt_core_23() {
     ok = append_list(lines, (long long)"    list->length -= 1;\n");
     ok = append_list(lines, (long long)"    return list->data[list->length];\n");
     ok = append_list(lines, (long long)"}\n");
+    ret_val = join_strings(lines);
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long ep_rt_core_24() {
+    long long lines = 0;
+    long long ok = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&lines);
+    ep_gc_maybe_collect();
+
+    lines = create_list();
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"long long remove_list(long long list_ptr, long long index) {\n");
     ok = append_list(lines, (long long)"    if (EP_BADPTR(list_ptr)) return 0;\n");
@@ -21957,22 +22048,6 @@ long long ep_rt_core_23() {
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"/* Write text with NO trailing newline, and flush at once — for drawing to\n");
-    ret_val = join_strings(lines);
-    goto L_cleanup;
-L_cleanup:
-    ep_gc_pop_roots(1);
-    return ret_val;
-}
-
-long long ep_rt_core_24() {
-    long long lines = 0;
-    long long ok = 0;
-    long long ret_val = 0;
-
-    ep_gc_push_root(&lines);
-    ep_gc_maybe_collect();
-
-    lines = create_list();
     ok = append_list(lines, (long long)"   the screen where every byte's position matters (cursor moves, escape\n");
     ok = append_list(lines, (long long)"   codes, a full-screen frame). puts()/display_string would append a\n");
     ok = append_list(lines, (long long)"   newline and scroll a full-height frame; this does not. */\n");
@@ -22104,6 +22179,22 @@ long long ep_rt_core_24() {
     ok = append_list(lines, (long long)"    return remove(path) == 0 ? 1 : 0;\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
+    ret_val = join_strings(lines);
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long ep_rt_core_25() {
+    long long lines = 0;
+    long long ok = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&lines);
+    ep_gc_maybe_collect();
+
+    lines = create_list();
     ok = append_list(lines, (long long)"long long ep_remove_directory(long long path_ptr) {\n");
     ok = append_list(lines, (long long)"    const char* path = (const char*)path_ptr;\n");
     ok = append_list(lines, (long long)"    return rmdir(path) == 0 ? 1 : 0;\n");
@@ -22123,22 +22214,6 @@ long long ep_rt_core_24() {
     ok = append_list(lines, (long long)"    char buf[8192];\n");
     ok = append_list(lines, (long long)"    size_t n;\n");
     ok = append_list(lines, (long long)"    while ((n = fread(buf, 1, sizeof(buf), fin)) > 0) {\n");
-    ret_val = join_strings(lines);
-    goto L_cleanup;
-L_cleanup:
-    ep_gc_pop_roots(1);
-    return ret_val;
-}
-
-long long ep_rt_core_25() {
-    long long lines = 0;
-    long long ok = 0;
-    long long ret_val = 0;
-
-    ep_gc_push_root(&lines);
-    ep_gc_maybe_collect();
-
-    lines = create_list();
     ok = append_list(lines, (long long)"        fwrite(buf, 1, n, fout);\n");
     ok = append_list(lines, (long long)"    }\n");
     ok = append_list(lines, (long long)"    fclose(fin);\n");
@@ -22270,6 +22345,22 @@ long long ep_rt_core_25() {
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"#ifdef __wasm__\n");
     ok = append_list(lines, (long long)"long long ep_run_command(long long cmd_ptr) {\n");
+    ret_val = join_strings(lines);
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long ep_rt_core_26() {
+    long long lines = 0;
+    long long ok = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&lines);
+    ep_gc_maybe_collect();
+
+    lines = create_list();
     ok = append_list(lines, (long long)"    (void)cmd_ptr;\n");
     ok = append_list(lines, (long long)"    return (long long)\"Error: running external commands is not supported on WebAssembly\";\n");
     ok = append_list(lines, (long long)"}\n");
@@ -22289,22 +22380,6 @@ long long ep_rt_core_25() {
     ok = append_list(lines, (long long)"    result[total] = '\\0';\n");
     ok = append_list(lines, (long long)"    pclose(fp);\n");
     ok = append_list(lines, (long long)"    return (long long)result;\n");
-    ret_val = join_strings(lines);
-    goto L_cleanup;
-L_cleanup:
-    ep_gc_pop_roots(1);
-    return ret_val;
-}
-
-long long ep_rt_core_26() {
-    long long lines = 0;
-    long long ok = 0;
-    long long ret_val = 0;
-
-    ep_gc_push_root(&lines);
-    ep_gc_maybe_collect();
-
-    lines = create_list();
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"#endif\n");
     ok = append_list(lines, (long long)"\n");
@@ -22436,6 +22511,22 @@ long long ep_rt_core_26() {
     ok = append_list(lines, (long long)"#endif\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"#ifdef _MSC_VER\n");
+    ret_val = join_strings(lines);
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long ep_rt_core_27() {
+    long long lines = 0;
+    long long ok = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&lines);
+    ep_gc_maybe_collect();
+
+    lines = create_list();
     ok = append_list(lines, (long long)"long long ep_atomic_create(long long initial) {\n");
     ok = append_list(lines, (long long)"    volatile long long* a = (volatile long long*)malloc(sizeof(long long));\n");
     ok = append_list(lines, (long long)"    InterlockedExchange64(a, initial);\n");
@@ -22455,22 +22546,6 @@ long long ep_rt_core_26() {
     ok = append_list(lines, (long long)"    return InterlockedExchangeAdd64((volatile long long*)a, -delta);\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"long long ep_atomic_cas(long long a, long long expected, long long desired) {\n");
-    ret_val = join_strings(lines);
-    goto L_cleanup;
-L_cleanup:
-    ep_gc_pop_roots(1);
-    return ret_val;
-}
-
-long long ep_rt_core_27() {
-    long long lines = 0;
-    long long ok = 0;
-    long long ret_val = 0;
-
-    ep_gc_push_root(&lines);
-    ep_gc_maybe_collect();
-
-    lines = create_list();
     ok = append_list(lines, (long long)"    long long old = InterlockedCompareExchange64((volatile long long*)a, desired, expected);\n");
     ok = append_list(lines, (long long)"    return (old == expected) ? 1 : 0;\n");
     ok = append_list(lines, (long long)"}\n");
@@ -22602,6 +22677,22 @@ long long ep_rt_core_27() {
     ok = append_list(lines, (long long)"    pthread_mutex_destroy(&s->mutex);\n");
     ok = append_list(lines, (long long)"    pthread_cond_destroy(&s->cond);\n");
     ok = append_list(lines, (long long)"    free(s);\n");
+    ret_val = join_strings(lines);
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long ep_rt_core_28() {
+    long long lines = 0;
+    long long ok = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&lines);
+    ep_gc_maybe_collect();
+
+    lines = create_list();
     ok = append_list(lines, (long long)"    return 0;\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
@@ -22621,22 +22712,6 @@ long long ep_rt_core_27() {
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"long long ep_condvar_broadcast(long long cv) {\n");
     ok = append_list(lines, (long long)"    return pthread_cond_broadcast((pthread_cond_t*)cv) == 0 ? 1 : 0;\n");
-    ret_val = join_strings(lines);
-    goto L_cleanup;
-L_cleanup:
-    ep_gc_pop_roots(1);
-    return ret_val;
-}
-
-long long ep_rt_core_28() {
-    long long lines = 0;
-    long long ok = 0;
-    long long ret_val = 0;
-
-    ep_gc_push_root(&lines);
-    ep_gc_maybe_collect();
-
-    lines = create_list();
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"long long ep_condvar_destroy(long long cv) {\n");
@@ -22768,6 +22843,22 @@ long long ep_rt_core_28() {
     ok = append_list(lines, (long long)"        out[j++] = (i + 2 < len) ? b64_table[n & 63] : '=';\n");
     ok = append_list(lines, (long long)"    }\n");
     ok = append_list(lines, (long long)"    out[j] = '\\0';\n");
+    ret_val = join_strings(lines);
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long ep_rt_core_29() {
+    long long lines = 0;
+    long long ok = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&lines);
+    ep_gc_maybe_collect();
+
+    lines = create_list();
     ok = append_list(lines, (long long)"    return (long long)out;\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
@@ -22787,22 +22878,6 @@ long long ep_rt_core_28() {
     ok = append_list(lines, (long long)"\n");
     ok = append_list(lines, (long long)"long long file_read(long long path_val) {\n");
     ok = append_list(lines, (long long)"    const char* path = (const char*)path_val;\n");
-    ret_val = join_strings(lines);
-    goto L_cleanup;
-L_cleanup:
-    ep_gc_pop_roots(1);
-    return ret_val;
-}
-
-long long ep_rt_core_29() {
-    long long lines = 0;
-    long long ok = 0;
-    long long ret_val = 0;
-
-    ep_gc_push_root(&lines);
-    ep_gc_maybe_collect();
-
-    lines = create_list();
     ok = append_list(lines, (long long)"    if (!path) return (long long)strdup(\"\");\n");
     ok = append_list(lines, (long long)"    FILE* f = fopen(path, \"rb\");\n");
     ok = append_list(lines, (long long)"    if (!f) return (long long)strdup(\"\");\n");
@@ -22934,6 +23009,22 @@ long long ep_rt_core_29() {
     ok = append_list(lines, (long long)"    return (long long)result;\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
+    ret_val = join_strings(lines);
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long ep_rt_core_30() {
+    long long lines = 0;
+    long long ok = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&lines);
+    ep_gc_maybe_collect();
+
+    lines = create_list();
     ok = append_list(lines, (long long)"long long string_split(long long s_val, long long delim_val) {\n");
     ok = append_list(lines, (long long)"    const char* s = (const char*)s_val;\n");
     ok = append_list(lines, (long long)"    const char* delim = (const char*)delim_val;\n");
@@ -22953,22 +23044,6 @@ long long ep_rt_core_29() {
     ok = append_list(lines, (long long)"        if (!found) break;\n");
     ok = append_list(lines, (long long)"        p = found + dlen;\n");
     ok = append_list(lines, (long long)"    }\n");
-    ret_val = join_strings(lines);
-    goto L_cleanup;
-L_cleanup:
-    ep_gc_pop_roots(1);
-    return ret_val;
-}
-
-long long ep_rt_core_30() {
-    long long lines = 0;
-    long long ok = 0;
-    long long ret_val = 0;
-
-    ep_gc_push_root(&lines);
-    ep_gc_maybe_collect();
-
-    lines = create_list();
     ok = append_list(lines, (long long)"    return list;\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
@@ -23100,6 +23175,22 @@ long long ep_rt_core_30() {
     ok = append_list(lines, (long long)"            else if (*p == '[') { depth++; p++; }\n");
     ok = append_list(lines, (long long)"            else if (*p == ']') { depth--; p++; }\n");
     ok = append_list(lines, (long long)"            else p++;\n");
+    ret_val = join_strings(lines);
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long ep_rt_core_31() {
+    long long lines = 0;
+    long long ok = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&lines);
+    ep_gc_maybe_collect();
+
+    lines = create_list();
     ok = append_list(lines, (long long)"        }\n");
     ok = append_list(lines, (long long)"    } else {\n");
     ok = append_list(lines, (long long)"        while (*p && *p != ',' && *p != '}' && *p != ']' && *p != ' ' && *p != '\\n') p++;\n");
@@ -23119,22 +23210,6 @@ long long ep_rt_core_30() {
     ok = append_list(lines, (long long)"        const char* ks = p;\n");
     ok = append_list(lines, (long long)"        while (*p && *p != '\"') { if (*p == '\\\\') p++; p++; }\n");
     ok = append_list(lines, (long long)"        size_t klen = p - ks;\n");
-    ret_val = join_strings(lines);
-    goto L_cleanup;
-L_cleanup:
-    ep_gc_pop_roots(1);
-    return ret_val;
-}
-
-long long ep_rt_core_31() {
-    long long lines = 0;
-    long long ok = 0;
-    long long ret_val = 0;
-
-    ep_gc_push_root(&lines);
-    ep_gc_maybe_collect();
-
-    lines = create_list();
     ok = append_list(lines, (long long)"        if (*p == '\"') p++;\n");
     ok = append_list(lines, (long long)"        p = json_skip_ws(p);\n");
     ok = append_list(lines, (long long)"        if (*p == ':') p++;\n");
@@ -23266,6 +23341,22 @@ long long ep_rt_core_31() {
     ok = append_list(lines, (long long)"    }\n");
     ok = append_list(lines, (long long)"    result[j] = '\\0';\n");
     ok = append_list(lines, (long long)"    ep_gc_register(result, EP_OBJ_STRING);\n");
+    ret_val = join_strings(lines);
+    goto L_cleanup;
+L_cleanup:
+    ep_gc_pop_roots(1);
+    return ret_val;
+}
+
+long long ep_rt_core_32() {
+    long long lines = 0;
+    long long ok = 0;
+    long long ret_val = 0;
+
+    ep_gc_push_root(&lines);
+    ep_gc_maybe_collect();
+
+    lines = create_list();
     ok = append_list(lines, (long long)"    return (long long)result;\n");
     ok = append_list(lines, (long long)"}\n");
     ok = append_list(lines, (long long)"\n");
@@ -23285,22 +23376,6 @@ long long ep_rt_core_31() {
     ok = append_list(lines, (long long)"        int n = recv((int)fd, buf + total, (int)(count - total), 0);\n");
     ok = append_list(lines, (long long)"        if (n <= 0) break;\n");
     ok = append_list(lines, (long long)"        total += n;\n");
-    ret_val = join_strings(lines);
-    goto L_cleanup;
-L_cleanup:
-    ep_gc_pop_roots(1);
-    return ret_val;
-}
-
-long long ep_rt_core_32() {
-    long long lines = 0;
-    long long ok = 0;
-    long long ret_val = 0;
-
-    ep_gc_push_root(&lines);
-    ep_gc_maybe_collect();
-
-    lines = create_list();
     ok = append_list(lines, (long long)"    }\n");
     ok = append_list(lines, (long long)"#else\n");
     ok = append_list(lines, (long long)"    ssize_t total = 0;\n");
@@ -23325,7 +23400,6 @@ long long ep_rt_core_32() {
     ok = append_list(lines, (long long)"    }\n");
     ok = append_list(lines, (long long)"    return list_ptr;\n");
     ok = append_list(lines, (long long)"}\n");
-    ok = append_list(lines, (long long)"\n");
     ret_val = join_strings(lines);
     goto L_cleanup;
 L_cleanup:

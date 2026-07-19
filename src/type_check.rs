@@ -1012,9 +1012,10 @@ impl TypeChecker {
         self.func_types.insert("ep_net_listen".into(), (vec![MonoType::Int], MonoType::Int));
         self.func_types.insert("ep_net_accept".into(), (vec![MonoType::Int], MonoType::Int));
         self.func_types.insert("ep_net_send".into(), (vec![MonoType::Int, MonoType::Str], MonoType::Int));
+        self.func_types.insert("ep_net_send_raw".into(), (vec![MonoType::Int, MonoType::Int, MonoType::Int], MonoType::Int));
         self.func_types.insert("ep_net_recv".into(), (vec![MonoType::Int, MonoType::Int], MonoType::DynStr));
         self.func_types.insert("ep_net_recv_bytes".into(), (vec![MonoType::Int, MonoType::Int], MonoType::DynStr));
-        self.func_types.insert("ep_net_close".into(), (vec![MonoType::Int], MonoType::Unit));
+        self.func_types.insert("ep_net_close".into(), (vec![MonoType::Int], MonoType::Int));
 
         // HTTP
         self.func_types.insert("ep_http_request".into(), (vec![MonoType::Str, MonoType::Str, MonoType::Str, MonoType::Str], MonoType::DynStr));

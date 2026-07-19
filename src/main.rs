@@ -938,13 +938,15 @@ fn main() {
         println!("  ep_net_listen(port: Int) -> Int              TCP listen");
         println!("  ep_net_accept(fd: Int) -> Int                TCP accept");
         println!("  ep_net_send(fd: Int, data: Str) -> Int       Send data");
+        println!("  ep_net_send_raw(fd: Int, ptr: Int, len: Int) -> Int  Send exact bytes");
         println!("  ep_net_recv(fd: Int, max: Int) -> Str        Receive data");
+        println!("  ep_net_recv_bytes(fd: Int, len: Int) -> Str  Receive exact bytes");
         println!("  ep_net_close(fd: Int) -> Int                 Close connection");
         println!();
         return;
     }
 
-    // Handle --check (syntax check only, no codegen)
+    // Handle --check (full static validation, no code generation)
     if args[1] == "--check" || args[1] == "check" {
         if args.len() < 3 {
             eprintln!("Usage: epc --check <filename.ep>");
@@ -988,6 +990,24 @@ fn main() {
                     eprintln!();
                     eprintln!("\x1b[1;31m✗\x1b[0m {} — {} type error(s) found",
                         args[2], type_errors.len());
+                    std::process::exit(1);
+                }
+
+                let borrow_errors = borrow_check::BorrowChecker::check(&program);
+                if !borrow_errors.is_empty() {
+                    eprintln!("\n\x1b[1;31m── Ownership Errors ({}) ──\x1b[0m", borrow_errors.len());
+                    for err in &borrow_errors {
+                        eprint!("{}", err);
+                    }
+                    eprintln!();
+                    eprintln!("\x1b[1;31m✗\x1b[0m {} — {} ownership/borrowing error(s) found",
+                        args[2], borrow_errors.len());
+                    std::process::exit(1);
+                }
+
+                let mut safety_codegen = codegen::Codegen::new();
+                if let Err(err) = safety_codegen.validate_safety(&program) {
+                    eprintln!("\x1b[1;31m✗\x1b[0m {} — safety error: {}", args[2], err);
                     std::process::exit(1);
                 }
 
@@ -1107,6 +1127,43 @@ fn main() {
     let use_llvm = !use_wasm && (args.iter().any(|a| a == "--llvm") || (llc_available && !args.iter().any(|a| a == "--native")));
     let use_native = !use_wasm && args.iter().any(|a| a == "--native");
 
+    // Every backend must pass the same front-end validation. In particular,
+    // native assembly must never become an escape hatch around type or
+    // ownership checks.
+    let (type_errors, _type_warnings) = type_check::TypeChecker::check_full(&program);
+    if !type_errors.is_empty() {
+        eprintln!("\n\x1b[1;31m── Type Errors ({}) ──\x1b[0m", type_errors.len());
+        for err in &type_errors {
+            eprintln!("  \x1b[1;31merror\x1b[0m: {}", err);
+        }
+        eprintln!();
+        eprintln!("\x1b[1;31mCompilation failed:\x1b[0m {} type error(s) found. Fix all type errors before compiling.", type_errors.len());
+        std::process::exit(1);
+    }
+
+    let borrow_errors = borrow_check::BorrowChecker::check(&program);
+    if !borrow_errors.is_empty() {
+        eprintln!("\n\x1b[1;31m── Ownership Errors ({}) ──\x1b[0m", borrow_errors.len());
+        for err in &borrow_errors {
+            eprint!("{}", err);
+        }
+        eprintln!();
+        eprintln!("\x1b[1;31mCompilation failed:\x1b[0m {} ownership/borrowing error(s) found. Fix all safety violations before compiling.", borrow_errors.len());
+        std::process::exit(1);
+    }
+
+    let mut safety_codegen = codegen::Codegen::new();
+    if let Err(err) = safety_codegen.validate_safety(&program) {
+        eprintln!("Code Generation Safety Error: {}", err);
+        std::process::exit(1);
+    }
+
+    let opt_stats = optimizer::Optimizer::run(&mut program);
+    if opt_stats.constants_folded > 0 || opt_stats.dead_stmts_eliminated > 0 {
+        eprintln!("\x1b[2m  optimizer: {} constants folded, {} dead statements eliminated\x1b[0m",
+            opt_stats.constants_folded, opt_stats.dead_stmts_eliminated);
+    }
+
     if use_native {
         let arch = std::env::consts::ARCH;
         let os = std::env::consts::OS;
@@ -1212,7 +1269,7 @@ fn main() {
                 .status()
         } else {
             // Linux: use gcc to link, include pthread and math libs
-            Command::new("gcc")
+            Command::new(cc)
                 .arg("-no-pie")
                 .arg("-o").arg(&stem)
                 .arg(&obj_path)
@@ -1242,36 +1299,6 @@ fn main() {
             }
         }
         return;
-    }
-
-    // Type checking (Phase 1A) — HARD ERRORS: reject programs with type errors
-    let (type_errors, _type_warnings) = type_check::TypeChecker::check_full(&program);
-    if !type_errors.is_empty() {
-        eprintln!("\n\x1b[1;31m── Type Errors ({}) ──\x1b[0m", type_errors.len());
-        for err in &type_errors {
-            eprintln!("  \x1b[1;31merror\x1b[0m: {}", err);
-        }
-        eprintln!();
-        eprintln!("\x1b[1;31mCompilation failed:\x1b[0m {} type error(s) found. Fix all type errors before compiling.", type_errors.len());
-        std::process::exit(1);
-    }
-
-    // Borrow checking (Phase 3) — HARD ERRORS: reject programs with ownership violations
-    let borrow_errors = borrow_check::BorrowChecker::check(&program);
-    if !borrow_errors.is_empty() {
-        eprintln!("\n\x1b[1;31m── Ownership Errors ({}) ──\x1b[0m", borrow_errors.len());
-        for err in &borrow_errors {
-            eprint!("{}", err);
-        }
-        eprintln!();
-        eprintln!("\x1b[1;31mCompilation failed:\x1b[0m {} ownership/borrowing error(s) found. Fix all safety violations before compiling.", borrow_errors.len());
-        std::process::exit(1);
-    }
-    // Optimization pass (Phase 4B)
-    let opt_stats = optimizer::Optimizer::run(&mut program);
-    if opt_stats.constants_folded > 0 || opt_stats.dead_stmts_eliminated > 0 {
-        eprintln!("\x1b[2m  optimizer: {} constants folded, {} dead statements eliminated\x1b[0m",
-            opt_stats.constants_folded, opt_stats.dead_stmts_eliminated);
     }
 
     let output_executable = if use_wasm {
@@ -1376,9 +1403,14 @@ fn main() {
             std::process::exit(1);
         }
 
-        println!("[3/3] Compiling and Linking via Clang...");
+        let c_compiler = if use_wasm || Command::new("clang").arg("--version").output().is_ok() {
+            "clang"
+        } else {
+            "gcc"
+        };
+        println!("[3/3] Compiling and Linking via {}...", c_compiler);
 
-        let mut clang_cmd = Command::new("clang");
+        let mut clang_cmd = Command::new(c_compiler);
         clang_cmd.arg(&c_path_str)
                  .arg("-o")
                  .arg(&output_executable);
@@ -1764,14 +1796,14 @@ fn print_usage() {
     eprintln!();
     eprintln!("\x1b[1mUSAGE:\x1b[0m");
     eprintln!("  epc <filename.ep>               Compile to native binary");
-    eprintln!("  epc <filename.ep> --native      Compile via native assembly (no Clang required)");
+    eprintln!("  epc <filename.ep> --native      Native assembly frontend + C runtime (C compiler required)");
     eprintln!("  epc <filename.ep> --llvm        Compile via LLVM IR backend (.ll)");
     eprintln!("  epc <filename.ep> --release     Compile with optimizations (O3+LTO)");
     eprintln!("  epc test <filename.ep>          Run as test");
     eprintln!();
     eprintln!("\x1b[1mDEV TOOLS:\x1b[0m");
     eprintln!("  epc doc <filename.ep> [-o dir]  Generate markdown documentation");
-    eprintln!("  epc --check <filename.ep>       Syntax check (no compilation)");
+    eprintln!("  epc --check <filename.ep>       Full static validation (no code generation)");
     eprintln!("  epc --format <filename.ep>      Auto-format source file");
     eprintln!("  epc --list-builtins             List all built-in functions");
     eprintln!("  epc --version                   Show version info");

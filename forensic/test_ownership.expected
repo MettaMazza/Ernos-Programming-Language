@@ -1,0 +1,7 @@
+Sum via borrow: 15
+Data still accessible after borrow
+Point: 3, 4
+Origin still usable: 3
+Channel received: 42
+Spawn result: 100
+OWNERSHIP: ALL PASSED

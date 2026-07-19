@@ -1,75 +1,143 @@
 {
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "ErnosPlain",
+  "scopeName": "source.ep",
   "patterns": [
-    {
-      "include": "#comments"
-    },
-    {
-      "include": "#strings"
-    },
-    {
-      "include": "#keywords"
-    },
-    {
-      "include": "#operators"
-    },
-    {
-      "include": "#numbers"
-    }
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#declarations" },
+    { "include": "#types" },
+    { "include": "#constants" },
+    { "include": "#keywords" },
+    { "include": "#operators" },
+    { "include": "#numbers" },
+    { "include": "#punctuation" }
   ],
   "repository": {
     "comments": {
       "patterns": [
-        {
-          "name": "comment.line.number-sign.ep",
-          "match": "#.*$"
-        }
+        { "name": "comment.line.documentation.ep", "match": "^\\s*###.*$" },
+        { "name": "comment.line.number-sign.ep", "match": "#.*$" }
       ]
     },
     "strings": {
       "patterns": [
         {
-          "name": "string.quoted.double.ep",
-          "begin": "\"",
-          "end": "\"",
+          "name": "string.quoted.triple.ep",
+          "begin": "\\\"\\\"\\\"",
+          "end": "\\\"\\\"\\\"",
+          "patterns": [{ "include": "#escapes" }]
+        },
+        {
+          "name": "string.interpolated.ep",
+          "begin": "\\bf\\s*(\\\")",
+          "beginCaptures": { "1": { "name": "punctuation.definition.string.begin.ep" } },
+          "end": "(\\\")",
+          "endCaptures": { "1": { "name": "punctuation.definition.string.end.ep" } },
           "patterns": [
+            { "include": "#escapes" },
             {
-              "name": "constant.character.escape.ep",
-              "match": "\\\\."
+              "name": "meta.interpolation.ep",
+              "begin": "\\{",
+              "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.ep" } },
+              "end": "\\}",
+              "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.ep" } },
+              "patterns": [{ "include": "$self" }]
             }
           ]
+        },
+        {
+          "name": "string.quoted.double.ep",
+          "begin": "\\\"",
+          "end": "\\\"",
+          "patterns": [{ "include": "#escapes" }]
         }
+      ]
+    },
+    "escapes": {
+      "patterns": [
+        { "name": "constant.character.escape.ep", "match": "\\\\(?:[nt\\\"\\\\]|.)" }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(define|describe)\\s+(structure|choice|trait)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.ep" },
+            "2": { "name": "storage.type.ep" },
+            "3": { "name": "entity.name.type.ep" }
+          }
+        },
+        {
+          "match": "\\b(define|describe)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.function.ep" },
+            "2": { "name": "entity.name.function.ep" }
+          }
+        },
+        {
+          "match": "\\b(variant|field)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.ep" },
+            "2": { "name": "variable.other.member.ep" }
+          }
+        },
+        {
+          "match": "\\b(import)\\s+(\\\")([^\\\"]+)(\\\")",
+          "captures": {
+            "1": { "name": "keyword.control.import.ep" },
+            "2": { "name": "punctuation.definition.string.begin.ep" },
+            "3": { "name": "string.quoted.double.ep" },
+            "4": { "name": "punctuation.definition.string.end.ep" }
+          }
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        { "name": "support.type.builtin.ep", "match": "\\b(?:Int|Float|Bool|Str|List|Map|Channel|Unit)\\b" },
+        { "name": "storage.type.ep", "match": "\\b(?:structure|choice|trait|variant|field|as|returning|returns|implement)\\b" }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        { "name": "constant.language.boolean.ep", "match": "\\b(?:true|false)\\b" },
+        { "name": "constant.language.channel.ep", "match": "\\bchannel\\b" }
       ]
     },
     "keywords": {
       "patterns": [
         {
           "name": "keyword.control.ep",
-          "match": "\\b(define|if|else|return|repeat|while|with|and|to|set|display)\\b"
+          "match": "\\b(?:if|else|return|give\\s+back|repeat|loop|while|for|each|every|in|range|break|stop|continue|skip|check|try|async|await|spawn)\\b"
+        },
+        {
+          "name": "keyword.other.ep",
+          "match": "\\b(?:define|describe|with|and|set|let|to|be|display|show|print|import|send|receive|from|external|borrow|is|create|on|of|given)\\b"
         }
       ]
     },
     "operators": {
       "patterns": [
         {
-          "name": "keyword.operator.ep",
-          "match": "\\b(plus|minus|multiplied by|divided by|and also|or else|is less than|is greater than|is equal to|is not equal to|equals)\\b"
+          "name": "keyword.operator.word.ep",
+          "match": "\\b(?:multiplied\\s+by|divided\\s+by|and\\s+also|or\\s+else|is\\s+not\\s+equal\\s+to|is\\s+less\\s+than|is\\s+greater\\s+than|is\\s+equal\\s+to|is\\s+at\\s+least|is\\s+at\\s+most|is\\s+more\\s+than|is\\s+fewer\\s+than|is\\s+smaller\\s+than|is\\s+bigger\\s+than|is\\s+larger\\s+than|is\\s+the\\s+same\\s+as|is\\s+different\\s+from|does\\s+not\\s+equal|plus|minus|times|modulo|equals|not)\\b"
         },
-        {
-          "name": "keyword.operator.symbol.ep",
-          "match": "(\\+|\\-|\\*|\\/|\\<|\\>|\\=|\\!|\\&{2}|\\|{2})"
-        }
+        { "name": "keyword.operator.symbol.ep", "match": "==|!=|<=|>=|&&|\\|\\||[+\\-*/%<>=]" }
       ]
     },
     "numbers": {
       "patterns": [
-        {
-          "name": "constant.numeric.ep",
-          "match": "\\b[0-9]+\\b"
-        }
+        { "name": "constant.numeric.float.ep", "match": "\\b[0-9]+\\.[0-9]+\\b" },
+        { "name": "constant.numeric.integer.ep", "match": "\\b[0-9]+\\b" }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        { "name": "punctuation.separator.ep", "match": "[,.:]" },
+        { "name": "punctuation.section.brackets.ep", "match": "[()\\[\\]]" }
       ]
     }
-  },
-  "scopeName": "source.ep"
+  }
 }

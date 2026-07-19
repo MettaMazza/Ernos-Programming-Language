@@ -426,6 +426,7 @@ impl Codegen {
         self.func_return_types.insert("ep_net_listen".to_string(), Type::Int);
         self.func_return_types.insert("ep_net_accept".to_string(), Type::Int);
         self.func_return_types.insert("ep_net_send".to_string(), Type::Int);
+        self.func_return_types.insert("ep_net_send_raw".to_string(), Type::Int);
         self.func_return_types.insert("ep_net_recv".to_string(), Type::DynStr);
         self.func_return_types.insert("ep_net_close".to_string(), Type::Int);
         self.func_return_types.insert("append_list".to_string(), Type::Int);
@@ -2559,6 +2560,20 @@ impl Codegen {
 // ========== analyze_safety, generate, gen_function ==========
 
 impl Codegen {
+    /// Run the code generator's ownership/lifetime analysis without emitting C.
+    /// This keeps `check` and non-C backends aligned with the safety guarantees
+    /// enforced by the normal C generation path.
+    pub fn validate_safety(&mut self, program: &Program) -> Result<(), String> {
+        for sd in &program.struct_defs {
+            self.struct_defs.insert(sd.name.clone(), sd.clone());
+        }
+        for ed in &program.enum_defs {
+            self.enum_defs.insert(ed.name.clone(), ed.clone());
+        }
+        self.analyze_return_types(program);
+        self.analyze_safety(program)
+    }
+
     fn analyze_safety(&mut self, program: &Program) -> Result<(), String> {
         for func in &program.functions {
             let mut var_types = HashMap::new();

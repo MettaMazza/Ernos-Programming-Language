@@ -1,10 +1,10 @@
 # Conformance Test: Concurrency and Async
 
-define worker with id and count:
+define worker with id and count and done:
     set i to 0
     repeat while i < count:
-        display concat("Worker " and concat(int_to_string(id) and concat(": iteration " and int_to_string(i))))
         set i to i + 1
+    send id * 10 + i to done
     return 0
 
 define channel_producer with ch and count:
@@ -16,17 +16,23 @@ define channel_producer with ch and count:
 
 define main:
     # Spawn concurrent tasks
-    spawn worker(1 and 3)
-    spawn worker(2 and 3)
+    set done to channel
+    spawn worker(1 and 3 and done)
+    spawn worker(2 and 3 and done)
+    set worker_one to receive from done
+    set worker_two to receive from done
+    set worker_total to worker_one + worker_two
+    display f"worker total: {worker_total}"
     
     # Channel communication
     set ch to channel
     spawn channel_producer(ch and 5)
     
     set i to 0
+    set total to 0
     repeat while i < 5:
         set val to receive from ch
-        display val
+        set total to total + val
         set i to i + 1
-    
+    display f"channel total: {total}"
     return 0

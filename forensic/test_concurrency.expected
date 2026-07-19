@@ -1,0 +1,4 @@
+Basic channel: 42
+Total from 2 producers (10 messages): 1520
+First from producer 3: 300
+CONCURRENCY: ALL PASSED

@@ -10,6 +10,7 @@ define main:
     set result to fib(40)
     set end to ep_time_now_ms()
     set elapsed to end minus start
-    display f"fib(40) = {result}"
-    display f"Time: {elapsed}ms"
+    if result != 102334155 || elapsed < 0:
+        return 1
+    display "PERF FIB: ALL PASSED"
     return 0

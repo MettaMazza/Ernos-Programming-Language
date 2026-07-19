@@ -302,6 +302,10 @@ define main:
         return 1
 
     if check_only == 1:
+        set safety_ok to validate_program_safety(program_ast)
+        if safety_ok == 0:
+            display "Compilation failed: ownership/safety errors."
+            return 1
         display "Check passed: no errors."
         return 0
 
@@ -319,8 +323,11 @@ define main:
     set c_path to string_concat(stem and "_compiled.c")
     set ok to write_file_content(c_path and c_code)
     
-    display "[3/3] Compiling and Linking via Clang..."
-    set compile_cmd to "clang "
+    set c_compiler to "clang"
+    if ep_system("command -v clang >/dev/null 2>&1") != 0:
+        set c_compiler to "gcc"
+    display f"[3/3] Compiling and Linking via {c_compiler}..."
+    set compile_cmd to string_concat(c_compiler and " ")
     set compile_cmd to string_concat(compile_cmd and c_path)
     set compile_cmd to string_concat(compile_cmd and " -o ")
     set compile_cmd to string_concat(compile_cmd and stem)

@@ -1,8 +1,6 @@
 # End-to-end integration test for the Package Registry and Installer
 
 define main:
-    display "=== Testing Package Manager ==="
-    
     # 1. Clean up old test folders
     set _ to ep_system("rm -rf test_dep_pkg test_app ~/.ernos_registry/test_dep_pkg ernos_modules/test_dep_pkg")
 
@@ -10,7 +8,9 @@ define main:
     set _ to ep_system("mkdir -p test_dep_pkg")
     
     # 3. Initialize dependency package using init subcommand
-    set _ to ep_system("cd test_dep_pkg && ../target/debug/ernos package init")
+    set status to ep_system("cd test_dep_pkg && ../target/release/ernos package init >/dev/null")
+    if status != 0:
+        return 1
     
     # Update manifest to set name to test_dep_pkg
     set manifest to "[package]\nname = \"test_dep_pkg\"\nversion = \"0.1.0\"\ndescription = \"dependency test package\"\n\n[dependencies]\n"
@@ -21,35 +21,46 @@ define main:
     set _ to file_write("test_dep_pkg/src/lib.ep" and lib_src)
     
     # 4. Publish the dependency package to local registry
-    set _ to ep_system("cd test_dep_pkg && ../target/debug/ernos package publish")
+    set status to ep_system("cd test_dep_pkg && ../target/release/ernos package publish >/dev/null")
+    if status != 0:
+        return 1
     
     # 5. Create client application
     set _ to ep_system("mkdir -p test_app")
-    set _ to ep_system("cd test_app && ../target/debug/ernos package init")
+    set status to ep_system("cd test_app && ../target/release/ernos package init >/dev/null")
+    if status != 0:
+        return 1
     
     # Update app manifest to declare dependency on test_dep_pkg
     set app_manifest to "[package]\nname = \"test_app\"\nversion = \"0.1.0\"\n\n[dependencies]\ntest_dep_pkg = \"0.1.0\"\n"
     set _ to file_write("test_app/ernos.toml" and app_manifest)
     
     # 6. Install dependencies
-    set _ to ep_system("cd test_app && ../target/debug/ernos package install")
+    set status to ep_system("cd test_app && ../target/release/ernos package install >/dev/null")
+    if status != 0:
+        return 1
     
     # Verify dependency file is copied under ernos_modules/
     set exists to file_exists("test_app/ernos_modules/test_dep_pkg/src/lib.ep")
-    display f"Dependency file exists: {exists}"
+    if exists != 1:
+        return 1
     
     # 7. Write main.ep using the dependency
     set main_src to "import \"test_dep_pkg\" as dep\n\ndefine main:\n    display dep_my_dependency_func()\n    return 0\n"
     set _ to file_write("test_app/main.ep" and main_src)
     
     # Compile the app
-    set compile_out to run_command("./target/debug/ernos test_app/main.ep")
+    set status to ep_system("./target/release/ernos test_app/main.ep >/dev/null")
+    if status != 0:
+        return 1
     
-    # Run the compiled binary
-    set run_out to run_command("./test_app/main")
-    display f"App stdout: {run_out}"
+    # Run the compiled binary and verify its output.
+    set status to ep_system("./test_app/main > test_app/app.out")
+    set run_out to file_read("test_app/app.out")
+    if status != 0 || string_contains(run_out and "Hello from dependency!") == 0:
+        return 1
     
     # 8. Clean up
     set _ to ep_system("rm -rf test_dep_pkg test_app ~/.ernos_registry/test_dep_pkg")
-    
+    display "PASS: package init, publish, install, import, and run"
     return 0

@@ -1,0 +1,6 @@
+=== File I/O ===
+exists after write: 1
+read: hello from ernos
+after append: hello from ernos
+second line
+ALL FILE TESTS PASSED

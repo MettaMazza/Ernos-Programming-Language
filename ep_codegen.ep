@@ -1020,6 +1020,7 @@ define analyze_return_types with state and program:
     set ok to map_put(keys and values and "ep_net_listen" and 1)
     set ok to map_put(keys and values and "ep_net_accept" and 1)
     set ok to map_put(keys and values and "ep_net_send" and 1)
+    set ok to map_put(keys and values and "ep_net_send_raw" and 1)
     set ok to map_put(keys and values and "ep_net_recv" and 3)
     set ok to map_put(keys and values and "ep_net_close" and 1)
     set ok to map_put(keys and values and "append_list" and 1)       # TYPE_INT = 1
@@ -1307,6 +1308,10 @@ define infer_type with state and expr and var_keys and var_values:
     if type == 21: # NODE_AWAIT
         set inner to get_list(expr and 1)
         return infer_type(state and inner and var_keys and var_values)
+    if type == 24 || type == 26 || type == 35: # STRUCT_CREATE / ENUM_CREATE / LIST_LITERAL
+        # All three are heap-backed aggregate values and participate in move
+        # checking like lists in the self-hosted compiler's coarse type model.
+        return 4
     return 1
 
 # Variable offset collection is no longer needed for C transpilation
@@ -3401,6 +3406,15 @@ define analyze_safety with state and program:
         set idx to idx + 1
     return 1
 
+# Run the code generator's safety analysis without emitting C. The self-hosted
+# `epc check` command uses this so check-only mode has the same ownership
+# guarantees as a full compilation.
+define validate_program_safety with program:
+    set state to create_codegen_state()
+    set ok to analyze_return_types(state and program)
+    set ok to collect_prim_param_flags(state and program)
+    return analyze_safety(state and program)
+
 define generate_c with program and is_test_mode:
     set state to create_codegen_state()
     set ok to analyze_return_types(state and program)
@@ -3848,4 +3862,3 @@ define generate_c with program and is_test_mode:
         set oksp to set_list(lines and closure_slot and spliced)
     set c_code to join_strings(lines)
     return c_code
-

@@ -60,7 +60,7 @@ elif [ "$OS" = "Darwin" ]; then
 fi
 
 if ! command -v cargo &> /dev/null; then
-    echo -e "${RED}Error: Rust/Cargo is required to build the bootstrap compiler driver.${NC}"
+    echo -e "${RED}Error: Rust/Cargo is required to build the reference compiler.${NC}"
     echo -e "${RED}Please install Rust from https://rustup.rs/ before running this installer.${NC}"
     exit 1
 fi
@@ -70,27 +70,30 @@ echo ""
 # 3. Compilation Phase
 echo -e "${BOLD}3. Compiling ErnosPlain from source...${NC}"
 
-# A. Build the Rust bootstrap compiler
+# A. Build the Rust reference compiler
 echo "Building the Rust bootstrap compiler driver..."
 cargo build --release --quiet
-cp target/release/ernos ./epc_bootstrap
 
-# B. Concatenate and build the self-hosted compiler
-echo "Generating the self-hosted compiler unit..."
-# Strip the import lines from epc.ep — those modules are already prepended by cat.
-# Without this, the self-hosted compiler sees double definitions during self-replication.
-cat ep_lexer.ep ep_parser.ep ep_codegen.ep <(grep -v '^import "ep_' epc.ep) > self_hosted_compiler.ep
+# B. Build the modular self-hosted compiler. The reference driver resolves all
+# imports in epc.ep, including checker, optimizer, and generated runtime modules.
+echo "Compiling the modular self-hosted compiler..."
+./target/release/ernos epc.ep
 
-echo "Compiling self-hosted compiler with the bootstrap compiler..."
-./epc_bootstrap self_hosted_compiler.ep
+# C. Verify a stable three-generation self-replication fixpoint.
+echo "Replicating compiler to second generation..."
+cp ./epc ./epc_gen1
+./epc_gen1 epc.ep
 
-# C. Verify self-replication
-echo "Replicating compiler to second-generation binary..."
-cp ./self_hosted_compiler ./self_hosted_compiler_gen1
-./self_hosted_compiler_gen1 self_hosted_compiler.ep
+echo "Replicating compiler to third generation..."
+cp ./epc ./epc_gen2
+./epc_gen2 epc.ep
+if ! cmp -s ./epc_gen2 ./epc; then
+    echo -e "${RED}Error: self-hosted compiler did not reach a gen2/gen3 fixpoint.${NC}"
+    exit 1
+fi
 
 # D. Clean up intermediate build products
-rm -f ./epc_bootstrap ./self_hosted_compiler_gen1 ./self_hosted_compiler.ep
+rm -f ./epc_gen1 ./epc_gen2
 
 echo -e "${GREEN}✓ Compilation and self-replication successful!${NC}"
 echo ""
@@ -100,7 +103,7 @@ echo -e "${BOLD}4. Installing binaries...${NC}"
 INSTALL_DIR="$HOME/.local/bin"
 mkdir -p "$INSTALL_DIR"
 
-mv ./self_hosted_compiler "$INSTALL_DIR/epc"
+mv ./epc "$INSTALL_DIR/epc"
 echo -e "${GREEN}✓ Installed 'epc' (self-hosted compiler) to $INSTALL_DIR/epc${NC}"
 
 # Install the feature-complete driver too. `ernos` provides check/transpile/bind/
@@ -113,6 +116,11 @@ echo -e "${GREEN}✓ Installed 'ernos' (full CLI) to $INSTALL_DIR/ernos${NC}"
 rm -rf "$INSTALL_DIR/stdlib"
 cp -R stdlib "$INSTALL_DIR/stdlib"
 echo -e "${GREEN}✓ Installed standard library to $INSTALL_DIR/stdlib${NC}"
+
+# Verify the installed binaries themselves, not only their build-tree copies.
+"$INSTALL_DIR/epc" check tests/test_native_basic.ep >/dev/null
+"$INSTALL_DIR/ernos" check tests/test_native_basic.ep >/dev/null
+echo -e "${GREEN}✓ Installed compilers passed static validation smoke tests.${NC}"
 echo ""
 
 # 5. PATH Verification and Guide

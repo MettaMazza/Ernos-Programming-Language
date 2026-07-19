@@ -1,0 +1,57 @@
+external define ep_net_send_raw with fd and buf and count:
+external define ep_net_recv_bytes with fd and count:
+
+define send_binary_payload with port:
+    set fd to ep_net_connect("127.0.0.1" and port)
+    if fd < 0:
+        return 1
+    set buf to alloc_bytes(5)
+    poke_byte(buf and 0 and 65)
+    poke_byte(buf and 1 and 0)
+    poke_byte(buf and 2 and 66)
+    poke_byte(buf and 3 and 255)
+    poke_byte(buf and 4 and 67)
+    set sent to ep_net_send_raw(fd and buf and 5)
+    free_bytes(buf)
+    ep_net_close(fd)
+    if sent != 5:
+        return 1
+    return 0
+
+define main:
+    set port to 39091
+    set server to 0 - 1
+    repeat while server < 0 and also port < 39111:
+        set server to ep_net_listen(port)
+        if server < 0:
+            set port to port + 1
+    if server < 0:
+        display "raw send test could not open listener"
+        return 1
+
+    spawn send_binary_payload(port)
+    set client to ep_net_accept(server)
+    if client < 0:
+        ep_net_close(server)
+        return 1
+
+    set data to ep_net_recv_bytes(client and 5)
+    set ptr to str_to_ptr(data)
+    set valid to 1
+    if peek_byte(ptr and 0) != 65:
+        set valid to 0
+    if peek_byte(ptr and 1) != 0:
+        set valid to 0
+    if peek_byte(ptr and 2) != 66:
+        set valid to 0
+    if peek_byte(ptr and 3) != 255:
+        set valid to 0
+    if peek_byte(ptr and 4) != 67:
+        set valid to 0
+
+    ep_net_close(client)
+    ep_net_close(server)
+    if valid == 0:
+        return 1
+    display "PASS: raw socket send preserves embedded null bytes"
+    return 0

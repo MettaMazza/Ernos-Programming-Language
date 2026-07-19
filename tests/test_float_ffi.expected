@@ -1,0 +1,13 @@
+sin(0.0) =
+0
+cos(0.0) =
+1
+sqrt(4.0) =
+2
+sqrt(9.0) =
+3
+pow(2.0, 10.0) =
+1024
+fabs(-42.5) =
+42.5
+Float FFI test complete!

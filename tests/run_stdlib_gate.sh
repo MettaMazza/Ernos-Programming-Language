@@ -16,9 +16,8 @@
 #         across stdlib/*.ep.
 # Part 2  One program importing every linkable stdlib module is compiled by
 #         BOTH compilers, run, and the outputs must match exactly.
-# Part 3  Modules excluded from Part 2 (external C library deps or known
-#         runtime gaps) still get parse + typecheck coverage via
-#         `ernos --check`, which resolves and checks all imports.
+# Part 3  Modules excluded from Part 2 for external C library dependencies
+#         still get full check-only coverage from both compilers.
 #
 # Exit code: 0 only if every part passes.
 set -uo pipefail
@@ -72,10 +71,6 @@ link_modules=""
 for f in stdlib/*.ep; do
   m=$(basename "$f" .ep)
   case "$m" in
-    websocket)
-      # websocket.ep calls the external ep_net_send_raw, which the C runtime
-      # does not provide yet — importing it always fails at link time.
-      skip_link="$skip_link $m(missing-runtime-ep_net_send_raw)"; continue ;;
     gui)
       probe_lib -lraylib || { skip_link="$skip_link $m(no-raylib)"; continue; } ;;
     sql)
@@ -121,9 +116,8 @@ if [ $fail -eq 0 ]; then
 fi
 
 # ───────────────── Part 3: --check coverage for link-excluded modules ─────────────────
-# `ernos --check` resolves imports and runs parse + typecheck without
-# invoking clang, so grammar drift in these modules is still caught.
-# (epc has no --check mode, so this leg is Rust-only.)
+# Both check modes resolve imports and perform semantic + ownership checks
+# without invoking clang, so grammar or safety drift is still caught.
 skipped_names=$(echo "$skip_link" | tr ' ' '\n' | sed 's/(.*//' | grep -v '^$' || true)
 if [ -n "$skipped_names" ]; then
   {
@@ -131,10 +125,17 @@ if [ -n "$skipped_names" ]; then
     printf '\ndefine main:\n    display "ok"\n'
   } > "$ROOT/${STEM}_check.ep"
   if ./target/release/ernos --check "${STEM}_check.ep" > "$WORK/check.log" 2>&1; then
-    echo "check-only   parse+typecheck ok:$(echo " $skipped_names" | tr '\n' ' ')"
+    echo "check-only   ernos ok:$(echo " $skipped_names" | tr '\n' ' ')"
   else
     echo "CHECK-FAIL: a link-excluded module no longer parses/typechecks:"
     tail -15 "$WORK/check.log" | sed 's/^/    /'
+    fail=1
+  fi
+  if ./epc check "${STEM}_check.ep" > "$WORK/epc_check.log" 2>&1; then
+    echo "check-only   epc ok:$(echo " $skipped_names" | tr '\n' ' ')"
+  else
+    echo "EPC-CHECK-FAIL: a link-excluded module no longer passes static validation:"
+    tail -15 "$WORK/epc_check.log" | sed 's/^/    /'
     fail=1
   fi
 fi

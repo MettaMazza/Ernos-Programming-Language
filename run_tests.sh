@@ -23,7 +23,7 @@ FAIL=0
 SKIP=0
 FAILURES=""
 
-for TEST_FILE in tests/test_*.ep conformance/test_*.ep; do
+for TEST_FILE in tests/test_*.ep conformance/test_*.ep forensic/test_*.ep; do
     [[ -f "$TEST_FILE" ]] || continue
     NAME=$(basename "$TEST_FILE" .ep)
     BINARY="$(dirname "$TEST_FILE")/$NAME"

@@ -46,7 +46,7 @@ ErnosPlain uses indentation (4 spaces) to delimit blocks, similar to Python.
 | Type | Description | C Representation |
 |------|-------------|-----------------|
 | `Int` | 64-bit signed integer | `long long` |
-| `Float` | 64-bit IEEE 754 double | `double` (partially supported in codegen) |
+| `Float` | 64-bit IEEE 754 double | Bit-preserving `double` representation with arithmetic and FFI support |
 | `Bool` | Boolean value | `long long` (0 or 1) |
 | `Str` | Static string (immutable) | `const char*` cast to `long long` |
 | `DynStr` | Dynamic string (heap) | `char*` (malloc'd) cast to `long long` |

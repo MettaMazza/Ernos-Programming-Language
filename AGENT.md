@@ -60,13 +60,13 @@ cargo run -- epc.ep && ./epc tests/test_basic_math.ep && ./test_basic_math
 # Stronger gates (run after any epc-visible change):
 bash tests/run_fixpoint.sh      # 3-stage byte-identical self-compile
 bash tests/run_epc_parity.sh    # self-hosted coverage scoreboard (must not regress)
-bash tests/run_differential.sh  # both compilers must AGREE on 39 adversarial programs
+bash tests/run_differential.sh  # both compilers must AGREE on 43 adversarial programs
 bash bootstrap/verify.sh        # clang-only, Rust-free 3-stage fixpoint + parity + freshness
 ```
 
-Current state of these gates: `run_tests.sh` **72/72**, `run_epc_parity.sh` **54/54 runnable + 12/12 compile-error rejections** (0 wrongly accepted), `run_differential.sh` **39/39 agree**, `run_fixpoint.sh` byte-identical, `bootstrap/verify.sh` green.
+Current state of these gates: `run_tests.sh` **84/84**, `run_epc_parity.sh` **55/55 runnable + 12/12 compile-error rejections** (0 wrongly accepted), `run_differential.sh` **43/43 agree**, `run_fixpoint.sh` byte-identical, `bootstrap/verify.sh` green.
 
-The self-hosted compiler is ~6,400 lines of real ErnosPlain — `ep_lexer.ep` (lexer), `ep_parser.ep` (parser), `ep_check.ep` (semantic checker), `ep_optimizer.ep` (constant folding + DCE), `ep_codegen.ep` (C codegen), `epc.ep` (driver) — that exercises the full type system, all builtin functions, list/string operations, struct creation, pattern matching, closures, floats, traits, `try`/Result, and coroutine async. If it doesn't compile, you broke something.
+The self-hosted compiler is ~7,100 source lines of real ErnosPlain (plus the generated runtime module) — `ep_lexer.ep` (lexer), `ep_parser.ep` (parser), `ep_check.ep` (semantic checker), `ep_optimizer.ep` (constant folding + DCE), `ep_codegen.ep` (C codegen), `epc.ep` (driver) — that exercises the full type system, all builtin functions, list/string operations, struct creation, pattern matching, closures, floats, traits, `try`/Result, and coroutine async. If it doesn't compile, you broke something.
 
 **Shared runtime.** `runtime/ep_runtime.c` + `runtime/ep_builtins.c` are the single source of truth for the emitted C runtime. The Rust compiler embeds them via `include_str!`; the self-hosted compiler embeds them via the generated `ep_runtime_gen.ep`. After editing either `runtime/*.c` file, regenerate: `./target/release/ernos tools/gen_runtime_ep.ep && ./tools/gen_runtime_ep`.
 
@@ -156,7 +156,7 @@ Every language construct should read like a sentence a non-programmer could unde
 Symbol shortcuts (`+`, `<`, `==`, `&&`) are allowed as opt-in shorthands for experienced programmers. The plain English form is always the primary syntax.
 
 ### Self-Hosting is Non-Negotiable
-The self-hosted compiler (`epc.ep` + modules) must always compile itself using the Rust bootstrap compiler. This is the ultimate integration test. If the type checker rejects the self-hosted compiler, the type checker is too strict — not the self-hosted compiler is wrong. The self-hosted compiler is ~6,400 lines of real, working ErnosPlain. It is the language's own dogfood, and it bootstraps from a frozen C snapshot with no Rust in the loop.
+The self-hosted compiler (`epc.ep` + modules) must always compile itself using the Rust bootstrap compiler. This is the ultimate integration test. If the type checker rejects the self-hosted compiler, the type checker is too strict — not the self-hosted compiler is wrong. The self-hosted compiler is ~7,100 source lines of real, working ErnosPlain plus its generated runtime module. It is the language's own dogfood, and it bootstraps from a frozen C snapshot with no Rust in the loop.
 
 ### Cross-Platform by Default
 Ernos must work on:
@@ -201,8 +201,8 @@ Codegen (codegen.rs) → C source code (includes full runtime inline)
     ↓
 Clang/GCC → Native binary
 
-Alternative: --native flag
-    Codegen → ARM64 or x86_64 assembly → system assembler → system linker → native binary
+Alternative: --native flag (supported AST subset)
+    Codegen → ARM64 or x86_64 assembly + shared C runtime → assembler/C compiler/linker → native binary
 ```
 
 ---
@@ -388,7 +388,7 @@ These are implemented as C functions in the runtime (codegen.rs). They are NOT E
 `channel` (keyword), `create_channel()`, `send value to channel` (statement), `receive from channel` (expression), `spawn function(args)` (statement), `channel_has_data(ch)`, `channel_try_recv(ch)`, `channel_select(ch_list)`, `send_channel(ch and val)`, `recv_channel(ch)`, `create_task_group()`, `add_task_group(group and fut)`, `wait_task_group(group)`, `async_timeout(timeout_ms and fut)`, `cancel_task(fut)`
 
 ### Networking
-`ep_net_connect(host and port)`, `ep_net_listen(port)`, `ep_net_accept(server)`, `ep_net_send(socket and data)`, `ep_net_recv(socket and bufsize)`, `ep_net_recv_bytes(socket and bufsize)`, `ep_net_close(socket)`, `ep_http_request(method and url and body and headers)`
+`ep_net_connect(host and port)`, `ep_net_listen(port)`, `ep_net_accept(server)`, `ep_net_send(socket and data)`, `ep_net_send_raw(socket and data_ptr and byte_count)`, `ep_net_recv(socket and bufsize)`, `ep_net_recv_bytes(socket and bufsize)`, `ep_net_close(socket)`, `ep_http_request(method and url and headers and body)`
 
 ### JSON
 `json_get_int(json and key)`, `json_get_string(json and key)`, `json_get_bool(json and key)`
@@ -428,7 +428,7 @@ All FFI functions work with `long long` arguments. Pointers and integers are pas
 ```bash
 # Compile and run
 ernos program.ep                     # Compile to ./program, then run
-ernos program.ep --native            # Compile via native assembly backend
+ernos program.ep --native            # Native assembly frontend + C runtime
 
 # C header binding generation
 ernos bind header.h [-o bindings.ep] # Parse C header → ErnosPlain bindings
@@ -441,7 +441,7 @@ ernos transpile file.js [-o out.ep]  # JavaScript → ErnosPlain
 # Other
 ernos --version                      # Show version
 ernos --list-builtins                # List all builtin functions
-ernos check file.ep                  # Type-check without compiling
+ernos check file.ep                  # Full static validation without codegen
 ```
 
 ---
@@ -460,8 +460,9 @@ cargo build --release 2>&1 | tail -3
 # 3. Self-hosting gate (MANDATORY when type checker/codegen/parser changed)
 cargo run -- epc.ep && ./epc tests/test_basic_math.ep && ./test_basic_math
 
-# 4. Native backend gate (when native codegen changed)
-cargo run -- tests/test_basic_math.ep --native && ./tests/test_basic_math
+# 4. Native and check-only safety gates
+bash tests/run_native_gate.sh
+bash tests/run_check_gate.sh
 ```
 
 If ANY step fails, the change is not ready. Fix it before committing. Do not commit with known failures.

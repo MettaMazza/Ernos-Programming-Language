@@ -521,12 +521,16 @@ Supported extensions: `.py`, `.c`, `.h`, `.js`, `.mjs`, `.go`, `.rs`, `.rb`, `.j
 ```bash
 ernos program.ep --release    # Compile with -O3 + LTO
 ernos program.ep --debug      # Compile with -O0 + debug symbols
-ernos check program.ep        # Type check only, no binary
+ernos check program.ep        # Full static validation, no binary
 ernos format program.ep       # Auto-format source code
 ernos --repl                  # Interactive REPL
-ernos program.ep --native     # Native assembly (no Clang)
+ernos program.ep --native     # Native assembly frontend + C runtime
 ernos program.ep --asan       # AddressSanitizer
 ```
+
+The `--native` backend emits architecture-specific assembly for the supported
+language subset, then compiles and links the shared C runtime. It therefore
+requires the system assembler/linker and a C compiler (Clang or GCC).
 
 ### Cross-Platform
 The generated C code compiles on any platform with a C compiler:

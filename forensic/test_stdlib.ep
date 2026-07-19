@@ -35,15 +35,18 @@ define main:
 
     # 4. Random
     set rand to ep_random_int(0 and 100)
-    display f"Random 0-100: {rand}"
+    if rand < 0 || rand > 100:
+        return 1
 
     # 5. Time
     set now to ep_time_now_ms()
-    display f"Current time (ms): {now}"
+    if now < 1:
+        return 1
 
     # 6. UUID
     set id to uuid_v4()
-    display f"UUID: {id}"
+    if string_length(id) != 36:
+        return 1
 
     display "STDLIB: ALL PASSED"
     return 0

@@ -37,6 +37,7 @@ typedef int pthread_attr_t;
 #define pthread_detach(t) ((void)(t), 0)
 #else
 #include <setjmp.h>
+#include <limits.h>
 #endif
 #include <signal.h>
 #include <time.h>
@@ -1796,6 +1797,7 @@ long long json_get_int(long long json_val, long long key_val);
 long long json_get_bool(long long json_val, long long key_val);
 long long ep_sha1(long long data_val);
 long long ep_net_recv_bytes(long long fd, long long count);
+long long ep_net_send_raw(long long fd, long long data_ptr, long long count);
 long long channel_try_recv(long long chan_ptr, long long out_ptr);
 long long channel_has_data(long long chan_ptr);
 long long channel_select(long long channels_list, long long timeout_ms);
@@ -2068,6 +2070,11 @@ long long ep_net_send(long long fd, const char* data) {
     return 0;
 }
 
+long long ep_net_send_raw(long long fd, long long data_ptr, long long count) {
+    (void)fd; (void)data_ptr; (void)count;
+    return 0;
+}
+
 char* ep_net_recv(long long fd, long long max_len) {
     (void)fd; (void)max_len;
     char* empty = malloc(1);
@@ -2206,17 +2213,29 @@ long long ep_net_accept(long long server_fd) {
 
 long long ep_net_send(long long fd, const char* data) {
     if (!data) return 0;
-    /* send() may write fewer bytes than requested (partial write under load/
-       backpressure). A single send() therefore silently truncated large IPC
-       responses, cutting agent replies mid-stream. Loop until all bytes are sent. */
-    size_t total = strlen(data);
-    size_t off = 0;
-    while (off < total) {
-        ssize_t n = send((int)fd, data + off, total - off, 0);
+    return ep_net_send_raw(fd, (long long)data, (long long)strlen(data));
+}
+
+long long ep_net_send_raw(long long fd, long long data_ptr, long long count) {
+    if (data_ptr == 0 || count <= 0) return 0;
+
+    /* send() may write fewer bytes than requested. Keep sending until the
+       explicit byte count is exhausted, including bytes after embedded NULs. */
+    const char* data = (const char*)data_ptr;
+    long long off = 0;
+    while (off < count) {
+#ifdef _WIN32
+        int chunk = count - off > INT_MAX ? INT_MAX : (int)(count - off);
+        int n = send((int)fd, data + off, chunk, 0);
+        if (n < 0 && WSAGetLastError() == WSAEINTR) continue;
+#else
+        ssize_t n = send((int)fd, data + off, (size_t)(count - off), 0);
+        if (n < 0 && errno == EINTR) continue;
+#endif
         if (n <= 0) break;
-        off += (size_t)n;
+        off += (long long)n;
     }
-    return (long long)off;
+    return off;
 }
 
 char* ep_net_recv(long long fd, long long max_len) {
@@ -4822,4 +4841,3 @@ long long ep_get_args(void) {
     }
     return list_ptr;
 }
-
